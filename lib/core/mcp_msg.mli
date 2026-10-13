@@ -43,9 +43,10 @@ val decode : string -> (message, error) result
     A message with both [result] and [error], or with a member other than
     [jsonrpc], [id], [method], [params], [result] and [error], is rejected. *)
 
-val encode : message -> string
+val encode : ?short_floats:bool -> message -> string
 (** One line, no newline, keys in canonical (sorted) order, so
-    [decode (encode m)] is [Ok m]. *)
+    [decode (encode m)] is [Ok m]. [short_floats] renders floats as
+    {!Canon.to_short_string} does. *)
 
 val era_of_request : message -> era option
 (** [Legacy] for an [initialize] request, [Modern] when [params._meta] carries

@@ -25,7 +25,7 @@ let of_json json =
         (Command_error.Internal
            (Format.asprintf "the result is not valid JSON: %a" Canon.pp_error e))
 
-let of_canon c = Ok { text = Canon.to_string c; structured = c }
+let of_canon c = Ok { text = Canon.to_short_string c; structured = c }
 let usage r = Result.map_error (fun m -> Command_error.Usage m) r
 
 type annotations = {

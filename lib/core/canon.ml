@@ -75,14 +75,24 @@ let of_string s =
   | y -> of_yojson y
   | exception Yojson.Json_error msg -> Error (Syntax msg)
 
-let to_string v =
+(* The fewest significant digits, from 15, that read back as [f]. *)
+let shortest f =
+  let rec go digits =
+    let s = Printf.sprintf "%.*g" digits f in
+    match float_of_string_opt s with
+    | Some g when Float.equal g f -> s
+    | Some _ | None -> if digits >= 17 then s else go (digits + 1)
+  in
+  go 15
+
+let render ~float v =
   let buf = Buffer.create 64 in
   let rec go = function
     | Null -> Buffer.add_string buf "null"
     | Bool b -> Buffer.add_string buf (Bool.to_string b)
     | Int i -> Buffer.add_string buf (Int.to_string i)
     | Big_int s -> Buffer.add_string buf s
-    | Float f -> Buffer.add_string buf (Printf.sprintf "%.17g" f)
+    | Float f -> Buffer.add_string buf (float f)
     | String s -> Yojson.Safe.write_string buf s
     | List l ->
         Buffer.add_char buf '[';
@@ -105,6 +115,9 @@ let to_string v =
   in
   go v;
   Buffer.contents buf
+
+let to_string = render ~float:(Printf.sprintf "%.17g")
+let to_short_string = render ~float:shortest
 
 let tag = function
   | Null -> 0

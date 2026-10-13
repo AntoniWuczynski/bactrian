@@ -14,7 +14,10 @@ let serve ~server ~call ~stop ~log ~input ~output =
   let lock = Eio.Mutex.create () in
   let send message =
     Eio.Mutex.use_rw ~protect:true lock (fun () ->
-        try Eio.Flow.copy_string (Mcp_msg.encode message ^ "\n") output
+        try
+          Eio.Flow.copy_string
+            (Mcp_msg.encode ~short_floats:true message ^ "\n")
+            output
         with Eio.Io _ -> (* the client stopped reading *) ())
   in
   (* The requests in flight, each with the resolver that cancels it. *)

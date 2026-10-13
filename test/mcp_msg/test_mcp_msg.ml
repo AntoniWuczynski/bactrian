@@ -115,7 +115,8 @@ let gen_message =
 
 let prop_round_trip =
   QCheck.Test.make ~name:"decode (encode m) = m" ~count:300
-    (QCheck.make ~print:M.encode gen_message) (fun m ->
+    (QCheck.make ~print:(fun m -> M.encode m) gen_message)
+    (fun m ->
       match M.decode (M.encode m) with
       | Ok m' -> message_equal m m'
       | Error _ -> false)

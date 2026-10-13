@@ -52,6 +52,11 @@ val of_string : string -> (t, error) result
 val of_yojson : Yojson.Safe.t -> (t, error) result
 val to_yojson : t -> Yojson.Safe.t
 
+val to_short_string : t -> string
+(** {!to_string} with each float in the fewest digits that read back as the same
+    float ([0.55], not [0.55000000000000004]), for text that people and clients
+    read. Keys and digests use {!to_string}, so that they never change. *)
+
 val to_string : t -> string
 (** Compact form: no whitespace, keys in order, floats printed with [%.17g],
     strings escaped as Yojson does. [of_string (to_string v)] equals [v]. *)

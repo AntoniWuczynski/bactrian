@@ -59,7 +59,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 |---|---|
 | `Trace` | The event type for a run: run start and end, model request and response with chunk timing, MCP call, HTTP exchange, agent output, clock reads. Versioned, with JSON codecs. |
 | `Sse` | Incremental Server-Sent Events (SSE) parser and writer. Must give the same result however the input bytes are split. |
-| `Canon` | Canonical JSON (sorted keys, one number form) and BLAKE2b-256 keys from the standard library (decision 0002). |
+| `Canon` | Canonical JSON (sorted keys, one number form) and BLAKE2b-256 keys from the standard library (decision 0002), and the same JSON with the shortest floats for text that people and clients read. |
 | `Protocol` | The `PROTOCOL` signature and five implementations, one file each: `Openai_chat`, `Openai_responses`, `Anthropic_messages`, `Gemini_generate`, `Gemini_interactions`. Each detects its routes, canonicalises requests, parses responses and streams, and extracts usage. Replay sends the recorded bytes unchanged (decision 0004), so adapters never re-serialise a response. |
 | `Matcher` | Layered matching, the three replay modes, the `divergence` type and structural diffs. |
 | `Cassette`, `Scenario`, `Experiment` | File formats with strict decoding that collects every error with its location. |

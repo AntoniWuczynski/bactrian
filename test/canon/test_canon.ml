@@ -130,7 +130,22 @@ let test_digest () =
 let test_to_string_floats () =
   Alcotest.(check string)
     "0.1" "0.10000000000000001"
-    (Canon.to_string (get (Canon.float 0.1)))
+    (Canon.to_string (get (Canon.float 0.1)));
+  List.iter
+    (fun (f, expected) ->
+      let shown = Canon.to_short_string (get (Canon.float f)) in
+      Alcotest.(check string) expected expected shown;
+      Alcotest.(check (option (float 0.)))
+        (expected ^ " reads back") (Some f)
+        (float_of_string_opt shown))
+    [
+      (0.1, "0.1");
+      (0.55, "0.55");
+      (0.95, "0.95");
+      (1. /. 3., "0.3333333333333333");
+      (0.1 +. 0.2, "0.30000000000000004");
+      (1e-300, "1e-300");
+    ]
 
 let json s = get (Canon.of_string s)
 

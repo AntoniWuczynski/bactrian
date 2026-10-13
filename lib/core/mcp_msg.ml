@@ -149,7 +149,9 @@ let to_canon message =
   in
   object_of fields
 
-let encode message = Canon.to_string (to_canon message)
+let encode ?(short_floats = false) message =
+  (if short_floats then Canon.to_short_string else Canon.to_string)
+    (to_canon message)
 
 (* {1 Protocol knowledge} *)
 
