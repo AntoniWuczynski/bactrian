@@ -44,7 +44,7 @@ jobs:
           bwrap --version
       - run: opam exec -- dune build
       - run: opam exec -- dune test
-      - run: ALCOTEST_VERBOSE=1 opam exec -- dune build @acceptance
+      - run: opam exec -- dune build @acceptance
   lint-fmt:
     runs-on: ubuntu-latest
     steps:
