@@ -55,6 +55,9 @@ type checks = {
   checkers : string list list;
   checks_cwd : string;  (** Where the checker commands run. *)
   checker_timeout : float;  (** Per checker, seconds. *)
+  checker_sandbox : Sandbox.t;
+      (** What the checkers run in ({!Sandbox.checker}). Its label goes into
+          [verdicts.json] under [checker_sandbox] when there are checkers. *)
 }
 (** A scenario's assertions and checkers (design §6). *)
 

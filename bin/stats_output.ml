@@ -57,9 +57,10 @@ let render_compare_text ~colour (d : D.t) =
            (Printf.sprintf "warning: %d of %d runs were UNSANDBOXED (%s)"
               (List.length reasons) (List.length d.order)
               (String.concat "; " (List.sort_uniq String.compare reasons)))));
-  Option.iter
-    (fun w -> line "%s" (Output.paint ~colour "31" ("warning: " ^ w)))
-    (F.clock_warning d);
+  List.iter
+    (Option.iter (fun w ->
+         line "%s" (Output.paint ~colour "31" ("warning: " ^ w))))
+    [ F.checkers_warning d; F.clock_warning d ];
   Option.iter (fun n -> line "%s" n) (F.violations_note d);
   line "estimand %s, confidence %.0f%%, seed %d, %d resamples"
     (match d.population with `Suite -> "suite" | `Scenarios -> "scenarios")

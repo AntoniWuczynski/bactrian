@@ -90,9 +90,10 @@ let coverage (scenario : Scenario.t) =
         ] )
   | true, _, _ :: _ -> ([], [])
 
-let check ?files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~env ~scenario_file () =
-  let fs = Option.value files ~default:(Eio.Stdenv.fs env) in
-  let* scenario = Config_loader.load_scenario Eio.Path.(fs / scenario_file) in
+let load ~files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~scenario_file () =
+  let* scenario =
+    Config_loader.load_scenario Eio.Path.(files / scenario_file)
+  in
   let* () =
     Result.map_error
       (fun message ->
@@ -107,6 +108,10 @@ let check ?files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~env ~scenario_file () =
         ])
       (vet scenario)
   in
+  Ok scenario
+
+let check ?files ~env ~sandbox ~scenario_file (scenario : Scenario.t) =
+  let fs = Option.value files ~default:(Eio.Stdenv.fs env) in
   let dir = Filename.dirname scenario_file in
   let date = rfc3339_date (Eio.Time.now (Eio.Stdenv.clock env)) in
   let offender expected trace =
@@ -118,7 +123,8 @@ let check ?files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~env ~scenario_file () =
           judge ~expected
             (Checks.evaluate
                ~process_mgr:(Eio.Stdenv.process_mgr env)
-               ~clock:(Eio.Stdenv.clock env) ~timeout:checker_timeout
+               ~clock:(Eio.Stdenv.clock env) ~fs:(Eio.Stdenv.fs env) ~sandbox
+               ~timeout:checker_timeout
                ~cwd:Eio.Path.(fs / dir)
                ~date ~assertions:scenario.assertions ~checkers:scenario.checkers
                entries)
@@ -126,12 +132,11 @@ let check ?files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~env ~scenario_file () =
     Option.map (fun reason -> { trace; expected; reason }) verdict
   in
   let errors, warnings = coverage scenario in
-  Ok
-    {
-      scenario = scenario_file;
-      offenders =
-        List.filter_map (offender Pass) scenario.golden_pass
-        @ List.filter_map (offender Fail) scenario.golden_fail;
-      errors;
-      warnings;
-    }
+  {
+    scenario = scenario_file;
+    offenders =
+      List.filter_map (offender Pass) scenario.golden_pass
+      @ List.filter_map (offender Fail) scenario.golden_fail;
+    errors;
+    warnings;
+  }

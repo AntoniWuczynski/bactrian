@@ -41,6 +41,10 @@ type run = {
   unsandboxed : string option;
       (** Why the run ran outside the operating-system sandbox, from its
           [meta.json]. [None] when it was sandboxed or left no [meta.json]. *)
+  checkers_unsandboxed : string option;
+      (** Why the run's checkers ran outside the sandbox, from its
+          [verdicts.json]. [None] when they were sandboxed, or the run had no
+          checker or no [verdicts.json]. *)
   clock_unenforced : string option;
       (** Why the run's clock was contract-only, from its [meta.json] (a
           {!Clock_label.reason_name}). [None] when it was enforced or the run
@@ -206,10 +210,11 @@ val to_json : t -> Yojson.Safe.t
     floats shortest-round-trip, [null] for NaN and infinities. Carries
     ["schema_version"]. *)
 
-(** Each run carries ["unsandboxed"], ["clock_unenforced"] and
-    ["sandbox_violations"] (the text, or [null]) and the header
-    ["unsandboxed_runs"] and ["clock_unenforced_runs"], the number of runs
-    outside the sandbox and with a contract-only clock. *)
+(** Each run carries ["unsandboxed"], ["checkers_unsandboxed"],
+    ["clock_unenforced"] and ["sandbox_violations"] (the text, or [null]) and
+    the header ["unsandboxed_runs"], ["checkers_unsandboxed_runs"] and
+    ["clock_unenforced_runs"], the number of runs outside the sandbox, with
+    checkers outside it and with a contract-only clock. *)
 
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution

@@ -5,7 +5,7 @@ type result = Verdict of Checker_protocol.verdict | Checker_error of string
 
 let max_output = 1 lsl 20
 let max_stderr = 64 * 1024
-let inherited = [ "PATH"; "HOME"; "LANG"; "TZ" ]
+let inherited = [ "PATH"; "LANG"; "TZ" ]
 
 let run_id entries =
   List.find_map
@@ -17,7 +17,7 @@ let run_id entries =
           None)
     entries
 
-let scrubbed_env entries =
+let scrubbed_env ~temp_dir entries =
   let inherited =
     List.filter_map
       (fun k -> Option.map (fun v -> (k, v)) (Sys.getenv_opt k))
@@ -26,6 +26,7 @@ let scrubbed_env entries =
   Option.fold ~none:[]
     ~some:(fun id -> [ ("BACTRIAN_RUN_ID", id) ])
     (run_id entries)
+  @ [ ("HOME", temp_dir); ("TMPDIR", temp_dir) ]
   @ inherited
 
 let kill_group clock pgid =
@@ -136,7 +137,10 @@ let stderr_hint stderr =
       in
       Printf.sprintf " (stderr: %s)" last
 
-let run ~process_mgr ~clock ~timeout ~argv ~cwd entries =
+let not_started reason =
+  (Checker_error ("could not start checker: " ^ reason), "")
+
+let run_in ~process_mgr ~clock ~timeout ~argv ~cwd ~env entries =
   let clock = (clock :> float Eio.Time.clock_ty Eio.Resource.t) in
   Eio.Switch.run @@ fun sw ->
   match
@@ -144,8 +148,7 @@ let run ~process_mgr ~clock ~timeout ~argv ~cwd entries =
     let stdout_r, stdout_w = Eio_unix.pipe sw in
     let stderr_r, stderr_w = Eio_unix.pipe sw in
     let proc =
-      spawn ~sw ~process_mgr ~cwd ~env:(scrubbed_env entries) ~argv ~stdin_r
-        ~stdout_w ~stderr_w
+      spawn ~sw ~process_mgr ~cwd ~env ~argv ~stdin_r ~stdout_w ~stderr_w
     in
     (* The parent must drop the child's ends, or stdout never ends. *)
     Eio.Resource.close stdin_r;
@@ -153,10 +156,8 @@ let run ~process_mgr ~clock ~timeout ~argv ~cwd entries =
     Eio.Resource.close stderr_w;
     (proc, stdin_w, stdout_r, stderr_r)
   with
-  | exception (Eio.Io _ as e) ->
-      (Checker_error ("could not start checker: " ^ Printexc.to_string e), "")
-  | exception (Unix.Unix_error _ as e) ->
-      (Checker_error ("could not start checker: " ^ Printexc.to_string e), "")
+  | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
+      not_started (Printexc.to_string e)
   | proc, stdin, stdout, stderr ->
       let pgid = Eio.Process.pid proc in
       let err = Buffer.create 256 in
@@ -176,3 +177,25 @@ let run ~process_mgr ~clock ~timeout ~argv ~cwd entries =
         | Checker_error reason -> Checker_error (reason ^ stderr_hint stderr)
       in
       (result, stderr)
+
+(* The checker's temporary directory is its [HOME] and [TMPDIR] in every mode,
+   so it behaves the same with or without the sandbox, and the only place the
+   sandbox lets it write. *)
+let run ~process_mgr ~clock ~fs ~sandbox ~timeout ~argv ~cwd entries =
+  match Filename.temp_dir ~perms:0o700 "bactrian-checker-" "" with
+  | exception Sys_error m -> not_started m
+  | temp_dir -> (
+      Fun.protect ~finally:(fun () ->
+          Eio.Cancel.protect (fun () ->
+              match
+                Eio.Path.rmtree ~missing_ok:true Eio.Path.(fs / temp_dir)
+              with
+              | () -> ()
+              | exception Eio.Io _ -> ()))
+      @@ fun () ->
+      match Sandbox.checker sandbox ~temp_dir argv with
+      | Error m -> not_started m
+      | Ok argv ->
+          run_in ~process_mgr ~clock ~timeout ~argv ~cwd
+            ~env:(scrubbed_env ~temp_dir entries)
+            entries)

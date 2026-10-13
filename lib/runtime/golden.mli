@@ -25,18 +25,25 @@ type report = {
 val passed : report -> bool
 (** No offender and no error. Warnings do not fail a check. *)
 
-val check :
-  ?files:Eio.Fs.dir_ty Eio.Path.t ->
+val load :
+  files:Eio.Fs.dir_ty Eio.Path.t ->
   ?vet:(Bactrian_core.Scenario.t -> (unit, string) result) ->
-  env:Eio_unix.Stdenv.base ->
   scenario_file:string ->
   unit ->
-  (report, Config_loader.located_error list) result
+  (Bactrian_core.Scenario.t, Config_loader.located_error list) result
+(** The scenario, read through [files]. [vet] may refuse it (an error located at
+    its [checkers]). [Error] means the scenario is invalid or refused. *)
+
+val check :
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
+  env:Eio_unix.Stdenv.base ->
+  sandbox:Sandbox.t ->
+  scenario_file:string ->
+  Bactrian_core.Scenario.t ->
+  report
 (** Golden paths are relative to the scenario file's directory, where the
-    checkers also run. The scenario and its traces are read through [files]
-    (default the whole filesystem), and [vet] may refuse the loaded scenario
-    before any checker runs (an error located at its [checkers]). A trace line
-    that is not JSON is reported by number, never quoted. A golden trace that
-    cannot be read or decoded is an offender, as is a [fail] trace on which a
-    checker errored (that proves nothing about the trace). [Error] means the
-    scenario itself is invalid. *)
+    checkers also run, inside [sandbox] ({!Sandbox.checker}). The traces are
+    read through [files] (default the whole filesystem). A trace line that is
+    not JSON is reported by number, never quoted. A golden trace that cannot be
+    read or decoded is an offender, as is a [fail] trace on which a checker
+    errored (that proves nothing about the trace). *)

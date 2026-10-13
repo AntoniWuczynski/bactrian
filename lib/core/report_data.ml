@@ -28,6 +28,7 @@ type run = {
   latency_ms : float option;
   tokens : int option;
   unsandboxed : string option;
+  checkers_unsandboxed : string option;
   clock_unenforced : string option;
   sandbox_violations : string option;
 }
@@ -659,6 +660,7 @@ let run_json ~detail (r : run) : Yojson.Safe.t =
        ("status", `String (status_name r.status));
        ("reason", opt (fun s -> `String s) r.reason);
        ("unsandboxed", opt (fun s -> `String s) r.unsandboxed);
+       ("checkers_unsandboxed", opt (fun s -> `String s) r.checkers_unsandboxed);
        ("clock_unenforced", opt (fun s -> `String s) r.clock_unenforced);
        ("sandbox_violations", opt (fun s -> `String s) r.sandbox_violations);
      ]
@@ -737,6 +739,12 @@ let summary_fields (t : t) =
         (List.length
            (List.filter (fun (r : run) -> Option.is_some r.unsandboxed) t.order))
     );
+    ( "checkers_unsandboxed_runs",
+      `Int
+        (List.length
+           (List.filter
+              (fun (r : run) -> Option.is_some r.checkers_unsandboxed)
+              t.order)) );
     ( "clock_unenforced_runs",
       `Int
         (List.length

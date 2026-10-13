@@ -18,6 +18,7 @@
   ],
   "dropped_scenarios": [],
   "unsandboxed_runs": 2,
+  "checkers_unsandboxed_runs": 2,
   "clock_unenforced_runs": 4,
   "exit": 3,
   "metrics": [
@@ -433,6 +434,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": 0.01,
@@ -538,6 +540,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": 0.01,
@@ -634,6 +637,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": 0.01,
@@ -730,6 +734,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": 0.011,
@@ -813,6 +818,7 @@
       "status": "errored",
       "reason": "proxy fault",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": null,
@@ -831,6 +837,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null,
       "cost_usd": 0.012,
@@ -916,6 +923,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -928,6 +936,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -940,6 +949,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -952,6 +962,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -964,6 +975,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -976,6 +988,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -988,6 +1001,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1000,6 +1014,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1012,6 +1027,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1024,6 +1040,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1036,6 +1053,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1048,6 +1066,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1060,6 +1079,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1072,6 +1092,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1084,6 +1105,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1096,6 +1118,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1108,6 +1131,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1120,6 +1144,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1132,6 +1157,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1144,6 +1170,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1156,6 +1183,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
+      "checkers_unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "clock_unenforced": "static-binary",
       "sandbox_violations": null
     },
@@ -1168,6 +1196,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
+      "checkers_unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "clock_unenforced": "static-binary",
       "sandbox_violations": null
     },
@@ -1180,6 +1209,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": "static-binary",
       "sandbox_violations": "at least 2 (the system log can drop denials, so this is a lower bound)"
     },
@@ -1192,6 +1222,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": "static-binary",
       "sandbox_violations": "at least 2 (the system log can drop denials, so this is a lower bound)"
     },
@@ -1204,6 +1235,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1216,6 +1248,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1228,6 +1261,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1240,6 +1274,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1252,6 +1287,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1264,6 +1300,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1276,6 +1313,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1288,6 +1326,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1300,6 +1339,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1312,6 +1352,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1324,6 +1365,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1336,6 +1378,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1348,6 +1391,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1360,6 +1404,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1372,6 +1417,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1384,6 +1430,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1396,6 +1443,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1408,6 +1456,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1420,6 +1469,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1432,6 +1482,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1444,6 +1495,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1456,6 +1508,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1468,6 +1521,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1480,6 +1534,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1492,6 +1547,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1504,6 +1560,7 @@
       "status": "errored",
       "reason": "proxy fault",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1516,6 +1573,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1528,6 +1586,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1540,6 +1599,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1552,6 +1612,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1564,6 +1625,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1576,6 +1638,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1588,6 +1651,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1600,6 +1664,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1612,6 +1677,7 @@
       "status": "passed",
       "reason": null,
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     },
@@ -1624,6 +1690,7 @@
       "status": "not_run",
       "reason": "spend cap reached",
       "unsandboxed": null,
+      "checkers_unsandboxed": null,
       "clock_unenforced": null,
       "sandbox_violations": null
     }

@@ -162,13 +162,15 @@ let experiment_progress context id ~finished:_ =
             total = Some (List.length runs);
           })
 
-let sandbox_property =
+let sandbox_property what =
   prop "sandbox"
     (Enum (names Sandbox.modes))
-    "Run the agent in the operating-system sandbox: auto (when the host \
-     supports it, otherwise unsandboxed with a warning and a label), strict \
-     (fail when it does not), off. Unless the server was started with \
-     --allow-unsandboxed, every job is strict and auto and off are refused."
+    (Printf.sprintf
+       "Run %s in the operating-system sandbox: auto (when the host supports \
+        it, otherwise unsandboxed with a warning and a label), strict (fail \
+        when it does not), off. Unless the server was started with \
+        --allow-unsandboxed, it is strict and auto and off are refused."
+       what)
 
 let sandbox_mode = enum ~field:"sandbox" Sandbox.modes
 
@@ -196,7 +198,7 @@ let run_start =
       prop "resume" String
         "The ID of an experiment under .bactrian/experiments to continue: runs \
          that finished are not repeated.";
-      sandbox_property;
+      sandbox_property "the agent and the scenarios' checkers";
     ]
     run_args_of_yojson
     (fun context (a : run_args) ->
@@ -216,7 +218,7 @@ let run_start =
       start_job context ~kind:"run"
         ~progress:(experiment_progress context experiment_id) (fun stop ->
           Run_command.run ~stop ~files:(files context)
-            ~vet:(Policy.experiment context.policy context.root)
+            ~vet:(Policy.experiment context.policy context.root ~sandbox)
             ~on_progress ~bactrian_exe:context.bactrian_exe ~env:context.env
             { experiment; resume = a.resume; sandbox }
           |> Result.map (fun r ->
@@ -259,7 +261,7 @@ let common_properties =
       "Longest wait for one agent message, in seconds (default 120).";
     prop "total_timeout" Number
       "Longest the whole run may take, in seconds (default 600).";
-    sandbox_property;
+    sandbox_property "the agent";
   ]
 
 let common context (c : common_args) =
@@ -624,10 +626,14 @@ let report =
       in
       of_json (Report_command.to_json r))
 
-type check_args = { scenarios : string list }
+type check_args = {
+  scenarios : string list;
+  sandbox : string option; [@default None]
+}
 [@@deriving of_yojson { strict = true }]
 
-(* Runs the scenarios' checker commands, which may do anything the user can. *)
+(* Runs the scenarios' checker commands, in the sandbox unless the user allowed
+   otherwise. *)
 let check =
   tool ~name:"check" ~title:"Check scenarios"
     ~annotations:
@@ -641,12 +647,14 @@ let check =
       "Check scenarios' assertions and checkers against their golden traces: \
        every pass trace must pass them all and every fail trace must fail one, \
        as `bactrian check --json` prints it. This runs each scenario's checker \
-       commands as programs on this machine, outside any sandbox, so a \
-       scenario with checkers is refused unless the server was started with \
-       --trust-project."
+       commands as programs on this machine, inside the operating-system \
+       sandbox with no network and writes only to a temporary directory of \
+       their own. Checkers in sandbox auto or off are refused unless the \
+       server was started with --trust-project."
     [
       prop ~required:true "scenarios" Nonempty_strings
         "Scenario files (YAML or JSON), inside the working directory.";
+      sandbox_property "the checkers";
     ]
     check_args_of_yojson
     (fun context (a : check_args) ->
@@ -659,10 +667,14 @@ let check =
                Ok (s :: rest))
              a.scenarios (Ok []))
       in
+      let* sandbox = usage (sandbox_mode a.sandbox) in
+      let* sandbox = usage (Policy.sandbox context.policy sandbox) in
+      let sandbox = Option.value sandbox ~default:Single_run.defaults.sandbox in
       let* reports =
         Check_command.run ~files:(files context)
-          ~vet:(Policy.scenario context.policy)
-          ~env:context.env { scenarios }
+          ~vet:(Policy.scenario context.policy ~sandbox)
+          ~on_progress:context.on_progress ~bactrian_exe:context.bactrian_exe
+          ~env:context.env { scenarios; sandbox }
       in
       of_json (Check_command.to_json reports))
 

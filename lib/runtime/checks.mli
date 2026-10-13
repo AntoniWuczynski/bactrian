@@ -29,6 +29,8 @@ val evaluate :
   ?stderr_dir:Eio.Fs.dir_ty Eio.Path.t ->
   process_mgr:_ Eio_unix.Process.mgr ->
   clock:_ Eio.Time.clock ->
+  fs:_ Eio.Path.t ->
+  sandbox:Sandbox.t ->
   timeout:float ->
   cwd:Eio.Fs.dir_ty Eio.Path.t ->
   date:string ->
@@ -36,11 +38,11 @@ val evaluate :
   checkers:string list list ->
   Trace.entry list ->
   item list
-(** Every assertion in order, then every checker. [timeout] bounds each checker
-    and [cwd] is where it runs. A checker's stderr never reaches bactrian's
-    terminal: with [stderr_dir], checker [i]'s non-empty stderr (its last 64
-    KiB) is written to [checker-i.stderr] there, and a checker error names that
-    file. *)
+(** Every assertion in order, then every checker. [timeout] bounds each checker,
+    [cwd] is where it runs and [sandbox] what it runs in ({!Checker_runner.run},
+    with [fs]). A checker's stderr never reaches bactrian's terminal: with
+    [stderr_dir], checker [i]'s non-empty stderr (its last 64 KiB) is written to
+    [checker-i.stderr] there, and a checker error names that file. *)
 
 val checker_errors : item list -> string list
 (** One line per {!Checker_failed} item, naming it and giving the reason. *)
@@ -48,7 +50,9 @@ val checker_errors : item list -> string list
 val problems : item list -> string list
 (** One line per item that is not {!Pass}, naming it and giving the reason. *)
 
-val to_json : item list -> Yojson.Safe.t
+val to_json : ?checker_sandbox:Sandbox.label -> item list -> Yojson.Safe.t
 (** The content of [verdicts.json]:
     [{"passed": bool, "items": [{"name", "verdict":
-     "pass"|"fail"|"checker_failed", "reason"?}]}]. *)
+     "pass"|"fail"|"checker_failed", "reason"?}], "checker_sandbox"?: {"mode",
+     "applied", "reason"?}}], with [checker_sandbox] when given: the label of
+    the sandbox the checkers ran in. *)

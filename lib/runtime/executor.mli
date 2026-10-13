@@ -126,16 +126,18 @@ val run_experiment :
     [--sandbox]), with its [allow_write] and [deny_read] paths taken relative to
     the experiment file. [bactrian_exe] is the executable the probe re-runs. A
     sandbox that does not work is [Environment] (exit 69) under [strict], and a
-    warning and unsandboxed runs under [auto]. [on_sandbox] is called with the
-    label every run will carry. [warn] is also called once per setting that is
+    warning and unsandboxed runs under [auto]. The scenarios' checkers run in
+    the same sandbox ({!Sandbox.checker}). [on_sandbox] is called with the label
+    every run will carry. [warn] is also called once per setting that is
     accepted but not enforced (see {!Bactrian_core.Experiment.unenforced})
     before the first run, and the same lines are recorded in every run's
     [meta.json].
 
-    An [http] agent is not started by bactrian, so there is no preflight: its
-    runs are unsandboxed whatever the mode, labelled with the reason
-    ["http mode"] ({!Sandbox.http_mode}). [sandbox: strict], in the experiment
-    or as [sandbox], is a [Configuration] error.
+    An [http] agent is not started by bactrian, so its runs are unsandboxed
+    whatever the mode, labelled with the reason ["http mode"]
+    ({!Sandbox.http_mode}), and the preflight is run only when a scenario has
+    checkers, for them. [sandbox: strict], in the experiment or as [sandbox], is
+    a [Configuration] error.
 
     Cancelling the calling fibre (see {!Interrupt}) cancels the runs in flight,
     marks them [Interrupted], writes the manifest, and re-raises the

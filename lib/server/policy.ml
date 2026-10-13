@@ -24,7 +24,7 @@ let sandbox t (requested : Sandbox.mode option) =
   | false, (None | Some `Strict) -> Ok (Some `Strict)
   | false, Some ((`Auto | `Off) as m) ->
       unsandboxed
-        (Printf.sprintf "argument sandbox: %s can run the agent unsandboxed"
+        (Printf.sprintf "argument sandbox: %s can run outside the sandbox"
            (Sandbox.mode_name m))
 
 let gate t ~field what = function
@@ -44,15 +44,26 @@ let mcp t ~stdio ~http =
   gate t ~field:"argument mcp_http" "sends the agent's tool calls to any URL"
     http
 
-let checkers t ~field (s : Scenario.t) =
-  gate t ~field "runs checker commands outside the sandbox" s.checkers
+(* Only [strict] keeps checkers inside the sandbox whatever the host: [auto]
+   runs them unsandboxed where the sandbox does not work. *)
+let checkers t ~(sandbox : Sandbox.mode) ~field (s : Scenario.t) =
+  match sandbox with
+  | `Strict -> Ok ()
+  | (`Auto | `Off) as m ->
+      gate t ~field
+        (Printf.sprintf
+           "runs checker commands that sandbox: %s can leave outside the \
+            sandbox (sandbox: strict keeps them inside)"
+           (Sandbox.mode_name m))
+        s.checkers
 
-let scenario t s = checkers t ~field:"checkers" s
+let scenario t ~sandbox s = checkers t ~sandbox ~field:"checkers" s
 let inside root ~field p = Result.map ignore (Confine.path root ~field p)
 let in_dir dir p = if Filename.is_relative p then Filename.concat dir p else p
 
-let experiment t root (c : Bactrian_runtime.Executor.contents) =
+let experiment t root ~sandbox (c : Bactrian_runtime.Executor.contents) =
   let e = c.experiment in
+  let sandbox = Option.value sandbox ~default:e.sandbox in
   let* () =
     gate t ~field:"agent.env_passthrough"
       "passes variables of the server's environment to the agent"
@@ -88,7 +99,7 @@ let experiment t root (c : Bactrian_runtime.Executor.contents) =
   in
   all
     (fun (file, (s : Scenario.t)) ->
-      let* () = checkers t ~field:(file ^ ": checkers") s in
+      let* () = checkers t ~sandbox ~field:(file ^ ": checkers") s in
       match s.fixtures with
       | None -> Ok ()
       | Some f ->
@@ -108,13 +119,15 @@ let describe t =
           mode: sandbox auto or off, and HTTP-mode agents, are refused (the \
           user allows them by starting serve-mcp with --allow-unsandboxed), \
           and a job fails where the sandbox does not work.");
+      "Checkers (in check and in experiments) run in the sandbox too, with no \
+       network and writes only to a temporary directory of their own.";
       (if t.trust_project then
-         "Checkers, MCP servers, passed environment variables and writable \
-          paths outside this directory are allowed: they run or reach outside \
-          the sandbox."
+         "MCP servers, passed environment variables, writable paths outside \
+          this directory and checkers in sandbox auto or off are allowed: they \
+          run or reach outside the sandbox."
        else
-         "Checkers, MCP servers, passed environment variables and writable \
-          paths outside this directory are refused (the user allows them by \
-          starting serve-mcp with --trust-project).");
+         "MCP servers, passed environment variables, writable paths outside \
+          this directory and checkers in sandbox auto or off are refused (the \
+          user allows them by starting serve-mcp with --trust-project).");
       Printf.sprintf "At most %d jobs run at once." t.max_jobs;
     ]

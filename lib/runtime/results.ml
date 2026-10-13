@@ -35,6 +35,21 @@ let read_opt dir file =
   | exception Eio.Io (Eio.Fs.E (Not_found _), _) -> Ok None
   | exception (Eio.Io _ as e) -> Error (file, Format.asprintf "%a" Eio.Exn.pp e)
 
+(* The sandbox label (design §5.3) of a run's agent, and of its checkers. Runs
+   from before the sandbox existed have the string "unsandboxed" instead in
+   meta.json. *)
+type label = {
+  mode : string;
+  applied : bool;
+  reason : string option; [@default None]
+}
+[@@deriving of_yojson]
+
+(* Why a label says the sandbox was not applied. *)
+let unapplied { mode; applied; reason } =
+  if applied then None
+  else Some (Option.value reason ~default:("sandbox: " ^ mode))
+
 type verdicts_wire_item = {
   name : string;
   verdict : string;
@@ -43,8 +58,13 @@ type verdicts_wire_item = {
 [@@deriving of_yojson { strict = true }]
 
 (* [passed] is only here so strict decoding accepts the file: the items carry
-   the same information. *)
-type verdicts_wire = { passed : bool; items : verdicts_wire_item list }
+   the same information. Runs from before checkers were sandboxed have no
+   [checker_sandbox]. *)
+type verdicts_wire = {
+  passed : bool;
+  items : verdicts_wire_item list;
+  checker_sandbox : label option; [@default None]
+}
 [@@deriving of_yojson { strict = true }] [@@warning "-69"]
 
 let check_of_wire w : (D.check, string) result =
@@ -55,10 +75,11 @@ let check_of_wire w : (D.check, string) result =
       Ok { name = w.name; status = Check_error; reason = w.reason }
   | other -> Error (Printf.sprintf "unknown verdict %S" other)
 
+(* The checks, and why the checkers ran unsandboxed when they did. *)
 let read_checks dir =
   match read_opt dir "verdicts.json" with
   | Error e -> Error e
-  | Ok None -> Ok []
+  | Ok None -> Ok ([], None)
   | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("verdicts.json", m)
@@ -73,7 +94,8 @@ let read_checks dir =
                   | Ok c -> Ok (c :: l)
                   | Error m -> Error ("verdicts.json", m))
                 (Ok []) v.items
-              |> Result.map List.rev))
+              |> Result.map (fun checks ->
+                  (List.rev checks, Option.bind v.checker_sandbox unapplied))))
 
 let read_trace dir =
   match read_opt dir "trace.jsonl" with
@@ -94,15 +116,6 @@ let read_trace dir =
                      Format.asprintf "line %d: %a" n Trace.pp_error e ))
            (Ok [])
       |> Result.map List.rev
-
-(* The sandbox label (design §5.3). Runs from before the sandbox existed have
-   the string "unsandboxed" instead. *)
-type label = {
-  mode : string;
-  applied : bool;
-  reason : string option; [@default None]
-}
-[@@deriving of_yojson]
 
 type sandbox = Before_sandbox | Label of label
 
@@ -162,9 +175,7 @@ let unsandboxed (m : meta) =
   match m.sandbox with
   | None -> None
   | Some Before_sandbox -> Some "recorded before bactrian had a sandbox"
-  | Some (Label { applied = true; _ }) -> None
-  | Some (Label { applied = false; reason; mode }) ->
-      Some (Option.value reason ~default:("sandbox: " ^ mode))
+  | Some (Label l) -> unapplied l
 
 let clock_unenforced (m : meta) =
   match m.clock with
@@ -273,6 +284,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
       latency_ms = None;
       tokens = None;
       unsandboxed = None;
+      checkers_unsandboxed = None;
       clock_unenforced = None;
       sandbox_violations = None;
     }
@@ -282,7 +294,9 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
   | Some id ->
       let dir = Eio.Path.(root / "runs" / id) in
       let bad (file, reason) = Bad_run { run_id = id; file; reason } in
-      let* checks = Result.map_error bad (read_checks dir) in
+      let* checks, checkers_unsandboxed =
+        Result.map_error bad (read_checks dir)
+      in
       let* trace = Result.map_error bad (read_trace dir) in
       let* meta = Result.map_error bad (read_meta dir) in
       let* divergences = Result.map_error bad (read_divergences dir) in
@@ -296,6 +310,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
           latency_ms = meta.latency_ms;
           tokens = meta.tokens;
           unsandboxed = unsandboxed meta;
+          checkers_unsandboxed;
           clock_unenforced = clock_unenforced meta;
           sandbox_violations = sandbox_violations meta;
         }

@@ -112,3 +112,13 @@ let render_golden_text ~colour (r : Golden.report) =
                  o.reason)
              r.offenders)
       @ indented (List.map (fun w -> "warning: " ^ w) r.warnings))
+
+let render_check_text ~colour (c : Check_command.t) =
+  let unsandboxed =
+    match c.sandbox with
+    | Some l when not l.applied ->
+        paint ~colour "31" ("every checker: " ^ unsandboxed_line l) ^ "\n"
+    | Some _ | None -> ""
+  in
+  unsandboxed
+  ^ String.concat "" (List.map (render_golden_text ~colour) c.reports)

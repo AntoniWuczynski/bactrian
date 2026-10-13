@@ -72,6 +72,51 @@ let test_experiment_runs =
            Yojson.Safe.Util.(to_list (member "unenforced" meta))))
     ids
 
+(* bactrian starts the checkers, so they get the sandbox the agent cannot: the
+   probe runs for them. Here it fails (the executable does not exist), and
+   under [auto] that is a warning and a label in verdicts.json. *)
+let test_checkers_probed =
+  setup "http-checkers" @@ fun ctx ->
+  write ctx "scenarios/s1.json"
+    (scenario_json ~assertions:"[]"
+       ~checkers:
+         {|[{"command": ["python3", "-I", "-c", "import json; print(json.dumps({'pass': True}))"]}]|}
+       "s1");
+  Eio.Switch.run @@ fun sw ->
+  let agent =
+    H.start ~sw ~net:(Eio.Stdenv.net ctx.env) ~clock:(Eio.Stdenv.clock ctx.env)
+      ~namespace_header ~start_delay:0. ~model_request
+  in
+  write ctx "exp.json" (experiment (H.url agent));
+  let warnings = ref [] in
+  let s =
+    ok
+      (go ~sandbox:(Some `Auto) ~warn:(fun w -> warnings := w :: !warnings) ctx)
+  in
+  Alcotest.(check (list string))
+    "all passed"
+    (List.init 4 (fun _ -> "passed"))
+    (kinds s);
+  Alcotest.(check bool)
+    "the probe ran and warned" true
+    (List.exists (String.starts_with ~prefix:"sandbox: auto") !warnings);
+  List.iter
+    (fun id ->
+      let label =
+        member "checker_sandbox"
+          (Yojson.Safe.from_string
+             (read ctx (Printf.sprintf ".bactrian/runs/%s/verdicts.json" id)))
+      in
+      Alcotest.(check string) "mode" "auto" (str label "mode");
+      Alcotest.(check bool)
+        "the checkers' own reason" true
+        (String.starts_with ~prefix:"unavailable: " (str label "reason"));
+      Alcotest.(check string)
+        "the agent keeps its label"
+        {|{"mode":"auto","applied":false,"reason":"http mode"}|}
+        (Yojson.Safe.to_string (member "sandbox" (run_meta ctx id))))
+    (run_ids s)
+
 let test_strict_sandbox_refused =
   setup "http-strict" @@ fun ctx ->
   write ctx "exp.json"
@@ -110,6 +155,8 @@ let () =
       ( "http agent",
         [
           Alcotest.test_case "experiment runs" `Slow test_experiment_runs;
+          Alcotest.test_case "checkers are probed for" `Slow
+            test_checkers_probed;
           Alcotest.test_case "sandbox strict refused" `Quick
             test_strict_sandbox_refused;
           Alcotest.test_case "--sandbox strict refused" `Quick

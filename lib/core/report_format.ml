@@ -110,6 +110,22 @@ let exit_meaning = function
   | 3 -> "missing data may bias the comparison"
   | n -> Printf.sprintf "exit status %d" n
 
+let checkers_warning (d : Report_data.t) =
+  match
+    List.filter_map
+      (fun (r : Report_data.run) -> r.checkers_unsandboxed)
+      d.order
+  with
+  | [] -> None
+  | reasons ->
+      Some
+        (Printf.sprintf
+           "%d of %d runs ran their checkers without the operating-system \
+            sandbox, so nothing stopped the checkers from reaching the network \
+            or writing outside their temporary directory: %s."
+           (List.length reasons) (List.length d.order)
+           (String.concat "; " (List.sort_uniq String.compare reasons)))
+
 let clock_warning (d : Report_data.t) =
   match
     List.filter_map (fun (r : Report_data.run) -> r.clock_unenforced) d.order

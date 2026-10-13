@@ -16,6 +16,6 @@ The driver sends one `POST` per message and reads the response body as a JSON ar
 
 ## Consequences
 
-bactrian cannot reset a server it did not start, so its runs cannot be isolated. They are unsandboxed whatever `sandbox` says, and carry the ordinary sandbox label (decision 0007) with `applied` false and the reason `http mode`, so reports and comparisons flag them like any other unsandboxed run. No sandbox preflight is run for an HTTP-mode experiment, and it warns once. `sandbox: strict` in any of its forms, or `--sandbox strict`, is a configuration error with `protocol: http`.
+bactrian cannot reset a server it did not start, so its runs cannot be isolated. They are unsandboxed whatever `sandbox` says, and carry the ordinary sandbox label (decision 0007) with `applied` false and the reason `http mode`, so reports and comparisons flag them like any other unsandboxed run. No sandbox preflight is run for the agent of an HTTP-mode experiment, only for its checkers when a scenario has any (decision 0013), and it warns once. `sandbox: strict` in any of its forms, or `--sandbox strict`, is a configuration error with `protocol: http`.
 
 An agent that reads its own process environment instead of `env` would call real providers with its own keys, or none, and bypass interception. bactrian cannot detect that, so the README says it plainly. Isolation between concurrent runs is the agent's job, and the example agents key their sessions by run ID.
