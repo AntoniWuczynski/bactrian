@@ -73,8 +73,11 @@ let gate_text (d : D.t) =
                  Printf.sprintf "%s (threshold %.1f percentage points)" m.name
                    (m.delta *. 100.)
              | Cost | Latency_p50 | Tokens ->
-                 Printf.sprintf "%s (threshold %s)" m.name
-                   (F.threshold_text m.result.metric m.delta))
+                 Printf.sprintf "%s (threshold %s%s)" m.name
+                   (F.threshold_text m.result.metric m.delta)
+                   (match m.result.undefined with
+                   | Some _ -> ", undefined, counts as inconclusive"
+                   | None -> ""))
            gate)
 
 let fact name value = [ H.dt [ H.txt name ]; H.dd [ H.txt value ] ]
@@ -588,10 +591,11 @@ let page (d : D.t) =
              header d;
              section "verdicts" "Verdicts"
                (verdict_table d
-                :: List.filter_map
+                :: List.concat_map
                      (fun m ->
-                       Option.map (para ~cls:[ "note" ])
-                         (F.extra_repeats_text m))
+                       List.filter_map
+                         (fun f -> Option.map (para ~cls:[ "note" ]) (f m))
+                         [ F.undefined_text; F.extra_repeats_text ])
                      d.metrics
                @ (missing_table d :: dropped_note d));
              forest_section d;

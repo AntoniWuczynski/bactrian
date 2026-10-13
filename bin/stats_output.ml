@@ -87,7 +87,10 @@ let render_compare_text ~colour (d : D.t) =
               ])
             d.metrics));
   List.iter
-    (fun m -> Option.iter (line "%s") (F.extra_repeats_text m))
+    (fun m ->
+      List.iter
+        (fun f -> Option.iter (line "%s") (f m))
+        [ F.undefined_text; F.extra_repeats_text ])
     d.metrics;
   line "";
   Buffer.add_string b

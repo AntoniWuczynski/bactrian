@@ -135,6 +135,15 @@ let threshold_text (metric : Compare.metric) delta =
   | Latency_p50 -> relative "slower" "faster"
   | Tokens -> relative "more" "fewer"
 
+let undefined_text (m : Report_data.metric_row) =
+  Option.map
+    (fun reason ->
+      Printf.sprintf "%s is undefined%s: %s." (metric m.result.metric)
+        (if m.result.in_gate then " and counts as inconclusive in the gate"
+         else "")
+        reason)
+    m.result.undefined
+
 let extra_repeats_text (m : Report_data.metric_row) =
   Option.map
     (fun extra ->
@@ -162,7 +171,7 @@ let extra_repeats_text (m : Report_data.metric_row) =
 let metric_texts (m : Report_data.metric_row) =
   let threshold = threshold_text m.result.metric m.delta in
   match (m.relative, Float.is_nan m.result.estimate) with
-  | _, true -> ("undefined", "undefined", "")
+  | _, true -> ("undefined", "undefined", threshold)
   | None, false ->
       (points m.result.estimate, interval points m.result.interval, threshold)
   | Some (e, i), false -> (percent e, interval percent i, threshold)

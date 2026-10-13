@@ -264,7 +264,7 @@ let metric_row (settings : Compare.input) (m : Compare.metric_result) =
   in
   let extra_repeats =
     match m.verdict with
-    | Inconclusive _ when m.in_gate ->
+    | Inconclusive _ when m.in_gate && Option.is_none m.undefined ->
         Some
           (Plan_sim.extra_runs_needed settings ~metric:m.metric
             :> extra_repeats)
@@ -520,6 +520,7 @@ let metric_json (m : metric_row) : Yojson.Safe.t =
       | None -> [])
     @ [
         ("result", verdict_json r.verdict);
+        ("undefined", opt (fun s -> `String s) r.undefined);
         ( "extra_repeats",
           match m.extra_repeats with
           | None -> `Null

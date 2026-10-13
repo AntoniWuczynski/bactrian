@@ -95,9 +95,9 @@ type metric_row = {
           metrics on the log ratio scale. [None] for pass rate or an undefined
           metric. *)
   extra_repeats : extra_repeats option;
-      (** For an inconclusive gate metric, the extra repeats per scenario and
-          variant that would resolve it, simulated with the observed rates as
-          the truth. [None] for any other metric. *)
+      (** For an inconclusive gate metric that is defined, the extra repeats per
+          scenario and variant that would resolve it, simulated with the
+          observed rates as the truth. [None] for any other metric. *)
 }
 
 type scenario_row = {

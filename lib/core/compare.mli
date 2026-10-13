@@ -45,6 +45,10 @@ type metric_result = {
       (** [true] for every declared gate metric. An undefined gate metric stays
           in the gate with an [Inconclusive] verdict, so it exits 2 under
           [fail_on_inconclusive] rather than passing silently. *)
+  undefined : string option;
+      (** Why the metric is undefined, for example
+          ["scenario s01 has 3 values in b, fewer than 5"]. [None] when it is
+          defined. *)
 }
 
 type missing_reason = Errored | Not_run

@@ -59,6 +59,10 @@ val threshold_text : Compare.metric -> float -> string
     improvement more than 16.7% cheaper). Latency says slower and faster, tokens
     more and fewer. *)
 
+val undefined_text : Report_data.metric_row -> string option
+(** For an undefined metric, one sentence naming it, saying whether it counts as
+    inconclusive in the gate, and why it is undefined. *)
+
 val extra_repeats_text : Report_data.metric_row -> string option
 (** For an inconclusive gate metric, one sentence on the extra repeats that
     would resolve it, naming the metric. *)

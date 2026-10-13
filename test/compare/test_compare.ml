@@ -302,6 +302,9 @@ let test_undefined_median () =
   (* A declared gate metric that is undefined stays in the gate as
      inconclusive, so it cannot pass silently. *)
   Alcotest.(check bool) "still in gate" true m.in_gate;
+  Alcotest.(check (option string))
+    "why" (Some "the mean is zero in one variant, so the ratio is undefined")
+    m.undefined;
   Alcotest.check verdict_t "inconclusive" (inc `None) m.verdict;
   Alcotest.(check int) "exit without flag" 0 r.exit;
   let r =
@@ -324,6 +327,11 @@ let test_undefined_without_values () =
   in
   Alcotest.check verdict_t "pass rate" No_change (metric r C.Pass_rate).verdict;
   Alcotest.(check bool) "cost in gate" true (metric r C.Cost).in_gate;
+  Alcotest.(check (option string))
+    "why" (Some "scenario s00 has 0 values in A, fewer than 5")
+    (metric r C.Cost).undefined;
+  Alcotest.(check (option string))
+    "a defined metric has no reason" None (metric r C.Pass_rate).undefined;
   Alcotest.(check int) "inconclusive cost gate exits 2" 2 r.exit
 
 let test_swap_negates () =
@@ -518,7 +526,12 @@ let test_cost_needs_five_values () =
     not (Float.is_nan (metric r C.Cost).estimate)
   in
   Alcotest.(check bool) "5 values" true (defined 5);
-  Alcotest.(check bool) "4 values" false (defined 4)
+  Alcotest.(check bool) "4 values" false (defined 4);
+  Alcotest.(check (option string))
+    "names the scenario and arm"
+    (Some "scenario s01 has 4 values in B, fewer than 5")
+    (metric (ok (C.run (input ~gate:[ (C.Cost, 0.2) ] (rs 4)))) C.Cost)
+      .undefined
 
 let test_cost_common_scenarios_only () =
   (* Values from a scenario the other arm lacks are not pooled. *)

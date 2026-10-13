@@ -28,6 +28,7 @@
       "threshold_scaled": 0.1,
       "level": 0.95,
       "result": { "verdict": "inconclusive", "lean": "worse" },
+      "undefined": null,
       "extra_repeats": 79
     },
     {
@@ -43,6 +44,7 @@
         "interval": { "lower": 0.244078015676, "upper": 0.35248447205 }
       },
       "result": { "verdict": "regression", "lean": null },
+      "undefined": null,
       "extra_repeats": null
     },
     {
@@ -58,6 +60,7 @@
         "interval": { "lower": 0.415973931487, "upper": 0.492971945733 }
       },
       "result": { "verdict": "regression", "lean": null },
+      "undefined": null,
       "extra_repeats": null
     }
   ],

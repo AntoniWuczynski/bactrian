@@ -14,6 +14,7 @@ type metric_result = {
   level : float;
   verdict : verdict;
   in_gate : bool;
+  undefined : string option;
 }
 
 type missing_reason = Errored | Not_run
@@ -144,22 +145,39 @@ let value_estimate (input : input) ~rng ~common metric ~level =
         })
       common
   in
+  let short variant arms =
+    List.find_map
+      (fun (a : Bootstrap.arm) ->
+        let n = Array.length a.values in
+        if n < min_values then
+          Some
+            (Printf.sprintf "scenario %s has %d value%s in %s, fewer than %d"
+               a.scenario n
+               (if n = 1 then "" else "s")
+               variant min_values)
+        else None)
+      arms
+  in
   let b = arms input.baseline and c = arms input.candidate in
-  if
-    List.exists
-      (fun (a : Bootstrap.arm) -> Array.length a.values < min_values)
-      (b @ c)
-  then None
-  else
-    let statistic =
-      match metric with
-      | Latency_p50 -> Bootstrap.mean_log_ratio_of_medians
-      | Pass_rate | Cost | Tokens -> Bootstrap.log_ratio_of_means
-    in
-    statistic ~rng ~resamples:input.resamples ~confidence:level ~baseline:b
-      ~candidate:c
+  match (short input.baseline b, short input.candidate c) with
+  | Some reason, _ | None, Some reason -> Error reason
+  | None, None -> (
+      let statistic, zero =
+        match metric with
+        | Latency_p50 ->
+            ( Bootstrap.mean_log_ratio_of_medians,
+              "a scenario's median is zero in one variant" )
+        | Pass_rate | Cost | Tokens ->
+            (Bootstrap.log_ratio_of_means, "the mean is zero in one variant")
+      in
+      match
+        statistic ~rng ~resamples:input.resamples ~confidence:level ~baseline:b
+          ~candidate:c
+      with
+      | Some x -> Ok x
+      | None -> Error (zero ^ ", so the ratio is undefined"))
 
-let undefined metric ~threshold ~level ~in_gate : metric_result =
+let undefined metric ~threshold ~level ~in_gate ~reason : metric_result =
   {
     metric;
     estimate = Float.nan;
@@ -168,6 +186,7 @@ let undefined metric ~threshold ~level ~in_gate : metric_result =
     level;
     verdict = Inconclusive { lean = `None };
     in_gate;
+    undefined = Some reason;
   }
 
 let tally xs = (List.length (List.filter (fun x -> x > 0.5) xs), List.length xs)
@@ -268,7 +287,16 @@ let run (input : input) =
           let verdict =
             decide ~threshold ~worse_is:(metric_worse_is metric) interval
           in
-          { metric; estimate; interval; threshold; level; verdict; in_gate }
+          {
+            metric;
+            estimate;
+            interval;
+            threshold;
+            level;
+            verdict;
+            in_gate;
+            undefined = None;
+          }
         in
         match metric with
         | Pass_rate ->
@@ -276,8 +304,9 @@ let run (input : input) =
             judged est interval
         | Cost | Latency_p50 | Tokens -> (
             match value_estimate input ~rng ~common metric ~level with
-            | Some (est, interval) -> judged est interval
-            | None -> undefined metric ~threshold ~level ~in_gate))
+            | Ok (est, interval) -> judged est interval
+            | Error reason ->
+                undefined metric ~threshold ~level ~in_gate ~reason))
       declared
   in
   let pass_threshold =

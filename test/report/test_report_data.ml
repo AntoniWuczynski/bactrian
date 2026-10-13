@@ -191,6 +191,40 @@ let test_gate_family_level () =
         (1. -. (0.05 /. 3.))
         t.gate_level
 
+let test_undefined () =
+  let runs =
+    List.map (fun (r : R.run) -> { r with cost = None }) Fixture.runs
+  in
+  let settings =
+    {
+      (Fixture.settings ()) with
+      runs = List.map R.compare_run runs;
+      gate = [ (Pass_rate, 0.1); (Cost, 0.2) ];
+      report_metrics = [];
+    }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result runs
+      in
+      let cost =
+        List.find (fun (m : R.metric_row) -> m.name = "cost") t.metrics
+      in
+      Alcotest.(check (option string))
+        "sentence"
+        (Some
+           "Cost is undefined and counts as inconclusive in the gate: scenario \
+            book has 0 values in a, fewer than 5.")
+        (Report_format.undefined_text cost);
+      Alcotest.(check bool)
+        "no simulated repeats for it" true
+        (Option.is_none cost.extra_repeats);
+      let _, _, threshold = Report_format.metric_texts cost in
+      Alcotest.(check string)
+        "threshold kept" "20.0% dearer, 16.7% cheaper" threshold
+
 let test_arms () =
   Alcotest.(check (list (pair string string)))
     "every scenario, baseline then candidate"
@@ -387,6 +421,7 @@ let () =
           Alcotest.test_case "gate family level" `Quick test_gate_family_level;
           Alcotest.test_case "extra repeats" `Quick test_extra_repeats;
           Alcotest.test_case "per scenario and variant" `Quick test_arms;
+          Alcotest.test_case "undefined metric" `Quick test_undefined;
         ] );
       ( "json",
         [
