@@ -13,11 +13,12 @@ let () = Mirage_crypto_rng_unix.use_default ()
 let weather_turn =
   "What is the weather in Paris right now? Use the get_weather tool."
 
-let scenario_json ~max_steps id =
+let scenario_json ?(checkers = "[]") ~max_steps id =
   Printf.sprintf
     {|{"version": 1, "id": %S, "turns": [{"user": %S}],
- "assertions": [{"tool_sequence": {"mode": "exact", "tools": ["get_weather"]}}, {"max_steps": %d}]}|}
-    id weather_turn max_steps
+ "assertions": [{"tool_sequence": {"mode": "exact", "tools": ["get_weather"]}}, {"max_steps": %d}],
+ "checkers": %s}|}
+    id weather_turn max_steps checkers
 
 let experiment_json ~compare =
   let variant name =
@@ -74,7 +75,11 @@ let with_experiment name f () =
       id = "";
     }
   in
-  write ctx0 "scenarios/s1.json" (scenario_json ~max_steps:2 "s1");
+  write ctx0 "scenarios/s1.json"
+    (scenario_json ~max_steps:2
+       ~checkers:
+         {|[{"command": ["python3", "-I", "-c", "import json; print(json.dumps({'pass': True}))"]}]|}
+       "s1");
   write ctx0 "scenarios/s2.json" (scenario_json ~max_steps:1 "s2");
   write ctx0 "exp.json" (experiment_json ~compare:default_compare);
   let summary =
@@ -120,9 +125,17 @@ let test_load =
         (match r.cost with Some c -> c > 0. | None -> false);
       Alcotest.(check bool) "latency" true (Option.is_some r.latency_ms);
       Alcotest.(check bool) "tokens" true (Option.is_some r.tokens);
-      Alcotest.(check int) "two checks" 2 (List.length r.checks);
+      let s1 = String.equal r.scenario "scenarios/s1.json" in
+      Alcotest.(check int)
+        "two assertions, and a checker in s1"
+        (if s1 then 3 else 2)
+        (List.length r.checks);
       Alcotest.(check (option string))
-        "unsandboxed, from the label" (Some "sandbox: off") r.unsandboxed)
+        "unsandboxed, from the label" (Some "sandbox: off") r.unsandboxed;
+      Alcotest.(check (option string))
+        "checkers unsandboxed, from verdicts.json"
+        (if s1 then Some "sandbox: off" else None)
+        r.checkers_unsandboxed)
     l.runs;
   List.iter
     (fun v ->

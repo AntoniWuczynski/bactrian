@@ -85,6 +85,12 @@ let make ~index ~scenario ~variant ~repeat : R.run =
   let tr =
     if finished then trace ~tools ~ms ~tokens:(if b then 400 else 200) else []
   in
+  (* A command agent's checkers run in its sandbox, so both labels agree. *)
+  let unsandboxed =
+    if scenario = "search" && repeat = 1 then
+      Some "unavailable: bubblewrap (bwrap) is not installed"
+    else None
+  in
   {
     index;
     repeat;
@@ -117,10 +123,8 @@ let make ~index ~scenario ~variant ~repeat : R.run =
        else None);
     latency_ms = (if finished then R.latency_ms tr else None);
     tokens = (if finished then R.tokens tr else None);
-    unsandboxed =
-      (if scenario = "search" && repeat = 1 then
-         Some "unavailable: bubblewrap (bwrap) is not installed"
-       else None);
+    unsandboxed;
+    checkers_unsandboxed = unsandboxed;
     clock_unenforced =
       (if scenario = "search" && repeat <= 2 then Some "static-binary" else None);
     sandbox_violations =

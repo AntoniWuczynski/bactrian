@@ -133,10 +133,11 @@ let unsandboxed_warning (d : D.t) =
              (String.concat "; " (List.sort_uniq String.compare reasons)));
       ]
 
-let clock_warning (d : D.t) =
-  match F.clock_warning d with
+let warning = function
   | None -> []
   | Some text -> [ para ~cls:[ "warning" ] text ]
+
+let clock_warning (d : D.t) = warning (F.clock_warning d)
 
 let violations_note (d : D.t) =
   match F.violations_note d with
@@ -659,7 +660,9 @@ let page (d : D.t) =
        [
          H.main
            ([ header d ]
-           @ unsandboxed_warning d @ clock_warning d @ violations_note d
+           @ unsandboxed_warning d
+           @ warning (F.checkers_warning d)
+           @ clock_warning d @ violations_note d
            @ [
                section "verdicts" "Verdicts"
                  (verdict_table d

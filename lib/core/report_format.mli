@@ -50,6 +50,11 @@ val violations_note : Report_data.t -> string option
     reader sees which counts are lower bounds and which cover relay failures
     only. [None] when no run was sandboxed. *)
 
+val checkers_warning : Report_data.t -> string option
+(** Names the runs whose checkers ran outside the sandbox (design §5.3), with
+    the reasons. [None] when every run's checkers were sandboxed or there were
+    none. *)
+
 val clock_warning : Report_data.t -> string option
 (** Names the runs whose clock was only a contract (design §5 step 2), with the
     reasons, and says that an agent reading the system clock saw real time in

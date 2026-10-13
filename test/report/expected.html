@@ -131,6 +131,7 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 </dl>
 </header>
 <p class="warning">2 of 60 runs ran without the operating-system sandbox, so nothing stopped their agents from reaching the network or writing outside their run: unavailable: bubblewrap (bwrap) is not installed.</p>
+<p class="warning">2 of 60 runs ran their checkers without the operating-system sandbox, so nothing stopped the checkers from reaching the network or writing outside their temporary directory: unavailable: bubblewrap (bwrap) is not installed.</p>
 <p class="warning">4 of 60 runs had a contract-only clock (static-binary): an agent that reads the system clock saw real time, not SIM_NOW. Not every run is affected, so a difference between arms may come from the clock.</p>
 <p class="note">Sandbox violations. 2 runs: at least 2 (the system log can drop denials, so this is a lower bound).</p>
 <section id="verdicts">
