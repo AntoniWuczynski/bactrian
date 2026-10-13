@@ -17,7 +17,9 @@ let shim ctx ~env lines =
   in
   Eio.Resource.close in_r;
   Eio.Resource.close out_w;
-  List.iter (fun l -> Eio.Flow.copy_string (l ^ "\n") in_w) lines;
+  (* A shim that refuses to start may exit before reading its input. *)
+  (try List.iter (fun l -> Eio.Flow.copy_string (l ^ "\n") in_w) lines
+   with Eio.Io (Eio.Net.E (Connection_reset _), _) -> ());
   Eio.Resource.close in_w;
   let out =
     Eio.Buf_read.parse_exn Eio.Buf_read.take_all ~max_size:max_int out_r
