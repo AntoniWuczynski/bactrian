@@ -1,0 +1,5 @@
+pin-depends: [
+  ["http.dev" "git+https://github.com/mirage/ocaml-cohttp.git#1193aaeef7dcb9590e999ea9ed455c3649d7bc15"]
+  ["cohttp.dev" "git+https://github.com/mirage/ocaml-cohttp.git#1193aaeef7dcb9590e999ea9ed455c3649d7bc15"]
+  ["cohttp-eio.dev" "git+https://github.com/mirage/ocaml-cohttp.git#1193aaeef7dcb9590e999ea9ed455c3649d7bc15"]
+]
