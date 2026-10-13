@@ -25,7 +25,7 @@ The rules, and what fails without each:
 | `(allow file-read*)` | neither runtime starts |
 | `(allow file-write* …)` for the state directory, the temporary directory, `allow_write` paths and `/dev/null` | writes fail. `/dev/null` is opened for writing by `subprocess.DEVNULL` and by shells |
 | `(allow file-write* (literal "/dev/dtracehelper"))` and `(allow file-ioctl (literal "/dev/dtracehelper"))` | nothing breaks, but every process logs two denials at start, which would bury real violations |
-| `(allow network-outbound (remote ip (string-append "localhost:" (param "PORT_n"))))` per listener | connections to bactrian's listeners fail |
+| `(allow network-outbound (remote ip (string-append "localhost:" (param "PORT_n"))))` per listener | connections to bactrian's listeners fail. A run's profile names one port, a model-proxy listener that serves that run alone, so a token read from another run's launch environment (decision 0010) cannot be used |
 | `(allow network-outbound (remote unix-socket (path-literal (param "SOCKET_n"))))` per named socket | connecting to it fails |
 
 Reads are denied with `(deny file-read-data (subpath …))`, not `file-read*`. A Seatbelt rule that comes later overrides an earlier one, which is how the run's own directories are readable again after `.bactrian/runs` is denied. With `file-read*`, Node's `fs.realpathSync` fails on the state directory, because it runs `lstat` on every parent, including `.bactrian/runs`. With `file-read-data` the contents and listings of denied paths are refused, but `stat` still works, so the existence and size of a denied file can be seen.

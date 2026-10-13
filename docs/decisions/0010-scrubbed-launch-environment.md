@@ -39,3 +39,5 @@ A provider key reaches a child only when the experiment names it for that child,
 Variables outside the allowlist, `OCAMLRUNPARAM` among them, are not seen by the OCaml runtime of the re-executed image at start, because the runtime reads them before bactrian restores the environment. They are restored for bactrian's own code.
 
 Residual risk. Every other process of the same user whose binary is not an Apple platform binary can still be read the same way, and many hold keys in their launch environment: a shell installed from Homebrew, `tmux`, `direnv`, or `uv run --env-file` that started bactrian. The sandbox cannot hide them. Where an agent is hostile, run bactrian as a dedicated user that holds no other processes, or in a virtual machine. On Linux the agent has its own process namespace and sees none of these.
+
+Other agents are such processes too, and their launch environments hold their runs' tokens. On macOS each sandboxed run therefore gets a model-proxy port of its own that answers only its token, and its profile allows no other port, so a token read from a concurrent run cannot be used.

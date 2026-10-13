@@ -1,5 +1,6 @@
-(** The model proxy: one loopback listener serving every registered run.
-    Requests arrive at /r/<token>/<provider>/<provider path>.
+(** The model proxy: one loopback listener serving every registered run, plus
+    listeners of a single run where the sandbox needs them ({!listen_unix},
+    {!listen_tcp}). Requests arrive at /r/<token>/<provider>/<provider path>.
 
     The agent's key is "bactrian-" ^ token in the provider's usual key header.
     For Gemini it may instead (or also) be the [key] query parameter, which must
@@ -131,6 +132,18 @@ val listen_unix :
     as if every other token were unknown (403), so one run's socket cannot serve
     another run. The caller removes the file. *)
 
+val listen_tcp :
+  t ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  token:string ->
+  (int, string) result
+(** [listen_tcp t ~sw ~net ~token] also serves the proxy on a new loopback port
+    chosen by the system, until [sw] ends, and returns the port. Like
+    {!listen_unix} it answers only the run [token]: a macOS sandbox allows the
+    agent this one port, so a token read from another run's environment is of no
+    use there (design §5.3). *)
+
 val unattributed : t -> int
 (** Proxy-wide count of requests and connection failures that cannot be tied to
     a registered run: an unknown or ended token, an unknown provider segment, a
@@ -146,15 +159,16 @@ val unregister : t -> token:string -> findings
     servers and returns its findings. Raises [Invalid_argument] for a token that
     is not registered. *)
 
-val base_url : t -> token:string -> provider -> string
+val base_url : ?port:int -> t -> token:string -> provider -> string
 (** e.g. "http://127.0.0.1:<port>/r/<token>/openai/v1" for OpenAI (SDK base URLs
     include /v1 for OpenAI and OpenRouter's /api/v1, not for Anthropic or
-    Gemini). *)
+    Gemini). [port] defaults to {!port}, the listener every run shares, and is
+    otherwise a port from {!listen_tcp}. *)
 
-val mcp_url : t -> token:string -> string
+val mcp_url : ?port:int -> t -> token:string -> string
 (** "http://127.0.0.1:<port>/r/<token>/mcp": the run's
     {!Mcp_proxy.url_variable}, to which [mcp-shim NAME] appends "/NAME". *)
 
-val mcp_http_url : t -> token:string -> string -> string
+val mcp_http_url : ?port:int -> t -> token:string -> string -> string
 (** "http://127.0.0.1:<port>/r/<token>/mcp-http/<name>": the URL the agent uses
     for the Streamable HTTP server [name]. *)

@@ -103,12 +103,23 @@ def masked():
 def state():
     open(os.path.join(os.environ["BACTRIAN_STATE_DIR"], "ok"), "w").close()
 
+def other():
+    reached = []
+    for port in os.environ["OTHER_PORTS"].split(","):
+        try:
+            socket.create_connection(("127.0.0.1", int(port)), timeout=5).close()
+            reached.append(port)
+        except OSError:
+            pass
+    if not reached:
+        raise OSError("no other port reached")
+
 for line in sys.stdin:
     m = json.loads(line)
     if m["type"] == "turn":
         result = {"public": attempt(public), "home": attempt(home),
                   "secret": attempt(secret), "masked": attempt(masked),
-                  "state": attempt(state)}
+                  "state": attempt(state), "other": attempt(other)}
         send({"v": 1, "type": "reply", "turn": m["turn"],
               "content": json.dumps(result, sort_keys=True)})
     elif m["type"] == "end":
@@ -136,6 +147,21 @@ let test_escapes_fail =
       if Sys.file_exists home_file then Sys.remove home_file)
   @@ fun () ->
   let sandbox = strict ~deny_read:[ secret_dir ] ctx in
+  Eio.Switch.run @@ fun sw ->
+  (* Another run's own port, and on macOS the port every run shares, which
+     answers any registered token. A token read from another run's launch
+     environment is of no use if neither can be reached. *)
+  let other_port =
+    match
+      P.listen_tcp ctx.proxy ~sw ~net:(Eio.Stdenv.net ctx.env)
+        ~token:"another-run"
+    with
+    | Ok p -> p
+    | Error m -> Alcotest.failf "listen: %s" m
+  in
+  let other_ports =
+    other_port :: (if macos then [ P.port ctx.proxy ] else [])
+  in
   let r =
     ok
       (execute ctx
@@ -143,7 +169,12 @@ let test_escapes_fail =
            (config ~agent:[ "python3"; "-I"; "-c"; escape_agent ] ()) with
            sandbox;
            variant_env =
-             [ ("REAL_HOME_FILE", home_file); ("SECRET_FILE", secret) ];
+             [
+               ("REAL_HOME_FILE", home_file);
+               ("SECRET_FILE", secret);
+               ( "OTHER_PORTS",
+                 String.concat "," (List.map string_of_int other_ports) );
+             ];
          })
   in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
@@ -159,7 +190,7 @@ let test_escapes_fail =
   Alcotest.(check (option string))
     "every escape denied, the state dir writable"
     (Some
-       {|{"home": "denied", "masked": "denied", "public": "denied", "secret": "denied", "state": "ok"}|})
+       {|{"home": "denied", "masked": "denied", "other": "denied", "public": "denied", "secret": "denied", "state": "ok"}|})
     reply;
   Alcotest.(check bool) "nothing written home" false (Sys.file_exists home_file);
   Alcotest.(check bool)
@@ -185,6 +216,9 @@ let test_escapes_fail =
       Alcotest.(check bool)
         "secret read" true
         (seen "file-read-data" "/secret/key");
+      Alcotest.(check bool)
+        "another run's port" true
+        (seen "network-outbound" (Printf.sprintf ":%d" other_port));
       Alcotest.(check bool)
         "in the trace" true
         (List.mem "sandbox_violation" (trace_types r))

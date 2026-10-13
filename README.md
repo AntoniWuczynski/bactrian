@@ -174,7 +174,7 @@ Every agent runs inside an operating-system sandbox when the host supports one. 
 - cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`, and, where one of these is a symbolic link, the file or directory it leads to
 - holds a placeholder API key (`bactrian-<token>`) and never the real one, which only bactrian's proxy adds on the way upstream
 
-On macOS this is `sandbox-exec` with a profile written for each run. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket. MCP servers are part of the world, not of the agent, so they run outside the sandbox.
+On macOS this is `sandbox-exec` with a profile written for each run, which lets the agent reach one loopback port: a listener of bactrian's proxy that serves that run and no other. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket. MCP servers are part of the world, not of the agent, so they run outside the sandbox.
 
 The mode is `auto` (the default), `strict` or `off`, set in the experiment or with `--sandbox` on `record`, `replay` and `run` (which overrides the experiment). `allow_write` adds writable paths and `deny_read` adds unreadable ones, both relative to the experiment file:
 
@@ -196,6 +196,8 @@ What the sandbox refused goes into the run's trace as `sandbox_violation` events
 - On Linux the operating system logs nothing, so the only violations reported are connections the forwarder could not pass on. A denied connection, write or read shows up as the agent's own error (`ENETUNREACH`, `EROFS`, or a missing file for a denied directory).
 
 On macOS, Seatbelt does not govern the `sysctl` that returns another process's launch-time arguments and environment, so an agent can read those of any process of yours that is not an Apple binary. `record`, `replay` and `run` therefore restart themselves at once with only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ` and `TMPDIR` in their launch environment and take the rest, provider keys included, back from an unlinked temporary file. No process bactrian starts inherits its environment either: an MCP server gets a key only if the experiment sets it in that server's `env`, and a checker never gets one. What remains readable is the launch environment of your other processes, such as a Homebrew shell, `tmux`, `direnv` or a `uv run --env-file` that started bactrian. When you do not trust the agent, run bactrian as a separate user or in a virtual machine. On Linux the agent cannot see other processes.
+
+A process the agent starts in a new session or process group (`setsid`, a daemon) escapes the group signal that ends a run, so on macOS and in unsandboxed runs it can outlive the run, and a bactrian killed with SIGKILL leaves its agents and MCP servers running there. On macOS such a process stays inside its run's sandbox and reaches only that run's port, which closes when the run ends. On Linux the sandbox's process namespace ends it with the run.
 
 ## Clock
 

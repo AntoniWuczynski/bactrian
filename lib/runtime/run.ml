@@ -274,7 +274,7 @@ let merge vars =
 (* What bactrian sets for one run (design §5 step 2), with the variant's own
    variables. A command agent gets them as its environment and an HTTP agent in
    the [env] of its [start] message (design §5.1), so the two cannot differ. *)
-let run_variables config ~proxy ~token ~run_id ~state_dir ~sim_now =
+let run_variables config ~proxy ~port ~token ~run_id ~state_dir ~sim_now =
   let ours =
     [
       ("SIM_NOW", sim_now);
@@ -285,20 +285,20 @@ let run_variables config ~proxy ~token ~run_id ~state_dir ~sim_now =
     @ List.concat_map
         (fun (p, _, url_var) ->
           [
-            (url_var, P.base_url proxy ~token p);
+            (url_var, P.base_url proxy ~port ~token p);
             (key_variable p, "bactrian-" ^ token);
           ])
         table
     @ (match config.mcp with
       | [] -> []
-      | _ :: _ -> [ (Mcp_proxy.url_variable, P.mcp_url proxy ~token) ])
+      | _ :: _ -> [ (Mcp_proxy.url_variable, P.mcp_url proxy ~port ~token) ])
     @ List.filter_map
         (fun (c : Mcp_proxy.config) ->
           match c.server with
           | Http _ ->
               Some
                 ( Mcp_proxy.http_variable c.name,
-                  P.mcp_http_url proxy ~token c.name )
+                  P.mcp_http_url proxy ~port ~token c.name )
           | Stdio _ -> None)
         config.mcp
   in
@@ -565,8 +565,16 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 temp_dir;
   let temp_dir_path = Filename.concat run_dir_path "tmp" in
   let* () = copy_fixtures ~env ~state_dir config.fixtures in
+  (* Lives as long as the run: its own port, where the sandbox needs one. *)
+  Eio.Switch.run @@ fun run_sw ->
+  let* port =
+    match config.agent with
+    | Command _ when Sandbox.own_port config.sandbox ->
+        P.listen_tcp proxy ~sw:run_sw ~net:(Eio.Stdenv.net env) ~token
+    | Command _ | Http _ -> Ok (P.port proxy)
+  in
   let variables =
-    run_variables config ~proxy ~token ~run_id ~state_dir:state_dir_path
+    run_variables config ~proxy ~port ~token ~run_id ~state_dir:state_dir_path
       ~sim_now
   in
   let agent_process_env =
@@ -674,7 +682,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                    run_dir = run_dir_path;
                    state_dir = state_dir_path;
                    temp_dir = temp_dir_path;
-                   port = P.port proxy;
+                   port;
                    preload = Agent_clock.library agent_clock;
                    listen_unix =
                      (fun path ->

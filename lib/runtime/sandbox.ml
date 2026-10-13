@@ -482,6 +482,11 @@ let start ~sw t run agent =
               },
               Relay_log log ))
 
+let own_port = function
+  | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> true
+  | Sandboxed { host = { engine = Bubblewrap _; _ }; _ } | Unsandboxed _ ->
+      false
+
 (* A deny-list mask is applied after the library is bound, so a library under
    one is hidden again. Only bubblewrap binds the library at all. *)
 let preload_hidden t library =

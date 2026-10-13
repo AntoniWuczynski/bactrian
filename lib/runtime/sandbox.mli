@@ -74,7 +74,9 @@ type run = {
           descriptor on it. *)
   state_dir : string;
   temp_dir : string;
-  port : int;  (** The model proxy's loopback port. *)
+  port : int;
+      (** The model proxy's loopback port for this run: its own on macOS (see
+          {!own_port}), the shared one's number on Linux. *)
   listen_unix : string -> (unit, string) result;
       (** On Linux, serves the model proxy for this run only on a Unix socket at
           the path given, until the run's switch ends. *)
@@ -83,6 +85,14 @@ type run = {
           path. On Linux it is bound read-only into the sandbox, so it is there
           even under [/tmp], [/dev/shm] or [/run]. *)
 }
+
+val own_port : t -> bool
+(** Whether each run needs a loopback port of the model proxy that serves it
+    alone ({!Model_proxy.listen_tcp}), given as {!type-run}'s [port]: on macOS,
+    where the profile allows the agent that port and no other, so a token read
+    from another run's launch environment cannot be used. On Linux the agent's
+    network namespace reaches only its own forwarder, so the shared port's
+    number serves. *)
 
 type session = {
   argv : string list;  (** The agent's command, wrapped in the sandbox. *)

@@ -882,6 +882,19 @@ let listen_unix t ~sw ~net ~token path =
       serve ~only:token ~sw t sock;
       Ok ()
 
+let listen_tcp t ~sw ~net ~token =
+  match
+    Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true net
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  with
+  | exception (Eio.Io _ as ex) -> Error (Printexc.to_string ex)
+  | sock -> (
+      match Eio.Net.listening_addr sock with
+      | `Unix _ -> Error "the listener is not TCP"
+      | `Tcp (_, port) ->
+          serve ~only:token ~sw t sock;
+          Ok port)
+
 let unattributed t = t.unattributed
 
 let register t run =
@@ -945,12 +958,17 @@ let unregister t ~token =
             errors = List.rev st.errors;
           })
 
-let base_url t ~token p =
-  Printf.sprintf "http://127.0.0.1:%d/r/%s/%s%s" t.port token (segment p)
-    (sdk_base p)
+let base_url ?port t ~token p =
+  Printf.sprintf "http://127.0.0.1:%d/r/%s/%s%s"
+    (Option.value port ~default:t.port)
+    token (segment p) (sdk_base p)
 
-let mcp_url t ~token =
-  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp" t.port token
+let mcp_url ?port t ~token =
+  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp"
+    (Option.value port ~default:t.port)
+    token
 
-let mcp_http_url t ~token name =
-  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp-http/%s" t.port token name
+let mcp_http_url ?port t ~token name =
+  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp-http/%s"
+    (Option.value port ~default:t.port)
+    token name
