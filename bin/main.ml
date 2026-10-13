@@ -1,202 +1,61 @@
 open Cmdliner
+open Bactrian_app
 open Bactrian_runtime
 module P = Model_proxy
 
-(* Whether this build can call a provider over HTTPS. The TLS connector is a
-   separate library (bactrian.tls) that is not part of this build yet. *)
-let tls_available = false
-let ( let* ) = Result.bind
-
-(* Configuration *)
-
-let cap_variable name = "BACTRIAN_CAP_" ^ String.uppercase_ascii name
-
-let read_caps () =
-  List.fold_left
-    (fun acc (_, name) ->
-      Result.bind acc (fun caps ->
-          match Sys.getenv_opt (cap_variable name) with
-          | None | Some "" -> Ok ((name, 0.) :: caps)
-          | Some raw -> (
-              match float_of_string_opt raw with
-              | Some usd when Float.is_finite usd && usd >= 0. ->
-                  Ok ((name, usd) :: caps)
-              | Some _ | None ->
-                  Error
-                    (Printf.sprintf "%s=%S is not a non-negative amount in USD"
-                       (cap_variable name) raw))))
-    (Ok []) Run.providers
-  |> Result.map List.rev
-
-(* A live call needs a spend cap above zero, the key behind it and TLS. *)
-let live_problem caps =
-  let funded =
-    List.filter
-      (fun (_, name) ->
-        match List.assoc_opt name caps with
-        | Some usd -> usd > 0.
-        | None -> false)
-      Run.providers
-  in
-  match funded with
-  | [] ->
-      Some
-        (Printf.sprintf
-           "no provider has a spend cap above 0: set %s (USD) for the \
-            providers this run calls"
-           (String.concat ", "
-              (List.map (fun (_, n) -> cap_variable n) Run.providers)))
-  | _ -> (
-      match
-        List.find_opt
-          (fun (p, _) ->
-            match Sys.getenv_opt (Run.key_variable p) with
-            | None | Some "" -> true
-            | Some _ -> false)
-          funded
-      with
-      | Some (p, name) ->
-          Some
-            (Printf.sprintf "%s has a spend cap but %s is not set" name
-               (Run.key_variable p))
-      | None ->
-          if tls_available then None
-          else
-            Some
-              "this build has no TLS support (bactrian.tls), so it cannot call \
-               providers over HTTPS")
-
-(* Running *)
-
 (* The executable the sandbox re-runs as its probe and its Linux forwarder. *)
 let bactrian_exe = Sys.executable_name
-let sandbox_warning w = prerr_endline ("bactrian: warning: " ^ w)
 
 (* A command that starts agents first drops secrets from its launch
    environment (design §5.3). *)
 let scrubbed ~json f =
   match Launch_env.scrub ~exe:bactrian_exe with
-  | Error m -> Cli.fail ~json Output.exit_internal m
+  | Error m -> Cli.fail_with ~json (Internal m)
   | Ok () -> f ()
 
-(* [config] gets the store, because a replay reads the recording's MCP servers
-   from it, and what the sandbox preflight decided. *)
-let run_command ~json ~live ~sandbox
-    (config : Store.t -> Sandbox.t -> (Run.config, string) result) =
+(* A single run, recorded or replayed, printed as text or JSON. *)
+let single_run ~json run =
   scrubbed ~json @@ fun () ->
-  match read_caps () with
-  | Error m -> Cli.fail ~json Output.exit_usage m
-  | Ok caps -> (
-      match if live then live_problem caps else None with
-      | Some m -> Cli.fail ~json Output.exit_environment m
-      | None -> (
-          Mirage_crypto_rng_unix.use_default ();
-          Eio_main.run @@ fun env ->
-          Eio.Switch.run @@ fun sw ->
-          let root = Eio.Path.(Eio.Stdenv.cwd env / ".bactrian") in
-          match Ledger.create ~path:Eio.Path.(root / "ledger.jsonl") ~caps with
-          | exception Ledger.Corrupt { line; reason } ->
-              Cli.fail ~json Output.exit_environment
-                (Printf.sprintf
-                   "the spend ledger .bactrian/ledger.jsonl is corrupt (line \
-                    %d: %s)"
-                   line reason)
-          | ledger -> (
-              match
-                let* sandbox =
-                  Sandbox.preflight ~env ~warn:sandbox_warning
-                    {
-                      mode = sandbox;
-                      allow_write = [];
-                      deny_read = [];
-                      bactrian_exe;
-                      bactrian_dir = Eio.Path.native_exn root;
-                    }
-                in
-                let* proxy =
-                  P.start ~sw ~net:(Eio.Stdenv.net env)
-                    ~clock:(Eio.Stdenv.clock env)
-                    ~process_mgr:(Eio.Stdenv.process_mgr env)
-                in
-                Ok (sandbox, proxy)
-              with
-              | Error m -> Cli.fail ~json Output.exit_environment m
-              | Ok (sandbox, proxy) -> (
-                  let store = Store.create ~root in
-                  match
-                    Interrupt.run (fun () ->
-                        Result.bind (config store sandbox) (fun config ->
-                            Option.iter sandbox_warning
-                              (Sandbox.mcp_warning sandbox config.mcp);
-                            Run.execute ~env ~proxy ~store ~ledger config))
-                  with
-                  | Error signal ->
-                      prerr_endline
-                        (Printf.sprintf "bactrian: interrupted by signal %d"
-                           signal);
-                      Interrupt.exit_status
-                  | Ok (Error m) -> Cli.fail ~json Output.exit_usage m
-                  | Ok (Ok result) ->
-                      print_string
-                        (if json then Output.render_json result ^ "\n"
-                         else Output.render_text result);
-                      Output.exit_code result.outcome))))
-
-(* Experiments *)
+  Eio_main.run @@ fun env ->
+  match run ~on_progress:Cli.print_progress ~bactrian_exe ~env with
+  | Error e -> Cli.fail_with ~json e
+  | Ok result ->
+      print_string
+        (if json then Yojson.Safe.to_string (Single_run.to_json result) ^ "\n"
+         else Output.render_text result);
+      Single_run.exit_code result
 
 let experiment_command ~json ~experiment ~resume ~sandbox =
   scrubbed ~json @@ fun () ->
-  Mirage_crypto_rng_unix.use_default ();
   Eio_main.run @@ fun env ->
-  let announced = ref None in
-  let label = ref None in
   match
-    Interrupt.run (fun () ->
-        Executor.run_experiment ?sandbox
-          ~on_sandbox:(fun l -> label := Some l)
-          ~bactrian_exe ~env ~experiment_file:experiment ~resume
-          ~announce:(fun id ->
-            announced := Some id;
-            prerr_endline ("bactrian: experiment " ^ id))
-          ~warn:(fun w -> prerr_endline ("bactrian: warning: " ^ w))
-          ())
+    Run_command.run ~on_progress:Cli.print_progress ~bactrian_exe ~env
+      { experiment; resume; sandbox }
   with
-  | Error signal ->
-      prerr_endline
-        (Printf.sprintf "bactrian: interrupted by signal %d%s" signal
-           (match !announced with
-           | Some id ->
-               Printf.sprintf ", resume with: bactrian run %s --resume %s"
-                 experiment id
-           | None -> ""));
-      Interrupt.exit_status
-  | Ok (Error (Configuration errors)) -> Cli.fail_located ~json errors
-  | Ok (Error (Usage m)) -> Cli.fail ~json Output.exit_usage m
-  | Ok (Error (Environment m)) -> Cli.fail ~json Output.exit_environment m
-  | Ok (Ok summary) ->
+  | Error e ->
+      Cli.fail_with ~json
+        ~resume:(fun id ->
+          Printf.sprintf ", resume with: bactrian run %s --resume %s" experiment
+            id)
+        e
+  | Ok result ->
       print_string
-        (if json then Output.render_summary_json ?sandbox:!label summary ^ "\n"
+        (if json then Yojson.Safe.to_string (Run_command.to_json result) ^ "\n"
          else
-           Output.render_summary_text ?sandbox:!label
-             ~colour:(Lazy.force Output.colour) summary);
-      Output.summary_exit_code summary
+           Output.render_summary_text ~colour:(Lazy.force Output.colour) result);
+      Run_command.exit_code result
 
 let check_command scenarios =
   Eio_main.run @@ fun env ->
-  let results =
-    List.map (fun scenario_file -> Golden.check ~env ~scenario_file) scenarios
-  in
-  match List.concat_map (function Ok _ -> [] | Error e -> e) results with
-  | _ :: _ as errors -> Cli.fail_located ~json:false errors
-  | [] ->
-      let reports = List.filter_map Result.to_option results in
+  match Check_command.run ~env { scenarios } with
+  | Error e -> Cli.fail_with ~json:false e
+  | Ok reports ->
       List.iter
         (fun r ->
           print_string
             (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
         reports;
-      if List.for_all Golden.passed reports then Output.exit_ok
-      else Output.exit_failed
+      Check_command.exit_code reports
 
 (* Arguments *)
 
@@ -302,36 +161,20 @@ let agent_argv ~pos_after =
   | `After n ->
       Arg.(non_empty & pos_right (n - 1) string [] & info [] ~docv ~doc)
 
-let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
-    ~replay ~env_passthrough ~turn_timeout ~total_timeout ~mcp ~sandbox :
-    Run.config =
+let common ~agent ~cwd ~scenario ~variant ~sim_now ~timezone ~env_passthrough
+    ~turn_timeout ~total_timeout ~sandbox : Single_run.common =
   {
-    agent = Command agent;
+    agent;
     cwd;
-    turns;
     scenario;
     variant;
     sim_now;
     timezone;
-    replay;
     env_passthrough;
-    variant_env = [];
-    fixtures = None;
-    normalise = [];
-    redact = [];
-    pricing = Bactrian_core.Pricing.default;
-    checks = None;
-    unenforced = [];
     turn_timeout;
     total_timeout;
-    mcp;
     sandbox;
-    faketime = true;
   }
-
-let positive name v =
-  if Float.is_finite v && v > 0. then Ok ()
-  else Error (Printf.sprintf "%s must be a positive number of seconds" name)
 
 let record_cmd =
   let turns =
@@ -342,24 +185,20 @@ let record_cmd =
   in
   let run json agent cwd turns scenario variant sim_now timezone env_passthrough
       turn_timeout total_timeout mcp_stdio mcp_http mcp_policy sandbox =
-    match
-      let* () =
-        match turns with
-        | [] -> Error "record needs at least one --turn"
-        | _ :: _ ->
-            let* () = positive "--turn-timeout" turn_timeout in
-            positive "--total-timeout" total_timeout
-      in
-      Mcp_flags.parse ~stdio:mcp_stdio ~http:mcp_http ~policy:mcp_policy
-    with
+    let request : Record_command.request =
+      {
+        common =
+          common ~agent ~cwd ~scenario ~variant ~sim_now ~timezone
+            ~env_passthrough ~turn_timeout ~total_timeout ~sandbox;
+        turns;
+        mcp_stdio;
+        mcp_http;
+        mcp_policy;
+      }
+    in
+    match Record_command.validate request with
     | Error m -> `Error (false, m)
-    | Ok mcp ->
-        `Ok
-          (run_command ~json ~live:true ~sandbox (fun _ sandbox ->
-               Ok
-                 (build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now
-                    ~timezone ~replay:None ~env_passthrough ~turn_timeout
-                    ~total_timeout ~mcp ~sandbox)))
+    | Ok () -> `Ok (single_run ~json (Record_command.run request))
   in
   let info =
     Cmd.info "record" ~exits:Cli.exits
@@ -393,8 +232,6 @@ let record_cmd =
         $ env_passthrough $ turn_timeout $ total_timeout $ mcp_stdio $ mcp_http
         $ mcp_policy $ sandbox_mode))
 
-type matcher_choice = Strict | Until_divergence | Fuzzy
-
 let replay_cmd =
   let from =
     Arg.(
@@ -408,11 +245,11 @@ let replay_cmd =
       & opt
           (enum
              [
-               ("strict", Strict);
+               ("strict", Replay_command.Strict);
                ("until-divergence", Until_divergence);
                ("fuzzy", Fuzzy);
              ])
-          Strict
+          Replay_command.Strict
       & info [ "mode" ] ~docv:"MODE"
           ~doc:
             "$(b,strict) refuses any request the recording lacks, \
@@ -442,39 +279,21 @@ let replay_cmd =
   let run json from agent mode threshold allow_reorder timing cwd scenario
       variant sim_now timezone env_passthrough turn_timeout total_timeout
       sandbox =
-    let matcher : (Bactrian_core.Matcher.mode, string) result =
-      match (mode, threshold) with
-      | Strict, None -> Ok Strict
-      | Until_divergence, None -> Ok Until_divergence
-      | Fuzzy, None -> Ok (Fuzzy 0.9)
-      | Fuzzy, Some t when Float.is_finite t && t >= 0. && t <= 1. ->
-          Ok (Fuzzy t)
-      | Fuzzy, Some _ -> Error "--threshold must be between 0 and 1"
-      | (Strict | Until_divergence), Some _ ->
-          Error "--threshold only applies to --mode fuzzy"
+    let request : Replay_command.request =
+      {
+        common =
+          common ~agent ~cwd ~scenario ~variant ~sim_now ~timezone
+            ~env_passthrough ~turn_timeout ~total_timeout ~sandbox;
+        from;
+        mode;
+        threshold;
+        allow_reorder;
+        timing;
+      }
     in
-    match
-      Result.bind matcher (fun matcher ->
-          Result.bind (positive "--turn-timeout" turn_timeout) (fun () ->
-              Result.map
-                (fun () -> matcher)
-                (positive "--total-timeout" total_timeout)))
-    with
+    match Replay_command.validate request with
     | Error m -> `Error (false, m)
-    | Ok matcher ->
-        let live =
-          match matcher with
-          | Until_divergence -> true
-          | Strict | Fuzzy _ -> false
-        in
-        `Ok
-          (run_command ~json ~live ~sandbox (fun store sandbox ->
-               let* mcp = Run.recorded_mcp store ~from in
-               Ok
-                 (build_config ~agent ~cwd ~turns:[] ~scenario ~variant ~sim_now
-                    ~timezone
-                    ~replay:(Some { Run.from; matcher; allow_reorder; timing })
-                    ~env_passthrough ~turn_timeout ~total_timeout ~mcp ~sandbox)))
+    | Ok () -> `Ok (single_run ~json (Replay_command.run request))
   in
   let info =
     Cmd.info "replay" ~exits:Cli.exits
@@ -574,13 +393,13 @@ let mcp_shim_cmd =
         prerr_endline
           ("bactrian mcp-shim: " ^ Mcp_proxy.url_variable
          ^ " is not set: run the agent under bactrian");
-        Output.exit_usage
+        Exit_code.usage
     | Some url ->
         Eio_main.run (fun env ->
             Mcp_shim.run ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
               ~stdin:(Eio.Stdenv.stdin env) ~stdout:(Eio.Stdenv.stdout env) ~url
               ~name);
-        Output.exit_ok
+        Exit_code.ok
   in
   let info =
     Cmd.info "mcp-shim" ~exits:Cli.exits
@@ -619,7 +438,7 @@ let sandbox_init_cmd =
     | Error e ->
         prerr_endline
           ("bactrian __sandbox-init: " ^ Sandbox_init.describe_parse_error e);
-        Output.exit_usage
+        Exit_code.usage
     | Ok config -> (
         if not (Sandbox_init.set_undumpable ()) then
           prerr_endline
@@ -662,7 +481,7 @@ let sandbox_init_cmd =
         | Error e ->
             prerr_endline
               ("bactrian __sandbox-init: " ^ Sandbox_init.describe_error e);
-            Output.exit_environment)
+            Exit_code.environment)
   in
   let info =
     Cmd.info "__sandbox-init" ~docs:Manpage.s_none ~exits:Cli.exits
@@ -680,7 +499,7 @@ let sandbox_probe_cmd =
   let run port outside inside denied =
     print_endline
       (Sandbox_probe.to_line (Sandbox_probe.run ~port ~outside ~inside ~denied));
-    Output.exit_ok
+    Exit_code.ok
   in
   let info =
     Cmd.info "__sandbox-probe" ~docs:Manpage.s_none ~exits:Cli.exits
@@ -706,7 +525,7 @@ let cmd =
       Compare_cmd.cmd;
       Plan_cmd.cmd;
       Report_cmd.cmd;
-      Doctor_cmd.cmd ~tls_available ~bactrian_exe;
+      Doctor_cmd.cmd ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;
       sandbox_probe_cmd;
@@ -719,14 +538,14 @@ let () =
   | Ok () -> Launch_env.close_inherited_on_exec ()
   | Error m ->
       prerr_endline ("bactrian: " ^ m);
-      exit Output.exit_internal
+      exit Exit_code.internal
 
 let () =
   let code =
     match Cmd.eval_value cmd with
     | Ok (`Ok n) -> n
-    | Ok (`Version | `Help) -> Output.exit_ok
-    | Error (`Parse | `Term) -> Output.exit_usage
-    | Error `Exn -> Output.exit_internal
+    | Ok (`Version | `Help) -> Exit_code.ok
+    | Error (`Parse | `Term) -> Exit_code.usage
+    | Error `Exn -> Exit_code.internal
   in
   exit code

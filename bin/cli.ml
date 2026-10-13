@@ -1,55 +1,42 @@
 open Cmdliner
+open Bactrian_app
 open Bactrian_runtime
 
 let exits =
-  Output.
+  Exit_code.
     [
-      Cmd.Exit.info exit_ok ~doc:"on success: the run passed.";
-      Cmd.Exit.info exit_failed
+      Cmd.Exit.info ok ~doc:"on success: the run passed.";
+      Cmd.Exit.info failed
         ~doc:"when the run failed (the agent) or diverged (a replay).";
-      Cmd.Exit.info exit_not_run
+      Cmd.Exit.info not_run
         ~doc:"when the run did not happen because a spend cap was reached.";
-      Cmd.Exit.info exit_usage ~doc:"on a usage or configuration error.";
-      Cmd.Exit.info exit_environment
+      Cmd.Exit.info usage ~doc:"on a usage or configuration error.";
+      Cmd.Exit.info environment
         ~doc:
           "when the environment is not ready, for example a spend cap of 0, a \
            missing API key or no TLS support for a live call.";
-      Cmd.Exit.info exit_internal ~doc:"on an internal error.";
+      Cmd.Exit.info internal ~doc:"on an internal error.";
       Cmd.Exit.info Interrupt.exit_status
         ~doc:"when interrupted by SIGINT or SIGTERM.";
     ]
 
-(* Under [--json] a failure before the run is one JSON object on stdout. *)
-let fail ~json code message =
-  if json then
-    print_endline
-      (Yojson.Safe.to_string
-         (`Assoc [ ("error", `String message); ("exit", `Int code) ]))
-  else prerr_endline ("bactrian: " ^ message);
-  code
+let fail_with ~json ?(resume = fun _ -> "") (e : Command_error.t) =
+  (match e with
+  | Interrupted { signal; experiment_id } ->
+      prerr_endline
+        (Printf.sprintf "bactrian: interrupted by signal %d%s" signal
+           (match experiment_id with Some id -> resume id | None -> ""))
+  | Configuration errors when not json ->
+      List.iter (fun e -> prerr_endline (Config_loader.located_line e)) errors
+  | Usage _ | Environment _ | Internal _ | Configuration _ ->
+      if json then
+        print_endline (Yojson.Safe.to_string (Command_error.to_json e))
+      else prerr_endline ("bactrian: " ^ Command_error.message e));
+  Command_error.exit_code e
 
-let located_json (e : Config_loader.located_error) =
-  `Assoc
-    [
-      ("file", `String e.file);
-      ("line", `Int e.line);
-      ("column", `Int e.column);
-      ("path", `String e.path);
-      ("message", `String e.message);
-    ]
-
-(* Configuration errors, all of them, with their locations. *)
-let fail_located ~json errors =
-  if json then
-    print_endline
-      (Yojson.Safe.to_string
-         (`Assoc
-            [
-              ("errors", `List (List.map located_json errors));
-              ("exit", `Int Output.exit_usage);
-            ]))
-  else List.iter (fun e -> prerr_endline (Config_loader.located_line e)) errors;
-  Output.exit_usage
+let print_progress : Progress.t -> unit = function
+  | Warning w -> prerr_endline ("bactrian: warning: " ^ w)
+  | Experiment_started id -> prerr_endline ("bactrian: experiment " ^ id)
 
 let json =
   Arg.(

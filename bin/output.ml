@@ -1,52 +1,5 @@
+open Bactrian_app
 open Bactrian_runtime
-
-let exit_ok = 0
-let exit_failed = 1
-let exit_not_run = 2
-let exit_usage = 64
-let exit_environment = 69
-let exit_internal = 70
-
-let exit_code : Run.outcome -> int = function
-  | Passed -> exit_ok
-  | Failed _ | Diverged -> exit_failed
-  | Not_run _ -> exit_not_run
-  | Errored _ -> exit_internal
-
-let render_json (r : Run.result) =
-  let f = r.findings in
-  Yojson.Safe.to_string
-    (`Assoc
-       [
-         ("run_id", `String r.run_id);
-         ("run_dir", `String r.run_dir);
-         ( "outcome",
-           `Assoc
-             (("kind", `String (Run.outcome_kind r.outcome))
-             ::
-             (match Run.outcome_reason r.outcome with
-             | Some reason -> [ ("reason", `String reason) ]
-             | None -> [])) );
-         ( "divergences",
-           `List
-             (List.map
-                (fun d -> Divergences.to_json (Divergences.of_matcher d))
-                f.divergences) );
-         ( "findings",
-           `Assoc
-             [
-               ("exchanges", `Int f.exchanges);
-               ("transport_errors", `Int f.transport_errors);
-               ("usage_gaps", `Int f.usage_gaps);
-               ("refused_keys", `Int f.refused_keys);
-               ("cap_refusals", `Int (List.length f.cap_refusals));
-               ("errors", `List (List.map (fun e -> `String e) f.errors));
-             ] );
-         ("spend_usd", `Float r.spend);
-         ("sandbox", Sandbox.label_json r.sandbox);
-         ("clock", Bactrian_core.Clock_label.to_json r.clock);
-         ("sandbox_violations", Sandbox.violations_json r.violations);
-       ])
 
 let unsandboxed_line (l : Sandbox.label) =
   Printf.sprintf "warning: UNSANDBOXED (sandbox: %s%s)"
@@ -94,40 +47,18 @@ let render_text (r : Run.result) =
 
 (* Experiments *)
 
-let status_exit : Executor.status -> int = function
-  | Pending | Interrupted | Done (Not_run _) -> exit_not_run
-  | Done Passed -> exit_ok
-  | Done (Failed _ | Diverged) -> exit_failed
-  | Done (Errored _) -> exit_internal
-
-let summary_exit_code (s : Executor.summary) =
-  let codes = List.map (fun (_, st, _) -> status_exit st) s.runs in
-  List.find_opt
-    (fun c -> List.exists (Int.equal c) codes)
-    [ exit_internal; exit_failed; exit_not_run ]
-  |> Option.value ~default:exit_ok
-
 let colour =
   lazy (Unix.isatty Unix.stdout && Option.is_none (Sys.getenv_opt "NO_COLOR"))
 
 let paint ~colour code text =
   if colour then Printf.sprintf "\027[%sm%s\027[0m" code text else text
 
-let status_kind : Executor.status -> string = function
-  | Pending -> "pending"
-  | Interrupted -> "interrupted"
-  | Done o -> Run.outcome_kind o
-
-let status_reason : Executor.status -> string option = function
-  | Pending | Interrupted -> None
-  | Done o -> Run.outcome_reason o
-
 let kind_colour = function
   | "passed" -> "32"
   | "failed" | "diverged" | "errored" -> "31"
   | _ -> "33"
 
-let render_summary_text ?sandbox ~colour (s : Executor.summary) =
+let render_summary_text ~colour ({ summary = s; sandbox } : Run_command.t) =
   let b = Buffer.create 256 in
   let line fmt = Printf.bprintf b (fmt ^^ "\n") in
   line "experiment %s" s.experiment_id;
@@ -138,17 +69,17 @@ let render_summary_text ?sandbox ~colour (s : Executor.summary) =
     sandbox;
   List.iter
     (fun ((p : Executor.planned), status, run_id) ->
-      let kind = status_kind status in
+      let kind = Run_command.status_kind status in
       line "%3d  %s  %s  #%d  %s%s%s" p.index p.scenario p.variant p.repeat
         (paint ~colour (kind_colour kind) kind)
-        (match status_reason status with
+        (match Run_command.status_reason status with
         | Some r -> " (" ^ Bactrian_core.Printable.escape r ^ ")"
         | None -> "")
         (match run_id with Some id -> "  " ^ id | None -> ""))
     s.runs;
   let kinds =
     List.sort_uniq String.compare
-      (List.map (fun (_, st, _) -> status_kind st) s.runs)
+      (List.map (fun (_, st, _) -> Run_command.status_kind st) s.runs)
   in
   line "%s"
     (String.concat ", "
@@ -157,40 +88,12 @@ let render_summary_text ?sandbox ~colour (s : Executor.summary) =
             Printf.sprintf "%d %s"
               (List.length
                  (List.filter
-                    (fun (_, st, _) -> String.equal (status_kind st) k)
+                    (fun (_, st, _) ->
+                      String.equal (Run_command.status_kind st) k)
                     s.runs))
               k)
           kinds));
   Buffer.contents b
-
-let render_summary_json ?sandbox (s : Executor.summary) =
-  Yojson.Safe.to_string
-    (`Assoc
-       [
-         ("experiment_id", `String s.experiment_id);
-         ( "sandbox",
-           match sandbox with Some l -> Sandbox.label_json l | None -> `Null );
-         ( "runs",
-           `List
-             (List.map
-                (fun ((p : Executor.planned), status, run_id) ->
-                  `Assoc
-                    ([
-                       ("index", `Int p.index);
-                       ("scenario", `String p.scenario);
-                       ("variant", `String p.variant);
-                       ("repeat", `Int p.repeat);
-                       ("status", `String (status_kind status));
-                     ]
-                    @ (match status_reason status with
-                      | Some r -> [ ("reason", `String r) ]
-                      | None -> [])
-                    @
-                    match run_id with
-                    | Some id -> [ ("run_id", `String id) ]
-                    | None -> []))
-                s.runs) );
-       ])
 
 let render_golden_text ~colour (r : Golden.report) =
   let head =

@@ -3,10 +3,10 @@
  (public_name bactrian)
  (package bactrian)
  (libraries
+  bactrian.app
   bactrian.core
   bactrian.runtime
   cmdliner
   eio_main
-  mirage-crypto-rng.unix
   unix
   yojson))

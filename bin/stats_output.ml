@@ -140,19 +140,16 @@ let render_compare_text ~colour (d : D.t) =
   line "gate status: %d (%s)" d.exit (F.exit_meaning d.exit);
   Buffer.contents b
 
-let render_compare_json d = Yojson.Safe.to_string (D.summary_json d) ^ "\n"
-
 (* Plan *)
 
-let population_name = function `Suite -> "suite" | `Scenarios -> "scenarios"
-let target_name a = D.verdict_name (Plan_sim.target a)
-
-let render_plan_text (a : Plan_sim.assumption) answer =
+let render_plan_text ({ assumption = a; answer } : Bactrian_app.Plan_command.t)
+    =
   let scenarios = List.length a.baseline_rates in
   Printf.sprintf
     "target verdict %s: assumed drop %.3f against threshold %.3f, gate of %d \
      metric%s\n"
-    (target_name a) a.true_effect a.threshold a.gate_metrics
+    (Bactrian_app.Plan_command.target_name a)
+    a.true_effect a.threshold a.gate_metrics
     (if a.gate_metrics = 1 then "" else "s")
   ^
   match answer with
@@ -166,50 +163,3 @@ let render_plan_text (a : Plan_sim.assumption) answer =
         "unreachable: no repeat count up to %d reaches power %.2f (best \
          simulated power %.3f)\n"
         a.max_repeats a.power best_power
-
-let render_plan_json (a : Plan_sim.assumption) answer =
-  let float = Json_float.to_json in
-  Yojson.Safe.to_string
-    (`Assoc
-       [
-         ("schema_version", `Int D.schema_version);
-         ( "assumptions",
-           `Assoc
-             [
-               ( "baseline_rates",
-                 `List
-                   (List.map
-                      (fun (s, r) ->
-                        `Assoc [ ("scenario", `String s); ("rate", float r) ])
-                      a.baseline_rates) );
-               ("effect", float a.true_effect);
-               ("threshold", float a.threshold);
-               ( "between_sd",
-                 match a.between_sd with Some s -> float s | None -> `Null );
-               ("population", `String (population_name a.population));
-               ("confidence", float a.confidence);
-               ("gate_metrics", `Int a.gate_metrics);
-               ("power", float a.power);
-               ("max_repeats", `Int a.max_repeats);
-               ("seed", `Int a.seed);
-               ("simulations", `Int a.simulations);
-             ] );
-         ("target", `String (target_name a));
-         ( "answer",
-           match answer with
-           | Plan_sim.Repeats { n; achieved_power; mc_se } ->
-               `Assoc
-                 [
-                   ("result", `String "repeats");
-                   ("repeats", `Int n);
-                   ("achieved_power", float achieved_power);
-                   ("mc_se", float mc_se);
-                 ]
-           | Unreachable { best_power } ->
-               `Assoc
-                 [
-                   ("result", `String "unreachable");
-                   ("best_power", float best_power);
-                 ] );
-       ])
-  ^ "\n"

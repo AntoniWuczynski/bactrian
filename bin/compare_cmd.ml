@@ -1,9 +1,10 @@
 open Cmdliner
+open Bactrian_app
 
 let exits =
-  Output.
+  Exit_code.
     [
-      Cmd.Exit.info exit_ok
+      Cmd.Exit.info ok
         ~doc:
           "on success, or when $(b,--gate) is not given and the comparison ran.";
       Cmd.Exit.info 1
@@ -20,9 +21,9 @@ let exits =
            in an arm errored, the share of errored and unrun runs differs \
            between the arms by more than 5 percentage points, or a scenario \
            has no finished run in one arm.";
-      Cmd.Exit.info exit_usage
+      Cmd.Exit.info usage
         ~doc:"on a usage or configuration error, or an unknown experiment.";
-      Cmd.Exit.info exit_internal
+      Cmd.Exit.info internal
         ~doc:"on an internal error, such as unreadable results.";
     ]
 
@@ -30,17 +31,18 @@ let compare_command ~json ~gate ~fail_on_inconclusive ~baseline ~candidate
     experiment_id =
   Eio_main.run @@ fun env ->
   match
-    Analysis.analyse ~json ~baseline ~candidate ~fail_on_inconclusive
-      ~experiment_id env
+    Compare_command.run ~env
+      { experiment_id; baseline; candidate; fail_on_inconclusive }
   with
-  | Error code -> code
+  | Error e -> Cli.fail_with ~json e
   | Ok data ->
       print_string
-        (if json then Stats_output.render_compare_json data
+        (if json then
+           Yojson.Safe.to_string (Compare_command.to_json data) ^ "\n"
          else
            Stats_output.render_compare_text ~colour:(Lazy.force Output.colour)
              data);
-      if gate then data.exit else Output.exit_ok
+      if gate then data.exit else Exit_code.ok
 
 let cmd =
   let gate =

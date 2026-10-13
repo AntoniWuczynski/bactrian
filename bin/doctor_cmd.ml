@@ -1,39 +1,18 @@
 open Cmdliner
-open Bactrian_runtime
+open Bactrian_app
 
-let doctor_command ~json ~experiment ~tls_available ~bactrian_exe =
-  Mirage_crypto_rng_unix.use_default ();
+let doctor_command ~json ~experiment ~bactrian_exe =
   Eio_main.run @@ fun env ->
-  let target =
-    match experiment with
-    | None -> Ok None
-    | Some file ->
-        let dir =
-          match Filename.dirname file with
-          | "." -> Sys.getcwd ()
-          | dir when Filename.is_relative dir ->
-              Filename.concat (Sys.getcwd ()) dir
-          | dir -> dir
-        in
-        Result.map
-          (fun e -> Some (Doctor.target ~dir e))
-          (Config_loader.load_experiment Eio.Path.(Eio.Stdenv.fs env / file))
-  in
-  match target with
-  | Error errors -> Cli.fail_located ~json errors
-  | Ok target ->
-      let report =
-        Doctor.report
-          (Doctor.run ~env ~bactrian_exe ~tls_available
-             ~keys:(Run.keys_from_environment ())
-             ~path:(Sys.getenv_opt "PATH") target)
-      in
+  match Doctor_command.run ~bactrian_exe ~env { experiment } with
+  | Error e -> Cli.fail_with ~json e
+  | Ok report ->
       print_string
-        (if json then Yojson.Safe.to_string (Doctor.to_json report) ^ "\n"
-         else Doctor.render_text report);
-      if report.ok then Output.exit_ok else Output.exit_environment
+        (if json then
+           Yojson.Safe.to_string (Doctor_command.to_json report) ^ "\n"
+         else Bactrian_runtime.Doctor.render_text report);
+      Doctor_command.exit_code report
 
-let cmd ~tls_available ~bactrian_exe =
+let cmd ~bactrian_exe =
   let experiment =
     Arg.(
       value
@@ -44,9 +23,7 @@ let cmd ~tls_available ~bactrian_exe =
              agent, its sandbox mode and its clock setting. Without it, check \
              the host and every provider key.")
   in
-  let run json experiment =
-    doctor_command ~json ~experiment ~tls_available ~bactrian_exe
-  in
+  let run json experiment = doctor_command ~json ~experiment ~bactrian_exe in
   let info =
     Cmd.info "doctor" ~exits:Cli.exits
       ~doc:"Check that this host is ready to record and run"

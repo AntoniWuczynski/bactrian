@@ -1,26 +1,15 @@
 open Cmdliner
-open Bactrian_core
-open Bactrian_runtime
+open Bactrian_app
 
 let report_command ~baseline ~candidate ~output experiment_id =
   Eio_main.run @@ fun env ->
   match
-    Analysis.analyse ~json:false ~baseline ~candidate
-      ~fail_on_inconclusive:false ~experiment_id env
+    Report_command.run ~env { experiment_id; baseline; candidate; output }
   with
-  | Error code -> code
-  | Ok data -> (
-      match
-        Store.write_atomic
-          Eio.Path.(Eio.Stdenv.fs env / output)
-          (Report_html.render data)
-      with
-      | () ->
-          print_endline ("wrote " ^ output);
-          Output.exit_ok
-      | exception Eio.Io _ ->
-          Cli.fail ~json:false Output.exit_environment
-            (Printf.sprintf "cannot write %s" output))
+  | Error e -> Cli.fail_with ~json:false e
+  | Ok { output } ->
+      print_endline ("wrote " ^ output);
+      Exit_code.ok
 
 let cmd =
   let output =
