@@ -170,7 +170,7 @@ ones.
          0   on success, or when
          1   with --gate, when a
          2   with --gate and --f
-         3   with --gate, when m
+         3   with --gate and no 
          64  on a usage or confi
          70  on an internal erro
   $ bactrian plan --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -cE '^ +[0-9]+ +(on|when)'

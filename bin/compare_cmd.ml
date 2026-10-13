@@ -7,16 +7,19 @@ let exits =
         ~doc:
           "on success, or when $(b,--gate) is not given and the comparison ran.";
       Cmd.Exit.info 1
-        ~doc:"with $(b,--gate), when a gate metric is a regression.";
+        ~doc:
+          "with $(b,--gate), when a gate metric is a regression. The statuses \
+           are checked in the order 1, 3, 2.";
       Cmd.Exit.info 2
         ~doc:
           "with $(b,--gate) and $(b,--fail-on-inconclusive), when a gate \
-           metric is inconclusive.";
+           metric is inconclusive and neither 1 nor 3 applies.";
       Cmd.Exit.info 3
         ~doc:
-          "with $(b,--gate), when more than 5% of the runs in an arm errored, \
-           or the share of errored and unrun runs differs between the arms by \
-           more than 5 percentage points.";
+          "with $(b,--gate) and no regression, when more than 5% of the runs \
+           in an arm errored, the share of errored and unrun runs differs \
+           between the arms by more than 5 percentage points, or a scenario \
+           has no finished run in one arm.";
       Cmd.Exit.info exit_usage
         ~doc:"on a usage or configuration error, or an unknown experiment.";
       Cmd.Exit.info exit_internal
