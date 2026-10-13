@@ -99,10 +99,10 @@ depends: [
   "stringext" {= "1.6.0"}
   "thread-table" {= "1.0.0"}
   "topkg" {= "1.1.1"}
-  "tyxml" {= "5.0.0" & with-doc}
+  "tyxml" {= "5.0.0"}
   "uri" {= "4.4.0"}
   "uri-sexp" {= "4.4.0"}
-  "uutf" {= "1.0.4" & with-test}
+  "uutf" {= "1.0.4"}
   "yaml" {= "3.2.0"}
   "yojson" {= "3.0.0"}
 ]
