@@ -19,6 +19,9 @@ type entry = {
   long_context : (int * rates) option;
       (** Prompt-token threshold and the rates above it. *)
   max_output : int;
+  max_input : int;
+      (** Context window in prompt tokens. Some values are assumptions, marked
+          in the table. *)
 }
 
 val table : entry list
@@ -36,9 +39,14 @@ val worst_case :
   model:string ->
   date:string ->
   input_bytes:int ->
+  external_input:bool ->
+  candidates:int ->
   max_output:int option ->
   float option
 (** Reservation for a request before it is sent: input tokens estimated as
-    [input_bytes / 3] (a deliberate overestimate), output at [max_output] or the
-    model's maximum, at long-context rates when the estimate exceeds the
-    threshold. [None] for an unknown model, which callers must refuse. *)
+    [input_bytes / 3] (a deliberate overestimate), or at least the model's
+    [max_input] when [external_input] says the request refers to server-side or
+    external content the body does not contain. Output is [max_output] or the
+    model's maximum, once per candidate ([candidates] below 1 count as 1). Long
+    context rates apply when the input exceeds the threshold. [None] for an
+    unknown model, which callers must refuse. *)

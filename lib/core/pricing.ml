@@ -12,6 +12,7 @@ type entry = {
   rates : rates;
   long_context : (int * rates) option;
   max_output : int;
+  max_input : int;
 }
 
 (* Sources: risk-providers research sections 9 to 12 (2026-10-13) and spec §11.
@@ -32,13 +33,38 @@ let assumed_max_output = 65_536
 (* Anthropic 5.x: 128K maximum output (models overview page). *)
 let claude_max_output = 128_000
 
-let entry ?(effective_from = always) ?long_context ~provider ~max_output model
-    rates =
-  { model; provider; effective_from; rates; long_context; max_output }
+(* Context windows, in prompt tokens. Claude 5.x: 1M (models overview page).
+   ASSUMPTIONS: the research documents no window for Gemini (1M used) and only
+   the 272K short-context tier for OpenAI (272K used). They size reservations
+   for requests that reference content the body does not contain, so a wrong
+   value over- or under-reserves. *)
+let claude_max_input = 1_000_000
+let assumed_gemini_max_input = 1_000_000
+let assumed_openai_max_input = 272_000
 
-let openai = entry ~provider:"openai" ~max_output:assumed_max_output
-let anthropic = entry ~provider:"anthropic" ~max_output:claude_max_output
-let gemini = entry ~provider:"gemini" ~max_output:assumed_max_output
+let entry ?(effective_from = always) ?long_context ~provider ~max_output
+    ~max_input model rates =
+  {
+    model;
+    provider;
+    effective_from;
+    rates;
+    long_context;
+    max_output;
+    max_input;
+  }
+
+let openai =
+  entry ~provider:"openai" ~max_output:assumed_max_output
+    ~max_input:assumed_openai_max_input
+
+let anthropic =
+  entry ~provider:"anthropic" ~max_output:claude_max_output
+    ~max_input:claude_max_input
+
+let gemini =
+  entry ~provider:"gemini" ~max_output:assumed_max_output
+    ~max_input:assumed_gemini_max_input
 
 let table =
   [
@@ -69,10 +95,10 @@ let table =
 let free_suffix = ":free"
 
 (* OpenRouter [:free] models cost nothing whatever their id. ASSUMPTION for
-   [max_output]: same as the other non-Anthropic providers. *)
+   [max_output] and [max_input]: same as the other non-Anthropic providers. *)
 let free_entry model =
-  entry ~provider:"openrouter" ~max_output:assumed_max_output model
-    (r 0. 0. 0. 0.)
+  entry ~provider:"openrouter" ~max_output:assumed_max_output
+    ~max_input:assumed_gemini_max_input model (r 0. 0. 0. 0.)
 
 let matches ~model (e : entry) =
   let n = String.length e.model in
@@ -127,11 +153,17 @@ let cost ~model ~date (u : Trace.usage) =
       +. per_million u.output_tokens rates.output)
     (find ~model ~date)
 
-let worst_case ~model ~date ~input_bytes ~max_output =
+let worst_case ~model ~date ~input_bytes ~external_input ~candidates ~max_output
+    =
   Option.map
     (fun e ->
-      let tokens = max 0 input_bytes / 3 in
+      let estimate = max 0 input_bytes / 3 in
+      let tokens =
+        if external_input then max estimate e.max_input else estimate
+      in
       let rates = applicable_rates e ~prompt_tokens:tokens in
-      let output = max 0 (Option.value max_output ~default:e.max_output) in
+      let output =
+        max 0 (Option.value max_output ~default:e.max_output) * max 1 candidates
+      in
       per_million tokens rates.input +. per_million output rates.output)
     (find ~model ~date)

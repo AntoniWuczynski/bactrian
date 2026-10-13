@@ -197,7 +197,8 @@ let test_unknown_cost () =
 
 let test_worst_case () =
   let wc ?(date = today) model ~bytes ~max_output =
-    P.worst_case ~model ~date ~input_bytes:bytes ~max_output
+    P.worst_case ~model ~date ~input_bytes:bytes ~external_input:false
+      ~candidates:1 ~max_output
   in
   (* 3_000_000 bytes -> 1M tokens; luna: 0.10 + 1000 * 0.50 / 1e6 *)
   Alcotest.check cost_t "luna explicit"
@@ -230,6 +231,139 @@ let test_worst_case () =
     (wc ~date:"2027-03-01" "gemini-3.8-flash" ~bytes:3_000_000
        ~max_output:(Some 1000))
 
+let test_max_input () =
+  let max_input m =
+    match P.find ~model:m ~date:today with
+    | Some e -> e.max_input
+    | None -> Alcotest.failf "%s missing" m
+  in
+  List.iter
+    (fun (e : P.entry) ->
+      Alcotest.(check bool) (e.model ^ " max_input") true (e.max_input > 0))
+    P.table;
+  Alcotest.(check int) "claude" 1_000_000 (max_input "claude-sonnet-5-5");
+  Alcotest.(check int) "gemini" 1_000_000 (max_input "gemini-3.8-flash");
+  Alcotest.(check int) "openai" 272_000 (max_input "gpt-6-luna")
+
+let test_worst_case_external () =
+  let wc ?(candidates = 1) ~external_input model =
+    P.worst_case ~model ~date:today ~input_bytes:300 ~external_input ~candidates
+      ~max_output:(Some 1000)
+  in
+  (* luna: window 272000 at 0.10, output 1000 at 0.50 *)
+  Alcotest.check cost_t "luna external"
+    (Some (((272_000. *. 0.10) +. (1000. *. 0.50)) *. per_m))
+    (wc ~external_input:true "gpt-6-luna");
+  (* sonnet: window 1M at 2.00 *)
+  Alcotest.check cost_t "sonnet external"
+    (Some (((1_000_000. *. 2.00) +. (1000. *. 10.)) *. per_m))
+    (wc ~external_input:true "claude-sonnet-5-5");
+  (* haiku above 100K prompt tokens: long rates *)
+  Alcotest.check cost_t "haiku external is long"
+    (Some (((1_000_000. *. 0.50) +. (1000. *. 2.50)) *. per_m))
+    (wc ~external_input:true "claude-haiku-5-5");
+  (* the body estimate still wins when larger than the window *)
+  Alcotest.check cost_t "body larger than the window"
+    (Some (((300_000. *. 0.10) +. (1000. *. 0.50)) *. per_m))
+    (P.worst_case ~model:"gpt-6-luna" ~date:today ~input_bytes:900_000
+       ~external_input:true ~candidates:1 ~max_output:(Some 1000));
+  Alcotest.check cost_t "no external: body only"
+    (Some (((100. *. 0.10) +. (1000. *. 0.50)) *. per_m))
+    (wc ~external_input:false "gpt-6-luna");
+  (* candidates multiply output only *)
+  Alcotest.check cost_t "three candidates"
+    (Some (((100. *. 0.10) +. (3000. *. 0.50)) *. per_m))
+    (wc ~candidates:3 ~external_input:false "gpt-6-luna");
+  Alcotest.check cost_t "zero candidates count as one"
+    (wc ~external_input:false "gpt-6-luna")
+    (wc ~candidates:0 ~external_input:false "gpt-6-luna")
+
+let canon s =
+  match Canon.of_string s with
+  | Ok v -> v
+  | Error e -> Alcotest.failf "bad JSON: %a" Canon.pp_error e
+
+let analyse s = Reservation.analyse (canon s)
+
+let test_analyse_external () =
+  let ext s = (analyse s).external_input in
+  let check name expected s = Alcotest.(check bool) name expected (ext s) in
+  check "plain chat" false
+    {|{"model":"m","messages":[{"role":"user","content":"hi"}]}|};
+  check "previous_response_id" true
+    {|{"model":"m","previous_response_id":"resp_1","input":"x"}|};
+  check "null previous_response_id" false
+    {|{"model":"m","previous_response_id":null,"input":"x"}|};
+  check "conversation" true
+    {|{"model":"m","conversation":"conv_1","input":"x"}|};
+  check "gemini cachedContent" true
+    {|{"cachedContent":"cachedContents/abc","contents":[]}|};
+  check "previous_interaction_id" true
+    {|{"previous_interaction_id":"i1","input":"x"}|};
+  check "chat image_url" true
+    {|{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://x/y.png"}}]}]}|};
+  check "responses input_image" true
+    {|{"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA"}]}]}|};
+  check "responses file_id" true
+    {|{"input":[{"role":"user","content":[{"type":"input_file","file_id":"file-1"}]}]}|};
+  check "audio" true
+    {|{"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AA","format":"wav"}}]}]}|};
+  check "anthropic image" true
+    {|{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA"}}]}]}|};
+  check "anthropic document" true
+    {|{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://x/y.pdf"}}]}]}|};
+  check "gemini inlineData" true
+    {|{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA"}}]}]}|};
+  check "gemini fileData" true
+    {|{"contents":[{"parts":[{"fileData":{"fileUri":"https://x/f","mimeType":"video/mp4"}}]}]}|};
+  check "text parts only" false
+    {|{"contents":[{"parts":[{"text":"image"}]}],"messages":[{"type":"text","text":"file"}]}|}
+
+let test_analyse_candidates () =
+  let n s = (analyse s).candidates in
+  Alcotest.(check int) "default" 1 (n {|{"model":"m"}|});
+  Alcotest.(check int) "n" 4 (n {|{"model":"m","n":4}|});
+  Alcotest.(check int)
+    "candidateCount" 3
+    (n {|{"generationConfig":{"candidateCount":3}}|});
+  Alcotest.(check int)
+    "candidate_count" 2
+    (n {|{"generation_config":{"candidate_count":2}}|})
+
+let wc ?(model = "gpt-6-luna") body =
+  Reservation.worst_case ~model ~date:today ~input_bytes:300
+    ~max_output:(Some 1000) (canon body)
+
+let test_reservation_candidates () =
+  Alcotest.check cost_t "n multiplies output"
+    (Some (((100. *. 0.10) +. (5000. *. 0.50)) *. per_m))
+    (wc {|{"model":"gpt-6-luna","n":5}|})
+
+let test_reservation_fallbacks () =
+  let sonnet = ((100. *. 2.00) +. (1000. *. 10.)) *. per_m in
+  Alcotest.check cost_t "most expensive listed model"
+    (Some (((100. *. 10.00) +. (1000. *. 50.)) *. per_m))
+    (wc ~model:"gpt-6-luna"
+       {|{"model":"gpt-6-luna","models":["gpt-6-sol","gpt-6-astra"]}|});
+  Alcotest.check cost_t "primary may be the dearest" (Some sonnet)
+    (wc ~model:"claude-sonnet-5-5"
+       {|{"model":"claude-sonnet-5-5","models":["gpt-6-luna"]}|});
+  Alcotest.check cost_t "unknown fallback refuses" None
+    (wc ~model:"gpt-6-luna"
+       {|{"model":"gpt-6-luna","models":["gpt-6-sol","mystery"]}|});
+  Alcotest.check cost_t "free alone is free" (Some 0.)
+    (wc ~model:"x/y:free" {|{"model":"x/y:free","models":["a/b:free"]}|});
+  Alcotest.check cost_t "free with a paid fallback is not free" (Some sonnet)
+    (wc ~model:"x/y:free"
+       {|{"model":"x/y:free","models":["claude-sonnet-5-5"]}|});
+  Alcotest.check cost_t "free with an unpriced fallback refuses" None
+    (wc ~model:"x/y:free" {|{"model":"x/y:free","models":["mystery"]}|});
+  let u = usage ~i:1_000_000 ~o:1_000_000 () in
+  Alcotest.check cost_t "settles at the dearest too" (Some 12.)
+    (Reservation.cost ~model:"x/y:free" ~date:today
+       (canon {|{"model":"x/y:free","models":["claude-sonnet-5-5"]}|})
+       u)
+
 let test_worst_case_overestimates () =
   (* A real token is at least ~1 byte per token for plain text, so bytes/3 should never be below
      the cost of a prompt of bytes/4 tokens. Property: the reservation covers any actual usage
@@ -245,6 +379,7 @@ let test_worst_case_overestimates () =
           (fun (e : P.entry) ->
             match
               ( P.worst_case ~model:e.model ~date:today ~input_bytes:bytes
+                  ~external_input:false ~candidates:1
                   ~max_output:(Some max_output),
                 P.cost ~model:e.model ~date:today (usage ~i:tokens ~o ()) )
             with
@@ -300,6 +435,15 @@ let () =
       ( "worst_case",
         [
           Alcotest.test_case "reservations" `Quick test_worst_case;
+          Alcotest.test_case "max_input" `Quick test_max_input;
+          Alcotest.test_case "external input" `Quick test_worst_case_external;
+          Alcotest.test_case "analyse external input" `Quick
+            test_analyse_external;
+          Alcotest.test_case "analyse candidates" `Quick test_analyse_candidates;
+          Alcotest.test_case "candidates reservation" `Quick
+            test_reservation_candidates;
+          Alcotest.test_case "openrouter fallbacks" `Quick
+            test_reservation_fallbacks;
           test_worst_case_overestimates ();
         ] );
     ]
