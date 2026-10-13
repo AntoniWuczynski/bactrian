@@ -135,6 +135,30 @@ let threshold_text (metric : Compare.metric) delta =
   | Latency_p50 -> relative "slower" "faster"
   | Tokens -> relative "more" "fewer"
 
+let extra_repeats_text (m : Report_data.metric_row) =
+  Option.map
+    (fun extra ->
+      let name = metric m.result.metric in
+      match extra with
+      | `Repeats n ->
+          Printf.sprintf
+            "%s is inconclusive: about %d more repeats per scenario and \
+             variant would resolve it, simulated with the observed pass rates \
+             as the truth (power 0.8)."
+            name n
+      | `Cannot_resolve ->
+          Printf.sprintf
+            "%s is inconclusive, and up to 2,000 more repeats per scenario and \
+             variant would not resolve it: the observed difference is too \
+             close to the threshold."
+            name
+      | `Not_simulated ->
+          Printf.sprintf
+            "%s is inconclusive. The simulator models pass rates only, so no \
+             repeat count is estimated for it."
+            name)
+    m.extra_repeats
+
 let metric_texts (m : Report_data.metric_row) =
   let threshold = threshold_text m.result.metric m.delta in
   match (m.relative, Float.is_nan m.result.estimate) with

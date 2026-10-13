@@ -508,7 +508,13 @@ let page (d : D.t) =
            [
              header d;
              section "verdicts" "Verdicts"
-               ([ verdict_table d; missing_table d ] @ dropped_note d);
+               (verdict_table d
+                :: List.filter_map
+                     (fun m ->
+                       Option.map (para ~cls:[ "note" ])
+                         (F.extra_repeats_text m))
+                     d.metrics
+               @ (missing_table d :: dropped_note d));
              forest_section d;
              measures_section d;
              behaviour_section d;

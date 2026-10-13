@@ -59,6 +59,10 @@ val threshold_text : Compare.metric -> float -> string
     improvement more than 16.7% cheaper). Latency says slower and faster, tokens
     more and fewer. *)
 
+val extra_repeats_text : Report_data.metric_row -> string option
+(** For an inconclusive gate metric, one sentence on the extra repeats that
+    would resolve it, naming the metric. *)
+
 val metric_texts : Report_data.metric_row -> string * string * string
 (** The estimate, the interval and the threshold ({!threshold_text}) of a
     verdict row, as text. Pass rates in percentage points, other metrics as

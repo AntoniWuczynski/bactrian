@@ -78,6 +78,7 @@ The terminal table. Without --gate the exit status is 0 whatever the verdict.
   
   metric     gate  estimate  interval              level   threshold  verdict
   Pass rate  yes   -3.3 pp   -20.4 pp to +12.8 pp  0.9500  ±5.0 pp   Inconclusive, leans worse
+  Pass rate is inconclusive: about 1341 more repeats per scenario and variant would resolve it, simulated with the observed pass rates as the truth (power 0.8).
   
   scenario  baseline  candidate  difference  interval              verdict
   book      8/10      8/8        +20.0 pp    -24.5 pp to +57.4 pp  Inconclusive, leans better

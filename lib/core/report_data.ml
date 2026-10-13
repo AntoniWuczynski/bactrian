@@ -134,12 +134,14 @@ let new_behaviours ~baseline ~candidate =
     |> List.map fst
 
 type dist = { n : int; median : float; p90 : float }
+type extra_repeats = [ `Repeats of int | `Cannot_resolve | `Not_simulated ]
 
 type metric_row = {
   name : string;
   result : Compare.metric_result;
   delta : float;
   relative : (float * Stats.interval) option;
+  extra_repeats : extra_repeats option;
 }
 
 type scenario_row = {
@@ -246,7 +248,15 @@ let metric_row (settings : Compare.input) (m : Compare.metric_result) =
                 upper = Float.expm1 m.interval.upper;
               } )
   in
-  { name = metric_name m.metric; result = m; delta; relative }
+  let extra_repeats =
+    match m.verdict with
+    | Inconclusive _ when m.in_gate ->
+        Some
+          (Plan_sim.extra_runs_needed settings ~metric:m.metric
+            :> extra_repeats)
+    | Inconclusive _ | Regression | Improvement | No_change -> None
+  in
+  { name = metric_name m.metric; result = m; delta; relative; extra_repeats }
 
 let traced variant scenario runs =
   List.filter
@@ -388,7 +398,10 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
         result.missing;
     dropped = result.dropped;
     exit = result.exit;
-    metrics = List.map (metric_row settings) result.metrics;
+    metrics =
+      List.map
+        (metric_row { settings with runs = List.map compare_run runs })
+        result.metrics;
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
     summaries = List.map (summary runs) compared;
     behaviours = List.map (behaviour settings runs) scenario_names;
@@ -444,7 +457,15 @@ let metric_json (m : metric_row) : Yojson.Safe.t =
                 [ ("estimate", float_json e); ("interval", interval_json i) ] );
           ]
       | None -> [])
-    @ [ ("result", verdict_json r.verdict) ])
+    @ [
+        ("result", verdict_json r.verdict);
+        ( "extra_repeats",
+          match m.extra_repeats with
+          | None -> `Null
+          | Some (`Repeats n) -> `Int n
+          | Some `Cannot_resolve -> `String "cannot_resolve"
+          | Some `Not_simulated -> `String "not_simulated" );
+      ])
 
 let scenario_json (s : scenario_row) : Yojson.Safe.t =
   `Assoc

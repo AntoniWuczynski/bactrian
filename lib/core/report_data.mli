@@ -80,6 +80,9 @@ val new_behaviours :
 
 type dist = { n : int; median : float; p90 : float }
 
+type extra_repeats = [ `Repeats of int | `Cannot_resolve | `Not_simulated ]
+(** {!Plan_sim.extra_runs_needed}. *)
+
 type metric_row = {
   name : string;
   result : Compare.metric_result;
@@ -88,6 +91,10 @@ type metric_row = {
       (** Estimate and interval back-transformed to a relative change, for
           metrics on the log ratio scale. [None] for pass rate or an undefined
           metric. *)
+  extra_repeats : extra_repeats option;
+      (** For an inconclusive gate metric, the extra repeats per scenario and
+          variant that would resolve it, simulated with the observed rates as
+          the truth. [None] for any other metric. *)
 }
 
 type scenario_row = {
@@ -155,7 +162,11 @@ val build :
   result:Compare.result ->
   run list ->
   t
-(** [settings.runs] is not read: the runs come from the last argument. *)
+(** [settings.runs] is not read: the runs come from the last argument. Each
+    inconclusive gate metric runs {!Plan_sim.extra_runs_needed}, which is
+    deterministic (its seed is [settings.seed]) and fast under [`Suite], and
+    runs a hierarchical bootstrap per simulated experiment under [`Scenarios].
+*)
 
 val to_json : t -> Yojson.Safe.t
 (** Deterministic: fixed key order, runs in execution order, scenarios sorted,
