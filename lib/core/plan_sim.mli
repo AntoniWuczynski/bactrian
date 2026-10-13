@@ -6,9 +6,11 @@
     every random draw comes from a [Random.State.t] derived from [seed], the
     repeat count and the simulation index, never from the global generator.
 
-    Inside the simulation the bootstrap uses 400 resamples rather than the
-    10,000 of a real comparison, to keep a planning call fast. The Monte Carlo
-    error of the power estimate is reported through [mc_se]. *)
+    Under [`Suite] the pass-rate interval is closed form, so a simulated
+    experiment is exactly the real comparison. Under [`Scenarios] the
+    hierarchical bootstrap inside the simulation uses 400 resamples rather than
+    the 10,000 of a real comparison, to keep a planning call fast. The Monte
+    Carlo error of the power estimate is reported through [mc_se]. *)
 
 type assumption = {
   baseline_rates : (string * float) list;
@@ -33,9 +35,13 @@ type assumption = {
 
 type answer =
   | Repeats of { n : int; achieved_power : float; mc_se : float }
-      (** Smallest repeat count found reaching the power, with the simulated
-          power and its Monte Carlo standard error
-          [sqrt (p (1 - p) / simulations)]. *)
+      (** Smallest repeat count found reaching the power, with the power at
+          exactly [n] and its Monte Carlo standard error
+          [sqrt (p (1 - p) / simulations)]. [achieved_power] comes from a
+          second, independent set of [simulations] experiments at [n] (the same
+          as {!power_at}), not from the ones that chose [n]: those clear the
+          target by selection and so run high. It can therefore fall below
+          [power] by Monte Carlo error. *)
   | Unreachable of { best_power : float }
       (** No repeat count up to [max_repeats] reaches the power. *)
 
@@ -50,14 +56,19 @@ val plan : assumption -> answer
 
 val power_at : assumption -> repeats:int -> float
 (** Simulated probability of the correct verdict at one repeat count ([power]
-    and [max_repeats] are ignored). Same exceptions as {!plan}. *)
+    and [max_repeats] are ignored), from the same simulations that give
+    {!plan}'s [achieved_power]. Same exceptions as {!plan}. *)
 
 val extra_runs_needed :
   Compare.input -> metric:Compare.metric -> [ `Repeats of int | `Cannot_resolve ]
 (** Extra repeats per scenario and variant that would resolve the metric's
     verdict, simulating with the observed per-scenario pass rates of both arms
-    as the truth (power 0.8, 200 simulations, at most 200 repeats in total).
-    [`Repeats 0] when the verdict is already conclusive. [`Cannot_resolve] when
-    no repeat count reaches the power (for example an estimate sitting on the
-    threshold), when the comparison itself fails, or for metrics other than
-    [Pass_rate], which the simulator does not model. *)
+    as the truth (power 0.8, 200 simulations, at most 2,000 repeats in total).
+    [`Repeats 0] when the verdict is already conclusive. An expensive answer is
+    still an answer: [`Repeats] can be in the hundreds or thousands.
+    [`Cannot_resolve] only when even 2,000 repeats do not reach the power (for
+    example an estimate sitting on the threshold), when the comparison itself
+    fails, or for metrics other than [Pass_rate], which the simulator does not
+    model. Under [`Scenarios] each simulated experiment runs the hierarchical
+    bootstrap over every run, so a search that reaches thousands of repeats is
+    slow. *)

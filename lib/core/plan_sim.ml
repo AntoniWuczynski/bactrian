@@ -17,9 +17,10 @@ type answer =
 
 type target = Want_regression | Want_improvement | Want_no_change
 
-(* Resamples of the bootstrap inside one simulated experiment. Far below the
-   10,000 of a real comparison: planning runs [simulations] experiments per
-   candidate repeat count, and the Monte Carlo error already dominates. *)
+(* Resamples of the hierarchical bootstrap inside one simulated [`Scenarios]
+   experiment. Far below the 10,000 of a real comparison: planning runs
+   [simulations] experiments per candidate repeat count, and the Monte Carlo
+   error already dominates. *)
 let sim_resamples = 400
 let baseline_name = "baseline"
 let candidate_name = "candidate"
@@ -101,8 +102,14 @@ let hit target (verdict : Compare.verdict) =
   | Inconclusive _, (Want_regression | Want_improvement | Want_no_change) ->
       false
 
-let one_simulation setup ~n ~index =
-  let rng = Random.State.make [| setup.seed; n; index |] in
+(* Two independent streams of simulated experiments: [Search] chooses the
+   repeat count and [Report] estimates the power of the count chosen, so the
+   reported power is not biased upwards by the choice. *)
+type stream = Search | Report
+
+let one_simulation setup ~stream ~n ~index =
+  let tag = match stream with Search -> 0 | Report -> 1 in
+  let rng = Random.State.make [| setup.seed; n; index; tag |] in
   let runs = simulated_runs rng setup n in
   let input : Compare.input =
     {
@@ -125,10 +132,10 @@ let one_simulation setup ~n ~index =
       | Some verdict -> hit setup.target verdict
       | None -> invalid_arg "Plan_sim: no pass rate verdict")
 
-let power_of setup n =
+let power_of setup ~stream n =
   let hits = ref 0 in
   for index = 0 to setup.simulations - 1 do
-    if one_simulation setup ~n ~index then incr hits
+    if one_simulation setup ~stream ~n ~index then incr hits
   done;
   float_of_int !hits /. float_of_int setup.simulations
 
@@ -145,7 +152,7 @@ let search setup ~required ~max_repeats =
     match Hashtbl.find_opt cache n with
     | Some p -> p
     | None ->
-        let p = power_of setup n in
+        let p = power_of setup ~stream:Search n in
         Hashtbl.add cache n p;
         p
   in
@@ -163,7 +170,7 @@ let search setup ~required ~max_repeats =
   in
   match double 0 1 with
   | Some n ->
-      let p = power n in
+      let p = power_of setup ~stream:Report n in
       Repeats
         {
           n;
@@ -208,7 +215,7 @@ let plan (a : assumption) =
 
 let power_at a ~repeats =
   check_positive "repeats" repeats;
-  power_of (setup_of_assumption a) repeats
+  power_of (setup_of_assumption a) ~stream:Report repeats
 
 let metric_equal (a : Compare.metric) (b : Compare.metric) =
   match (a, b) with
@@ -221,7 +228,7 @@ let metric_equal (a : Compare.metric) (b : Compare.metric) =
 
 let extra_power = 0.8
 let extra_simulations = 200
-let extra_max_repeats = 200
+let extra_max_repeats = 2000
 
 module Smap = Map.Make (String)
 

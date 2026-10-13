@@ -1,9 +1,22 @@
 (** Comparison of a candidate variant with a baseline (spec §8).
 
     Pass rate is compared on the difference of equal-weighted per-scenario
-    means. Cost, median latency and tokens are compared on
-    [log (median_candidate / median_baseline)], with thresholds given as
-    relative changes [δ] and applied as [log (1 + δ)]. *)
+    means. Under [`Suite] its interval is {!Stats.stratified_newcombe_diff};
+    under [`Scenarios] it is the hull (smallest interval containing both) of
+    {!Bootstrap.hierarchical_diff} and {!Stats.stratified_newcombe_diff}, since
+    the bootstrap alone collapses to zero width when every run of both arms
+    passes (statistics review of 2026-10-13, M1).
+
+    Cost, median latency and tokens are compared on
+    [log (median_candidate / median_baseline)] over the scenarios both arms have
+    outcomes for, with the interval of {!Bootstrap.log_ratio_of_medians}
+    (resampling within each scenario). Thresholds are given as relative changes
+    [δ] and applied as [log (1 + δ)]. Such a metric is undefined when any of
+    those scenarios has fewer than 5 values in either arm, or a pooled median is
+    zero.
+
+    Only scenarios with outcomes in both arms are compared. The others are
+    listed in [dropped] and count as missing data for the exit code. *)
 
 type metric = Pass_rate | Cost | Latency_p50 | Tokens
 
@@ -28,8 +41,9 @@ type metric_result = {
       *)
   verdict : verdict;
   in_gate : bool;
-      (** [false] for metrics outside the gate and for an undefined gate metric,
-          which cannot gate. *)
+      (** [true] for every declared gate metric. An undefined gate metric stays
+          in the gate with an [Inconclusive] verdict, so it exits 2 under
+          [fail_on_inconclusive] rather than passing silently. *)
 }
 
 type missing_reason = Errored | Not_run
@@ -56,7 +70,9 @@ type input = {
   report_metrics : (metric * float) list;
       (** Non-gate metrics with thresholds. *)
   seed : int;
-  resamples : int;  (** Default 10_000. *)
+  resamples : int;
+      (** Default 10_000. Used by the hierarchical and log ratio bootstraps; the
+          [`Suite] pass-rate interval is closed form. *)
   fail_on_inconclusive : bool;  (** Makes an inconclusive gate metric exit 2. *)
 }
 
@@ -68,10 +84,14 @@ type result = {
           scenario name. *)
   missing : (string * int * int) list;
       (** Variant, errored, not_run: baseline then candidate. *)
+  dropped : string list;
+      (** Scenarios with runs of either variant but no finished outcome in one
+          of them, sorted. They are left out of every comparison. *)
   exit : int;
       (** Spec §8 gate exit codes. 1 when a gate metric is a regression, else 3
-          when missing data may bias the comparison, else 2 when a gate metric
-          is inconclusive and [fail_on_inconclusive] is set, else 0. *)
+          when missing data may bias the comparison (the errored and not-run
+          shares, or any [dropped] scenario), else 2 when a gate metric is
+          inconclusive and [fail_on_inconclusive] is set, else 0. *)
 }
 
 val decide :

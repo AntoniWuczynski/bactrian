@@ -217,6 +217,7 @@ let test_json_deterministic () =
       "seed";
       "resamples";
       "missing";
+      "dropped_scenarios";
       "exit";
       "metrics";
       "scenarios";

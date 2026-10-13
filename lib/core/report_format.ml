@@ -113,12 +113,25 @@ let exit_meaning = function
 let interval f (i : Stats.interval) =
   Printf.sprintf "%s to %s" (f i.lower) (f i.upper)
 
+(* A relative threshold δ applies as log (1 + δ) on the log ratio, so a
+   regression is a ratio above 1 + δ and an improvement a ratio below
+   1 / (1 + δ), a change of -δ / (1 + δ). *)
+let threshold_text (metric : Compare.metric) delta =
+  let relative worse better =
+    Printf.sprintf "%.1f%% %s, %.1f%% %s" (delta *. 100.) worse
+      (delta /. (1. +. delta) *. 100.)
+      better
+  in
+  match metric with
+  | Pass_rate -> Printf.sprintf "±%.1f pp" (delta *. 100.)
+  | Cost -> relative "dearer" "cheaper"
+  | Latency_p50 -> relative "slower" "faster"
+  | Tokens -> relative "more" "fewer"
+
 let metric_texts (m : Report_data.metric_row) =
+  let threshold = threshold_text m.result.metric m.delta in
   match (m.relative, Float.is_nan m.result.estimate) with
   | _, true -> ("undefined", "undefined", "")
   | None, false ->
-      ( points m.result.estimate,
-        interval points m.result.interval,
-        Printf.sprintf "±%.1f pp" (m.delta *. 100.) )
-  | Some (e, i), false ->
-      (percent e, interval percent i, Printf.sprintf "±%.1f%%" (m.delta *. 100.))
+      (points m.result.estimate, interval points m.result.interval, threshold)
+  | Some (e, i), false -> (percent e, interval percent i, threshold)

@@ -34,12 +34,41 @@ let test_higher_power_needs_more () =
   Alcotest.(check bool) "n(0.5) <= n(0.9)" true (n_low <= n_high)
 
 let test_found_n_reaches_power () =
+  (* The reported power is a fresh estimate at the returned n, independent of
+     the simulations that chose n, so it is unbiased but can fall below the
+     target by Monte Carlo error (it used to be the selecting estimate, which
+     always cleared the target and ran 0.01 to 0.02 high). *)
   match P.plan base with
-  | P.Repeats { n; achieved_power; _ } ->
-      Alcotest.(check bool) "power reached" true (achieved_power >= 0.8);
+  | P.Repeats { n; achieved_power; mc_se } ->
+      Alcotest.(check bool)
+        "power reached within Monte Carlo error" true
+        (achieved_power >= 0.8 -. (3. *. mc_se));
       Alcotest.(check (float 0.0))
         "same as power_at" achieved_power
         (P.power_at base ~repeats:n)
+  | P.Unreachable _ -> Alcotest.fail "unexpected Unreachable"
+
+let test_no_change_at_ceiling () =
+  (* M2: with the old zero-width interval, one run per arm "proved" no change
+     between two 100% arms. The stratified Newcombe interval of n/n against
+     n/n is +-z^2/(n + z^2), inside +-0.05 from n = 73 at 0.95. *)
+  let a =
+    {
+      base with
+      baseline_rates = [ ("only", 1.0) ];
+      true_effect = 0.0;
+      threshold = 0.05;
+      max_repeats = 200;
+      simulations = 50;
+    }
+  in
+  match P.plan a with
+  | P.Repeats { n; achieved_power; _ } ->
+      Alcotest.(check bool) (Printf.sprintf "n = %d >= 10" n) true (n >= 10);
+      Alcotest.(check (float 0.)) "certain at n" 1.0 achieved_power;
+      Alcotest.(check (float 0.))
+        "one fewer is not enough" 0.0
+        (P.power_at a ~repeats:(n - 1))
   | P.Unreachable _ -> Alcotest.fail "unexpected Unreachable"
 
 let test_effect_at_threshold_unreachable () =
@@ -173,10 +202,15 @@ let test_extra_on_threshold () =
   Alcotest.check extra "cannot resolve" `Cannot_resolve
     (P.extra_runs_needed (input ~a:9 ~b:8 ~n:10) ~metric:Pass_rate)
 
-let test_extra_too_far () =
-  (* A single scenario with a 0.2 drop would need hundreds of repeats. *)
-  Alcotest.check extra "beyond 200" `Cannot_resolve
-    (P.extra_runs_needed (input ~a:8 ~b:6 ~n:10) ~metric:Pass_rate)
+let test_extra_expensive () =
+  (* A single scenario with a 0.2 drop needs a few hundred repeats. This used
+     to be [`Cannot_resolve] because the search stopped at 200; expensive is
+     not unresolvable, so the estimate is now returned. *)
+  match P.extra_runs_needed (input ~a:8 ~b:6 ~n:10) ~metric:Pass_rate with
+  | `Repeats n ->
+      Alcotest.(check bool) (Printf.sprintf "%d beyond 190" n) true (n > 190);
+      Alcotest.(check bool) (Printf.sprintf "%d within 2,000" n) true (n <= 2000)
+  | `Cannot_resolve -> Alcotest.fail "expensive, not unresolvable"
 
 let test_extra_other_metric () =
   Alcotest.check extra "cost" `Cannot_resolve
@@ -193,6 +227,8 @@ let () =
             test_higher_power_needs_more;
           Alcotest.test_case "found n reaches power" `Quick
             test_found_n_reaches_power;
+          Alcotest.test_case "no change at the ceiling" `Quick
+            test_no_change_at_ceiling;
           Alcotest.test_case "effect at threshold unreachable" `Quick
             test_effect_at_threshold_unreachable;
           Alcotest.test_case "large effect needs few" `Quick
@@ -210,7 +246,7 @@ let () =
           Alcotest.test_case "conclusive" `Quick test_extra_conclusive;
           Alcotest.test_case "needed" `Quick test_extra_needed;
           Alcotest.test_case "on threshold" `Quick test_extra_on_threshold;
-          Alcotest.test_case "too far" `Quick test_extra_too_far;
+          Alcotest.test_case "expensive" `Quick test_extra_expensive;
           Alcotest.test_case "other metric" `Quick test_extra_other_metric;
         ] );
     ]

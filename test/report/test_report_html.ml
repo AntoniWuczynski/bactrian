@@ -78,6 +78,21 @@ let test_content () =
     "missing data" true
     (contains "Missing data per arm" html);
   Alcotest.(check bool)
+    "cost threshold in percent, both sides" true
+    (contains "20.0% dearer, 16.7% cheaper" html);
+  Alcotest.(check bool)
+    "latency threshold in percent, both sides" true
+    (contains "25.0% slower, 20.0% faster" html);
+  Alcotest.(check bool) "nothing dropped" false (contains "Left out" html);
+  let dropped =
+    Report_html.render { (Fixture.data ()) with dropped = [ "book" ] }
+  in
+  Alcotest.(check bool)
+    "dropped scenario listed" true
+    (contains
+       "Left out of the comparison, with no finished run in one arm: book."
+       dropped);
+  Alcotest.(check bool)
     "new behaviour flagged" true
     (contains "refund: 1 new behaviour" html
     && contains {|<span class="badge new">new</span>|} html);

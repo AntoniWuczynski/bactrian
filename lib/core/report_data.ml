@@ -181,6 +181,7 @@ type t = {
   seed : int;
   resamples : int;
   missing : (string * int * int * int) list;
+  dropped : string list;
   exit : int;
   metrics : metric_row list;
   scenarios : scenario_row list;
@@ -385,6 +386,7 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
         (fun (variant, errored, not_run) ->
           (variant, List.length (of_variant variant runs), errored, not_run))
         result.missing;
+    dropped = result.dropped;
     exit = result.exit;
     metrics = List.map (metric_row settings) result.metrics;
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
@@ -584,6 +586,7 @@ let summary_fields (t : t) =
                  ("not_run", `Int not_run);
                ])
            t.missing) );
+    ("dropped_scenarios", `List (List.map (fun s -> `String s) t.dropped));
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));

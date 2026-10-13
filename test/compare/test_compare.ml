@@ -299,8 +299,32 @@ let test_undefined_median () =
   in
   let m = metric r C.Cost in
   Alcotest.(check bool) "undefined estimate" true (Float.is_nan m.estimate);
-  Alcotest.(check bool) "cannot gate" false m.in_gate;
-  Alcotest.(check int) "exit" 0 r.exit
+  (* M4: a declared gate metric that is undefined stays in the gate as
+     inconclusive, so it cannot pass silently. *)
+  Alcotest.(check bool) "still in gate" true m.in_gate;
+  Alcotest.check verdict_t "inconclusive" (inc `None) m.verdict;
+  Alcotest.(check int) "exit without flag" 0 r.exit;
+  let r =
+    ok
+      (C.run
+         (input ~fail_on_inconclusive:true
+            ~gate:[ (C.Cost, 0.2) ]
+            (arm "A" 0. @ arm "B" 1.)))
+  in
+  Alcotest.(check int) "exit with flag" 2 r.exit
+
+let test_undefined_without_values () =
+  (* Review §7: gate [pass_rate; cost] with no cost data at all. *)
+  let r =
+    ok
+      (C.run
+         (input ~fail_on_inconclusive:true
+            ~gate:[ (C.Pass_rate, 0.1); (C.Cost, 0.2) ]
+            (suite_runs ~n:40 ~kb:40 ~kc:40 ())))
+  in
+  Alcotest.check verdict_t "pass rate" No_change (metric r C.Pass_rate).verdict;
+  Alcotest.(check bool) "cost in gate" true (metric r C.Cost).in_gate;
+  Alcotest.(check int) "inconclusive cost gate exits 2" 2 r.exit
 
 let test_swap_negates () =
   let rs = suite_runs ~n:10 ~kb:8 ~kc:3 () in
@@ -317,6 +341,301 @@ let test_no_variant_runs () =
   match C.run (input (runs "s" "A" ~n:5 ~k:5)) with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "candidate without runs must be an Error"
+
+let width (i : Stats.interval) = i.upper -. i.lower
+
+let tallies k ~n ~kb ~kc =
+  List.init k (fun _ -> (kb, n)) |> fun b -> (b, List.init k (fun _ -> (kc, n)))
+
+let test_suite_is_stratified_newcombe () =
+  (* B1: the suite interval is the stratified Newcombe interval at the gate
+     level, independent of the seed. *)
+  List.iter
+    (fun (k, n, kb, kc) ->
+      let r = ok (C.run (input (suite_runs ~sc:k ~n ~kb ~kc ()))) in
+      let m = metric r C.Pass_rate in
+      let baseline, candidate = tallies k ~n ~kb ~kc in
+      let want =
+        Stats.stratified_newcombe_diff ~baseline ~candidate ~confidence:0.95
+      in
+      Alcotest.(check (float 0.)) "lower" want.lower m.interval.lower;
+      Alcotest.(check (float 0.)) "upper" want.upper m.interval.upper)
+    [ (1, 3, 3, 3); (3, 5, 5, 4); (3, 10, 6, 5); (10, 3, 3, 3) ]
+
+let test_unanimous_not_certain () =
+  (* Review §3.1: unanimous arms gave [0, 0] and a confident No_change. *)
+  List.iter
+    (fun (population, k, n, too_few) ->
+      let r =
+        ok
+          (C.run
+             (input ~population
+                ~gate:[ (C.Pass_rate, 0.05) ]
+                (suite_runs ~sc:k ~n ~kb:n ~kc:n ())))
+      in
+      let m = metric r C.Pass_rate in
+      let label = Printf.sprintf "K=%d n=%d" k n in
+      Alcotest.(check bool)
+        (label ^ " not zero width")
+        true
+        (width m.interval > 0.);
+      Alcotest.(check bool)
+        (label ^ " No_change only with enough runs")
+        (not too_few)
+        (match m.verdict with
+        | No_change -> true
+        | Regression | Improvement | Inconclusive _ -> false))
+    (* 200 passing runs per arm do support No_change at ±0.05 (review §3.2):
+       the interval is ±0.027. *)
+    [
+      (`Suite, 1, 3, true);
+      (`Suite, 1, 10, true);
+      (`Suite, 3, 5, true);
+      (`Suite, 10, 3, true);
+      (`Scenarios, 10, 3, true);
+      (`Scenarios, 10, 20, false);
+    ];
+  (* A total flip is still a regression, but not a point. *)
+  let r = ok (C.run (input (suite_runs ~sc:1 ~n:3 ~kb:3 ~kc:0 ()))) in
+  let m = metric r C.Pass_rate in
+  Alcotest.check verdict_t "3/3 -> 0/3" Regression m.verdict;
+  Alcotest.(check bool) "not zero width" true (width m.interval > 0.)
+
+let test_scenarios_hull () =
+  (* M1: under [scenarios] the interval is the hull of the paired
+     hierarchical bootstrap and the stratified Newcombe interval. *)
+  let k = 12 and n = 6 in
+  let rs =
+    List.concat_map
+      (fun s ->
+        let i = int_of_string (String.sub s 1 2) in
+        runs s "A" ~n ~k:(i mod 7) @ runs s "B" ~n ~k:((i + 2) mod 7))
+      (scenarios k)
+  in
+  let r = ok (C.run (input ~population:`Scenarios rs)) in
+  let m = metric r C.Pass_rate in
+  (* Values in reverse run order, the order [Compare] collects them in, so the
+     bootstrap below makes the same draws. *)
+  let arm v s : Bootstrap.arm =
+    {
+      scenario = s;
+      values =
+        Array.of_list
+          (List.rev_map Fun.id
+          @@ List.filter_map
+               (fun (x : C.run) ->
+                 if String.equal x.variant v && String.equal x.scenario s then
+                   Option.map (fun b -> if b then 1. else 0.) x.passed
+                 else None)
+               rs);
+    }
+  in
+  let hier =
+    Bootstrap.hierarchical_diff
+      ~rng:(Random.State.make [| 7; 0 |])
+      ~resamples:500 ~confidence:0.95
+      ~baseline:(List.map (arm "A") (scenarios k))
+      ~candidate:(List.map (arm "B") (scenarios k))
+  in
+  let tally v s =
+    let a = arm v s in
+    ( Array.fold_left (fun acc x -> if x > 0.5 then acc + 1 else acc) 0 a.values,
+      Array.length a.values )
+  in
+  let sn =
+    Stats.stratified_newcombe_diff
+      ~baseline:(List.map (tally "A") (scenarios k))
+      ~candidate:(List.map (tally "B") (scenarios k))
+      ~confidence:0.95
+  in
+  Alcotest.(check (float 0.))
+    "lower"
+    (Float.min hier.lower sn.lower)
+    m.interval.lower;
+  Alcotest.(check (float 0.))
+    "upper"
+    (Float.max hier.upper sn.upper)
+    m.interval.upper
+
+let test_scenarios_swap () =
+  let rs = suite_runs ~sc:10 ~n:6 ~kb:5 ~kc:2 () in
+  let fwd = metric (ok (C.run (input ~population:`Scenarios rs))) C.Pass_rate in
+  let bwd =
+    metric
+      (ok
+         (C.run
+            {
+              (input ~population:`Scenarios rs) with
+              baseline = "B";
+              candidate = "A";
+            }))
+      C.Pass_rate
+  in
+  Alcotest.(check (float 0.)) "lower" (-.bwd.interval.upper) fwd.interval.lower;
+  Alcotest.(check (float 0.)) "upper" (-.bwd.interval.lower) fwd.interval.upper
+
+(* Cost runs: [n] per scenario, value [scale *. (1 + i / 100)] for run i. *)
+let cost_runs ~n variant scale s =
+  List.init n (fun i ->
+      run_of s variant (Some true)
+        ~cost:(Some (scale *. (1. +. (float_of_int i /. 100.)))))
+
+let test_cost_needs_five_values () =
+  (* M3: a common scenario with fewer than 5 values in an arm makes the metric
+     undefined. *)
+  let rs n =
+    cost_runs ~n:10 "A" 1. "s00"
+    @ cost_runs ~n:10 "B" 1.2 "s00"
+    @ cost_runs ~n:10 "A" 3. "s01"
+    @ cost_runs ~n "B" 3.6 "s01"
+  in
+  let defined n =
+    let r = ok (C.run (input ~gate:[ (C.Cost, 0.2) ] (rs n))) in
+    not (Float.is_nan (metric r C.Cost).estimate)
+  in
+  Alcotest.(check bool) "5 values" true (defined 5);
+  Alcotest.(check bool) "4 values" false (defined 4)
+
+let test_cost_common_scenarios_only () =
+  (* M3: values from a scenario the other arm lacks are not pooled. *)
+  let common =
+    List.concat_map
+      (fun (s, scale) ->
+        cost_runs ~n:10 "A" scale s @ cost_runs ~n:10 "B" (2. *. scale) s)
+      [ ("s00", 1.); ("s01", 4.) ]
+  in
+  let extra = cost_runs ~n:10 "A" 1000. "s02" in
+  let est rs =
+    (metric (ok (C.run (input ~gate:[ (C.Cost, 0.2) ] rs))) C.Cost).estimate
+  in
+  Alcotest.(check (float 1e-12)) "log 2" (log 2.) (est common);
+  Alcotest.(check (float 1e-12))
+    "extra scenario ignored" (log 2.)
+    (est (common @ extra))
+
+let test_cost_stratified_interval () =
+  (* M3: scenario costs differing by 100x no longer widen the interval: every
+     resample keeps each scenario's run count. *)
+  let rs =
+    List.concat_map
+      (fun (s, scale) ->
+        cost_runs ~n:20 "A" scale s @ cost_runs ~n:20 "B" (1.5 *. scale) s)
+      [ ("s00", 1.); ("s01", 10.); ("s02", 100.) ]
+  in
+  let m = metric (ok (C.run (input ~gate:[ (C.Cost, 0.2) ] rs))) C.Cost in
+  Alcotest.(check (float 1e-12)) "estimate" (log 1.5) m.estimate;
+  Alcotest.check verdict_t "regression" Regression m.verdict
+
+let test_dropped_scenario () =
+  (* Review m1: 30 scenarios x 10 runs, the candidate errors on every run of
+     one scenario (3.3% of its runs, under the 5% trip-wire). *)
+  let sc = scenarios 30 in
+  let lost = List.nth sc 29 in
+  let rs =
+    List.concat_map
+      (fun s ->
+        runs s "A" ~n:10 ~k:10
+        @
+        if String.equal s lost then
+          List.init 10 (fun _ -> run_of s "B" None ~missing:(Some C.Errored))
+        else runs s "B" ~n:10 ~k:10)
+      sc
+  in
+  let r = ok (C.run (input rs)) in
+  Alcotest.(check (list string)) "listed" [ lost ] r.dropped;
+  Alcotest.(check int) "exit 3" 3 r.exit;
+  Alcotest.(check int) "29 compared" 29 (List.length r.per_scenario);
+  (* A scenario the candidate never ran at all counts the same way. *)
+  let rs =
+    List.concat_map
+      (fun s ->
+        runs s "A" ~n:10 ~k:10
+        @ if String.equal s lost then [] else runs s "B" ~n:10 ~k:10)
+      sc
+  in
+  let r = ok (C.run (input rs)) in
+  Alcotest.(check (list string)) "listed, never run" [ lost ] r.dropped;
+  Alcotest.(check int) "exit 3, never run" 3 r.exit;
+  let r = ok (C.run (input (suite_runs ~n:10 ~kb:10 ~kc:10 ()))) in
+  Alcotest.(check (list string)) "none dropped" [] r.dropped
+
+(* M5 regression (review 2026-10-13): seeded simulations at the boundary,
+   where a percentile bootstrap collapsed to zero width. Each cell draws
+   [datasets] experiments with K scenarios and n runs per scenario and arm,
+   true rates [p_base] and [p_cand] in every scenario, and runs the real gate
+   at 0.95 with a 0.05 threshold. The true difference is 2δ, so any No_change
+   is a false all-clear. *)
+let boundary_datasets = 2000
+
+let boundary_cell ?(population = `Suite) ~p_base ~p_cand ~n ~k () =
+  let st = Random.State.make [| 20261013; n; k; truncate (p_base *. 10.) |] in
+  let truth = p_cand -. p_base in
+  let covered = ref 0 and no_change = ref 0 in
+  for _ = 1 to boundary_datasets do
+    let arm variant p s =
+      List.init n (fun _ ->
+          run_of s variant (Some (Random.State.float st 1. < p)))
+    in
+    let rs =
+      List.concat_map
+        (fun s -> arm "A" p_base s @ arm "B" p_cand s)
+        (scenarios k)
+    in
+    let r =
+      ok
+        (C.run
+           (input ~population
+              ~gate:[ (C.Pass_rate, 0.05) ]
+              ~seed:(Random.State.bits st) rs))
+    in
+    let m = metric r C.Pass_rate in
+    if m.interval.lower <= truth && truth <= m.interval.upper then incr covered;
+    match m.verdict with
+    | No_change -> incr no_change
+    | Regression | Improvement | Inconclusive _ -> ()
+  done;
+  let rate x = float_of_int x /. float_of_int boundary_datasets in
+  (rate !covered, rate !no_change)
+
+let test_boundary_coverage () =
+  let se = sqrt (0.05 *. 0.95 /. float_of_int boundary_datasets) in
+  let no_change_limit = 0.05 +. (3. *. se) in
+  let cells =
+    List.concat_map
+      (fun (p_base, p_cand) ->
+        List.concat_map
+          (fun n -> List.map (fun k -> (`Suite, p_base, p_cand, n, k)) [ 1; 3 ])
+          [ 3; 5 ])
+      [ (1.0, 0.9); (0.0, 0.1) ]
+    (* M1: the hierarchical bootstrap alone said No_change 4.4% of the time
+       here. *)
+    @ [ (`Scenarios, 1.0, 0.9, 3, 10) ]
+  in
+  let failures =
+    List.filter_map
+      (fun (population, p_base, p_cand, n, k) ->
+        let coverage, no_change =
+          boundary_cell ~population ~p_base ~p_cand ~n ~k ()
+        in
+        let line =
+          Printf.sprintf
+            "%s %.1f -> %.1f n=%d K=%d: coverage %.4f, false no-change %.4f"
+            (match population with
+            | `Suite -> "suite"
+            | `Scenarios -> "scenarios")
+            p_base p_cand n k coverage no_change
+        in
+        print_endline line;
+        if coverage >= 0.93 && no_change <= no_change_limit then None
+        else Some line)
+      cells
+  in
+  match failures with
+  | [] -> ()
+  | _ :: _ ->
+      Alcotest.failf "coverage below 0.93 or false no-change above %.4f:\n%s"
+        no_change_limit
+        (String.concat "\n" failures)
 
 let () =
   Alcotest.run "compare"
@@ -344,7 +663,27 @@ let () =
           Alcotest.test_case "missing excluded" `Quick test_missing_excluded;
           Alcotest.test_case "determinism" `Quick test_determinism;
           Alcotest.test_case "undefined median" `Quick test_undefined_median;
+          Alcotest.test_case "undefined without values" `Quick
+            test_undefined_without_values;
+          Alcotest.test_case "suite is stratified newcombe" `Quick
+            test_suite_is_stratified_newcombe;
+          Alcotest.test_case "unanimous arms not certain" `Quick
+            test_unanimous_not_certain;
+          Alcotest.test_case "scenarios hull" `Quick test_scenarios_hull;
+          Alcotest.test_case "scenarios swap" `Quick test_scenarios_swap;
+          Alcotest.test_case "cost needs 5 values" `Quick
+            test_cost_needs_five_values;
+          Alcotest.test_case "cost common scenarios" `Quick
+            test_cost_common_scenarios_only;
+          Alcotest.test_case "cost stratified" `Quick
+            test_cost_stratified_interval;
+          Alcotest.test_case "dropped scenario" `Quick test_dropped_scenario;
           Alcotest.test_case "swap negates" `Quick test_swap_negates;
           Alcotest.test_case "missing variant" `Quick test_no_variant_runs;
+        ] );
+      ( "coverage",
+        [
+          Alcotest.test_case "boundary rates, n = 3 and 5, K = 1, 3 and 10"
+            `Slow test_boundary_coverage;
         ] );
     ]

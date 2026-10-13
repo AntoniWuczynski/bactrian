@@ -62,14 +62,19 @@ let estimand_text = function
        sample. Uncertainty comes from both scenarios and runs."
 
 let gate_text (d : D.t) =
-  match d.gate with
+  match List.filter (fun (m : D.metric_row) -> m.result.in_gate) d.metrics with
   | [] -> "none"
   | gate ->
       String.concat ", "
         (List.map
-           (fun (m, delta) ->
-             Printf.sprintf "%s (threshold %.1f%s)" m (delta *. 100.)
-               (if String.equal m "pass_rate" then " percentage points" else "%"))
+           (fun (m : D.metric_row) ->
+             match m.result.metric with
+             | Pass_rate ->
+                 Printf.sprintf "%s (threshold %.1f percentage points)" m.name
+                   (m.delta *. 100.)
+             | Cost | Latency_p50 | Tokens ->
+                 Printf.sprintf "%s (threshold %s)" m.name
+                   (F.threshold_text m.result.metric m.delta))
            gate)
 
 let fact name value = [ H.dt [ H.txt name ]; H.dd [ H.txt value ] ]
@@ -112,6 +117,17 @@ let missing_table (d : D.t) =
              Num (string_of_int not_run);
            ] ))
        d.missing)
+
+let dropped_note (d : D.t) =
+  match d.dropped with
+  | [] -> []
+  | dropped ->
+      [
+        para ~cls:[ "note" ]
+          ("Left out of the comparison, with no finished run in one arm: "
+         ^ String.concat ", " dropped
+         ^ ". This counts as missing data for the gate.");
+      ]
 
 (* Verdicts *)
 
@@ -488,7 +504,8 @@ let page (d : D.t) =
          H.main
            [
              header d;
-             section "verdicts" "Verdicts" [ verdict_table d; missing_table d ];
+             section "verdicts" "Verdicts"
+               ([ verdict_table d; missing_table d ] @ dropped_note d);
              forest_section d;
              measures_section d;
              behaviour_section d;

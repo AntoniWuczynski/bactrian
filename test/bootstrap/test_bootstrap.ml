@@ -21,38 +21,61 @@ let interval_eq (a : Stats.interval) (b : Stats.interval) =
 let negated (a : Stats.interval) (b : Stats.interval) =
   Float.equal a.lower (-.b.upper) && Float.equal a.upper (-.b.lower)
 
-(* Eight scenarios with known rates; the true suite difference is the mean of
-   the per-scenario differences. *)
-let base_rates = [ 0.3; 0.4; 0.5; 0.55; 0.6; 0.65; 0.7; 0.8 ]
-let cand_rates = [ 0.35; 0.5; 0.5; 0.6; 0.7; 0.65; 0.8; 0.85 ]
-let true_diff = mean (List.map2 ( -. ) cand_rates base_rates)
+(* Stratified log ratio of medians: three scenarios whose costs differ by a
+   factor of e per scenario, lognormal runs (sigma 0.6), candidate 20% dearer
+   in every scenario. The true log ratio of pooled medians is exactly
+   log 1.2. *)
+let scenario_logs = [ -1.; 0.; 1. ]
 
-let simulate_stratified ~seed ~datasets ~n ~resamples ~confidence =
+let lognormal st mu =
+  let u1 = 1. -. Random.State.float st 1. and u2 = Random.State.float st 1. in
+  exp (mu +. (0.6 *. sqrt (-2. *. log u1) *. cos (2. *. Float.pi *. u2)))
+
+let cost_arms st ~n ~factor =
+  List.mapi
+    (fun i mu : B.arm ->
+      {
+        scenario = Printf.sprintf "s%02d" i;
+        values = Array.init n (fun _ -> factor *. lognormal st mu);
+      })
+    scenario_logs
+
+let simulate_log_ratio ~seed ~datasets ~n ~resamples ~confidence =
   let st = rng seed in
   List.init datasets (fun _ ->
-      let baseline = arms st ~n base_rates in
-      let candidate = arms st ~n cand_rates in
-      B.stratified_diff ~rng:st ~resamples ~confidence ~baseline ~candidate)
+      let baseline = cost_arms st ~n ~factor:1. in
+      let candidate = cost_arms st ~n ~factor:1.2 in
+      match
+        B.log_ratio_of_medians ~rng:st ~resamples ~confidence ~baseline
+          ~candidate
+      with
+      | Some (_, i) -> i
+      | None -> Alcotest.fail "positive costs give a defined ratio")
 
+(* Replaces the coverage test of the removed stratified pass-rate bootstrap,
+   which only probed rates 0.3 to 0.85 (review M5); boundary coverage of the
+   pass-rate gate is tested in test/compare. Review §5 measured 0.961 at 0.95
+   for this design, so only a shortfall fails. *)
 let test_coverage () =
   let datasets = 400 and confidence = 0.9 in
+  let truth = log 1.2 in
   let covered =
-    simulate_stratified ~seed:7 ~datasets ~n:20 ~resamples:1000 ~confidence
+    simulate_log_ratio ~seed:7 ~datasets ~n:10 ~resamples:1000 ~confidence
     |> List.filter (fun (i : Stats.interval) ->
-        i.lower <= true_diff && true_diff <= i.upper)
+        i.lower <= truth && truth <= i.upper)
     |> List.length
   in
   let rate = float_of_int covered /. float_of_int datasets in
   let mc_se =
     sqrt (confidence *. (1. -. confidence) /. float_of_int datasets)
   in
-  if Float.abs (rate -. confidence) > 3. *. mc_se then
-    Alcotest.failf "coverage %.4f outside %.2f +- %.4f" rate confidence
+  if rate < confidence -. (3. *. mc_se) then
+    Alcotest.failf "coverage %.4f below %.2f - %.4f" rate confidence
       (3. *. mc_se)
 
 let test_width_shrinks () =
   let avg n =
-    simulate_stratified ~seed:11 ~datasets:100 ~n ~resamples:500 ~confidence:0.9
+    simulate_log_ratio ~seed:11 ~datasets:100 ~n ~resamples:500 ~confidence:0.9
     |> List.map width |> mean
   in
   let w5 = avg 5 and w40 = avg 40 in
@@ -109,10 +132,12 @@ let test_paired_no_wider () =
   let p = mean !paired and u = mean !unpaired in
   if not (p <= u) then Alcotest.failf "paired %.4f wider than unpaired %.4f" p u
 
+let one values : B.arm list = [ { scenario = "s"; values } ]
+
 let test_zero_median () =
   let r ~baseline ~candidate =
-    B.log_ratio_of_medians ~rng:(rng 1) ~resamples:100 ~confidence:0.9 ~baseline
-      ~candidate
+    B.log_ratio_of_medians ~rng:(rng 1) ~resamples:100 ~confidence:0.9
+      ~baseline:(one baseline) ~candidate:(one candidate)
   in
   Alcotest.(check bool)
     "baseline zero" true
@@ -124,7 +149,8 @@ let test_zero_median () =
 let test_log_ratio_point () =
   match
     B.log_ratio_of_medians ~rng:(rng 1) ~resamples:200 ~confidence:0.9
-      ~baseline:[| 1.; 2.; 3. |] ~candidate:[| 2.; 4.; 6. |]
+      ~baseline:(one [| 1.; 2.; 3. |])
+      ~candidate:(one [| 2.; 4.; 6. |])
   with
   | None -> Alcotest.fail "expected Some"
   | Some (e, i) ->
@@ -132,6 +158,19 @@ let test_log_ratio_point () =
       Alcotest.(check bool)
         "contains estimate" true
         (i.lower <= e && e <= i.upper)
+
+let test_log_ratio_pooled_median () =
+  (* The statistic is the median of each arm pooled over scenarios. *)
+  let a s values : B.arm = { scenario = s; values } in
+  match
+    B.log_ratio_of_medians ~rng:(rng 1) ~resamples:200 ~confidence:0.9
+      ~baseline:[ a "x" [| 1.; 2.; 3. |]; a "y" [| 10.; 20.; 30. |] ]
+      ~candidate:[ a "y" [| 30.; 60.; 90. |]; a "x" [| 1.; 2.; 3. |] ]
+  with
+  | None -> Alcotest.fail "expected Some"
+  | Some (e, _) ->
+      (* Medians 6.5 (1 2 3 10 20 30) and 16.5 (1 2 3 30 60 90). *)
+      Alcotest.(check (float 1e-12)) "pooled" (log (16.5 /. 6.5)) e
 
 let test_invalid () =
   let raises name f =
@@ -142,7 +181,7 @@ let test_invalid () =
   in
   let a s v : B.arm = { scenario = s; values = v } in
   raises "mismatched scenarios" (fun () ->
-      B.stratified_diff ~rng:(rng 1) ~resamples:10 ~confidence:0.9
+      B.hierarchical_diff ~rng:(rng 1) ~resamples:10 ~confidence:0.9
         ~baseline:[ a "x" [| 1. |] ]
         ~candidate:[ a "y" [| 1. |] ]);
   raises "empty arm" (fun () ->
@@ -150,7 +189,7 @@ let test_invalid () =
         ~baseline:[ a "x" [||] ]
         ~candidate:[ a "x" [| 1. |] ]);
   raises "duplicate scenario" (fun () ->
-      B.stratified_diff ~rng:(rng 1) ~resamples:10 ~confidence:0.9
+      B.hierarchical_diff ~rng:(rng 1) ~resamples:10 ~confidence:0.9
         ~baseline:[ a "x" [| 1. |]; a "x" [| 0. |] ]
         ~candidate:[ a "x" [| 1. |]; a "x" [| 0. |] ])
 
@@ -200,8 +239,7 @@ let same_data (b : B.arm list) (c : B.arm list) =
       && Array.for_all2 Float.equal x.values y.values)
     (sorted b) (sorted c)
 
-let diff_fns =
-  [ ("stratified", B.stratified_diff); ("hierarchical", B.hierarchical_diff) ]
+let diff_fns = [ ("hierarchical", B.hierarchical_diff) ]
 
 let swap_negates =
   List.map
@@ -229,20 +267,24 @@ let same_seed_identical =
           interval_eq (run ()) (run ())))
     diff_fns
 
-let gen_positive =
-  QCheck.Gen.(array_size (int_range 1 15) (float_range 0.01 100.))
+let gen_positive_arms =
+  QCheck.Gen.(
+    let* m = int_range 1 4 in
+    let arm i =
+      let* values = array_size (int_range 1 15) (float_range 0.01 100.) in
+      return ({ scenario = Printf.sprintf "s%d" i; values } : B.arm)
+    in
+    let* b = flatten_list (List.init m arm) in
+    let* c = flatten_list (List.init m arm) in
+    let* seed = int in
+    return (b, List.rev c, seed))
 
-let arb_positive_pair =
-  QCheck.make
-    ~print:QCheck.Print.(triple (array float) (array float) int)
-    QCheck.Gen.(triple gen_positive gen_positive int)
+let arb_positive_pair = QCheck.make ~print:print_dataset gen_positive_arms
 
 let log_ratio_swap =
   QCheck.Test.make ~name:"log ratio: swap negates exactly" ~count:300
     arb_positive_pair (fun (a, b, seed) ->
-      QCheck.assume
-        (not
-           (Array.length a = Array.length b && Array.for_all2 Float.equal a b));
+      QCheck.assume (not (same_data a b));
       let run baseline candidate =
         B.log_ratio_of_medians ~rng:(rng seed) ~resamples:200 ~confidence:0.9
           ~baseline ~candidate
@@ -267,7 +309,8 @@ let () =
     [
       ( "simulation",
         [
-          Alcotest.test_case "stratified coverage at 0.9" `Slow test_coverage;
+          Alcotest.test_case "stratified log ratio coverage at 0.9" `Slow
+            test_coverage;
           Alcotest.test_case "width shrinks with n" `Slow test_width_shrinks;
           Alcotest.test_case "paired no wider than unpaired" `Slow
             test_paired_no_wider;
@@ -276,6 +319,8 @@ let () =
         [
           Alcotest.test_case "zero median" `Quick test_zero_median;
           Alcotest.test_case "log ratio point" `Quick test_log_ratio_point;
+          Alcotest.test_case "log ratio pooled median" `Quick
+            test_log_ratio_pooled_median;
           Alcotest.test_case "invalid arguments" `Quick test_invalid;
         ] );
       ( "properties",

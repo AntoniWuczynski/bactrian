@@ -231,6 +231,6 @@ A plan names the repeats, or says that none is enough.
 
   $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --scenarios 2 --simulations 100
   115 repeats per scenario and variant (2 scenarios, 230 runs per variant)
-  simulated power 0.870, Monte Carlo standard error 0.034
+  simulated power 0.790, Monte Carlo standard error 0.041
   $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --effect 0.1 --max-repeats 5 --simulations 50 --json | grep -o '"result":"[a-z]*"'
   "result":"unreachable"

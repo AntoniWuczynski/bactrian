@@ -110,6 +110,11 @@ let render_compare_text ~colour (d : D.t) =
     (fun (v, total, errored, not_run) ->
       line "%s: %d runs, %d errored, %d not run" v total errored not_run)
     d.missing;
+  (match d.dropped with
+  | [] -> ()
+  | dropped ->
+      line "left out, no finished run in one arm: %s"
+        (String.concat ", " dropped));
   List.iter
     (fun (bh : D.behaviour) ->
       List.iter

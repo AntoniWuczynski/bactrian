@@ -109,9 +109,9 @@ compare:
   thresholds: { pass_rate: 0.05, cost: 0.20, latency_p50: 0.25 }
 ```
 
-Each metric is a `regression`, an `improvement`, `no-change` or `inconclusive`, depending on whether its whole interval lies beyond, within or across the threshold. Intervals for gate metrics are widened (Bonferroni) so the chance of any false regression stays within the confidence level. The report also lists new tool-call sequences, meaning ones in at least 10% of the candidate's runs and none of the baseline's.
+Each metric is a `regression`, an `improvement`, `no-change` or `inconclusive`, depending on whether its whole interval lies beyond, within or across the threshold. Cost, latency and token thresholds are relative and apply to the log of the ratio, so `cost: 0.20` calls a regression above 20% dearer and an improvement below 16.7% cheaper, and the report states both. Cost and latency need at least 5 values per scenario in each arm, otherwise the metric is undefined. Intervals for gate metrics are widened (Bonferroni) so the chance of any false regression stays within the confidence level. The report also lists new tool-call sequences, meaning ones in at least 10% of the candidate's runs and none of the baseline's.
 
-Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed, 2 that one is inconclusive (only with `--fail-on-inconclusive`), and 3 that missing data could bias the result, because more than 5% of an arm errored or the share of errored and unrun runs differs between the arms by more than 5 percentage points. `--json` prints the verdicts as one JSON object with a schema version.
+Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed, 2 that one is inconclusive (only with `--fail-on-inconclusive`), and 3 that missing data could bias the result, because more than 5% of an arm errored, the share of errored and unrun runs differs between the arms by more than 5 percentage points, or a scenario has no finished run in one arm (it is left out of the comparison and listed). An undefined gate metric counts as inconclusive, never as a pass. `--json` prints the verdicts as one JSON object with a schema version.
 
 `plan` says how many repeats are needed before you run anything, by simulating the same decision rule:
 
@@ -119,7 +119,7 @@ Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed,
 bactrian plan --baseline-rate 0.9 --threshold 0.05 --scenarios 12
 ```
 
-The assumed effect defaults to twice the threshold and the power to 0.8. It answers `unreachable` if no repeat count up to `--max-repeats` (200) gets there. `--population scenarios` also needs `--between-sd`.
+The assumed effect defaults to twice the threshold and the power to 0.8. The power it prints comes from a fresh simulation at the chosen repeat count, so it can sit just below the target. It answers `unreachable` if no repeat count up to `--max-repeats` (200) gets there. `--population scenarios` also needs `--between-sd`.
 
 `report` writes everything as one HTML file with inline styles and charts and no scripts or external assets, so it works offline and follows the system's light or dark theme:
 

@@ -45,6 +45,7 @@ type result = {
   metrics : metric_result list;
   per_scenario : (string * Stats.interval * verdict) list;
   missing : (string * int * int) list;
+  dropped : string list;
   exit : int;
 }
 
@@ -83,28 +84,24 @@ let scale_threshold metric delta =
   | Cost | Latency_p50 | Tokens -> Float.log1p delta
 
 let is_missing (r : run) = Option.is_none r.passed
-let mean xs = Array.fold_left ( +. ) 0. xs /. float_of_int (Array.length xs)
 
-(* Per scenario, the 1.0/0.0 outcomes of the variant's runs that have one. *)
-let outcomes_by_scenario runs variant =
+(* Per scenario, the values [f] gives for the variant's runs that have an
+   outcome. *)
+let by_scenario runs variant f =
   List.fold_left
     (fun acc (r : run) ->
-      match r.passed with
-      | Some b when String.equal r.variant variant ->
-          let v = if b then 1.0 else 0.0 in
+      match f r with
+      | Some v when String.equal r.variant variant && not (is_missing r) ->
           Smap.update r.scenario
             (fun cur -> Some (v :: Option.value cur ~default:[]))
             acc
       | Some _ | None -> acc)
     Smap.empty runs
 
-(* Observed values of [f] over the variant's runs that have an outcome. *)
-let values runs variant f =
-  List.filter_map
-    (fun (r : run) ->
-      if String.equal r.variant variant && not (is_missing r) then f r else None)
-    runs
-  |> Array.of_list
+(* Per scenario, the 1.0/0.0 outcomes of the variant's runs that have one. *)
+let outcomes_by_scenario runs variant =
+  by_scenario runs variant (fun r ->
+      Option.map (fun b -> if b then 1.0 else 0.0) r.passed)
 
 let count_missing runs variant =
   List.fold_left
@@ -124,8 +121,11 @@ let biased (t1, e1, n1) (t2, e2, n2) =
   let m1 = e1 + n1 and m2 = e2 + n2 in
   e1 * 20 > t1 || e2 * 20 > t2 || abs ((m1 * t2) - (m2 * t1)) * 20 > t1 * t2
 
-let value_estimate runs (input : input) ~rng metric ~level =
-  let get f variant = values runs variant f in
+(* M3 of the 2026-10-13 statistics review: below 5 values a scenario's
+   median has too coarse a bootstrap distribution (coverage 0.90 at n = 3). *)
+let min_values = 5
+
+let value_estimate (input : input) ~rng ~common metric ~level =
   let pick =
     match metric with
     | Pass_rate -> fun _ -> None
@@ -133,13 +133,27 @@ let value_estimate runs (input : input) ~rng metric ~level =
     | Latency_p50 -> fun r -> r.latency_ms
     | Tokens -> fun r -> Option.map float_of_int r.tokens
   in
-  let b = get pick input.baseline and c = get pick input.candidate in
-  if Array.length b = 0 || Array.length c = 0 then None
+  let arms variant =
+    let m = by_scenario input.runs variant pick in
+    List.map
+      (fun s : Bootstrap.arm ->
+        {
+          scenario = s;
+          values = Array.of_list (Option.value (Smap.find_opt s m) ~default:[]);
+        })
+      common
+  in
+  let b = arms input.baseline and c = arms input.candidate in
+  if
+    List.exists
+      (fun (a : Bootstrap.arm) -> Array.length a.values < min_values)
+      (b @ c)
+  then None
   else
     Bootstrap.log_ratio_of_medians ~rng ~resamples:input.resamples
       ~confidence:level ~baseline:b ~candidate:c
 
-let undefined metric ~threshold ~level : metric_result =
+let undefined metric ~threshold ~level ~in_gate : metric_result =
   {
     metric;
     estimate = Float.nan;
@@ -147,33 +161,45 @@ let undefined metric ~threshold ~level : metric_result =
     threshold;
     level;
     verdict = Inconclusive { lean = `None };
-    in_gate = false;
+    in_gate;
   }
 
-let pass_rate_estimate (input : input) ~rng ~level ~common b c =
-  let arm_of m s : Bootstrap.arm =
-    { scenario = s; values = Array.of_list (Smap.find s m) }
+let tally xs = (List.length (List.filter (fun x -> x > 0.5) xs), List.length xs)
+let rate (s, n) = float_of_int s /. float_of_int n
+
+let pass_rate_estimate (input : input) ~rng ~level paired =
+  let tb = List.map (fun (_, xs, _) -> tally xs) paired
+  and tc = List.map (fun (_, _, ys) -> tally ys) paired in
+  let sn =
+    Stats.stratified_newcombe_diff ~baseline:tb ~candidate:tc ~confidence:level
   in
-  let barms = List.map (arm_of b) common
-  and carms = List.map (arm_of c) common in
-  let diff =
+  let interval : Stats.interval =
     match input.population with
-    | `Suite -> Bootstrap.stratified_diff
-    | `Scenarios -> Bootstrap.hierarchical_diff
+    | `Suite -> sn
+    | `Scenarios ->
+        let arms pick =
+          List.map
+            (fun ((s, _, _) as p) : Bootstrap.arm ->
+              { scenario = s; values = Array.of_list (pick p) })
+            paired
+        in
+        let h =
+          Bootstrap.hierarchical_diff ~rng ~resamples:input.resamples
+            ~confidence:level
+            ~baseline:(arms (fun (_, xs, _) -> xs))
+            ~candidate:(arms (fun (_, _, ys) -> ys))
+        in
+        {
+          lower = Float.min h.lower sn.lower;
+          upper = Float.max h.upper sn.upper;
+        }
   in
-  let interval =
-    diff ~rng ~resamples:input.resamples ~confidence:level ~baseline:barms
-      ~candidate:carms
+  (* The same sum, in the same order, as the centre of the interval. *)
+  let mean_rate ts =
+    List.fold_left (fun acc t -> acc +. rate t) 0. ts
+    /. float_of_int (List.length ts)
   in
-  let est =
-    mean
-      (Array.of_list
-         (List.map2
-            (fun (x : Bootstrap.arm) (y : Bootstrap.arm) ->
-              mean y.values -. mean x.values)
-            barms carms))
-  in
-  (est, interval)
+  (mean_rate tc -. mean_rate tb, interval)
 
 let run (input : input) =
   let open Result.Syntax in
@@ -186,8 +212,23 @@ let run (input : input) =
   in
   let b = outcomes_by_scenario input.runs input.baseline in
   let c = outcomes_by_scenario input.runs input.candidate in
-  let common =
-    Smap.bindings b |> List.map fst |> List.filter (fun s -> Smap.mem s c)
+  let paired =
+    Smap.bindings b
+    |> List.filter_map (fun (s, xs) ->
+        Option.map (fun ys -> (s, xs, ys)) (Smap.find_opt s c))
+  in
+  let common = List.map (fun (s, _, _) -> s) paired in
+  let dropped =
+    List.filter_map
+      (fun (r : run) ->
+        if
+          (String.equal r.variant input.baseline
+          || String.equal r.variant input.candidate)
+          && not (List.mem r.scenario common)
+        then Some r.scenario
+        else None)
+      input.runs
+    |> List.sort_uniq String.compare
   in
   let n_common = List.length common in
   let* () =
@@ -225,14 +266,12 @@ let run (input : input) =
         in
         match metric with
         | Pass_rate ->
-            let est, interval =
-              pass_rate_estimate input ~rng ~level ~common b c
-            in
+            let est, interval = pass_rate_estimate input ~rng ~level paired in
             judged est interval
         | Cost | Latency_p50 | Tokens -> (
-            match value_estimate input.runs input ~rng metric ~level with
+            match value_estimate input ~rng ~common metric ~level with
             | Some (est, interval) -> judged est interval
-            | None -> undefined metric ~threshold ~level))
+            | None -> undefined metric ~threshold ~level ~in_gate))
       declared
   in
   let pass_threshold =
@@ -245,19 +284,15 @@ let run (input : input) =
   let scenario_level =
     Stats.bonferroni_level ~confidence:input.confidence ~family:n_common
   in
-  let tally m s =
-    let xs = Smap.find s m in
-    (List.length (List.filter (fun x -> x > 0.5) xs), List.length xs)
-  in
   let per_scenario =
     List.map
-      (fun s ->
-        let s1, n1 = tally b s and s2, n2 = tally c s in
+      (fun (s, xs, ys) ->
+        let s1, n1 = tally xs and s2, n2 = tally ys in
         let i =
           Stats.newcombe_diff ~s1 ~n1 ~s2 ~n2 ~confidence:scenario_level
         in
         (s, i, decide ~threshold:pass_threshold ~worse_is:`Lower i))
-      common
+      paired
   in
   let gated pred =
     List.exists (fun (m : metric_result) -> m.in_gate && pred m.verdict) metrics
@@ -274,7 +309,7 @@ let run (input : input) =
   in
   let exit =
     if regression then 1
-    else if biased cb cc then 3
+    else if biased cb cc || not (List.is_empty dropped) then 3
     else if inconclusive && input.fail_on_inconclusive then 2
     else 0
   in
@@ -284,5 +319,6 @@ let run (input : input) =
       metrics;
       per_scenario;
       missing = [ missing_of input.baseline cb; missing_of input.candidate cc ];
+      dropped;
       exit;
     }

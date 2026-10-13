@@ -47,7 +47,15 @@ val exit_meaning : int -> string
 val interval : (float -> string) -> Stats.interval -> string
 (** [lower to upper]. *)
 
+val threshold_text : Compare.metric -> float -> string
+(** A declared threshold as text. Pass rate: ["±10.0 pp"]. Cost, latency and
+    tokens apply [δ] as [log (1 + δ)], which is asymmetric in percent, so both
+    sides are given: [threshold_text Cost 0.2] is
+    ["20.0% dearer, 16.7% cheaper"] (a regression is more than 20% dearer, an
+    improvement more than 16.7% cheaper). Latency says slower and faster, tokens
+    more and fewer. *)
+
 val metric_texts : Report_data.metric_row -> string * string * string
-(** The estimate, the interval and the threshold of a verdict row, as text. Pass
-    rates in percentage points, other metrics as relative changes, ["undefined"]
-    when the metric has no estimate. *)
+(** The estimate, the interval and the threshold ({!threshold_text}) of a
+    verdict row, as text. Pass rates in percentage points, other metrics as
+    relative changes, ["undefined"] when the metric has no estimate. *)

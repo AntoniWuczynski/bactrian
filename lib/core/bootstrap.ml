@@ -91,10 +91,6 @@ let diff fn ~draw_scenarios ~rng ~resamples ~confidence ~baseline ~candidate =
   done;
   orient flipped (percentile ~confidence reps)
 
-let stratified_diff =
-  diff "Bootstrap.stratified_diff" ~draw_scenarios:(fun _ m ->
-      Array.init m Fun.id)
-
 let hierarchical_diff =
   diff "Bootstrap.hierarchical_diff" ~draw_scenarios:(fun rng m ->
       let idx = Array.make m 0 in
@@ -115,23 +111,22 @@ let log_ratio_of_medians ~rng ~resamples ~confidence ~baseline ~candidate =
   let fn = "Bootstrap.log_ratio_of_medians" in
   check_common fn ~resamples ~confidence;
   List.iter
-    (fun v ->
-      check_values fn v;
-      if Array.exists (fun x -> x < 0.) v then
+    (fun (a : arm) ->
+      if Array.exists (fun x -> x < 0.) a.values then
         invalid_arg (fn ^ ": negative value"))
-    [ baseline; candidate ];
-  let mb = Stats.median baseline and mc = Stats.median candidate in
-  if Float.equal mb 0. || Float.equal mc 0. then None
+    (baseline @ candidate);
+  let pairs, flipped = canonical_pairs fn ~baseline ~candidate in
+  (* One arm's values pooled over scenarios, each scenario's block produced by
+     [f] in scenario order. *)
+  let pooled f = Array.concat (Array.to_list (Array.map f pairs)) in
+  let m1 = Stats.median (pooled fst) and m2 = Stats.median (pooled snd) in
+  if Float.equal m1 0. || Float.equal m2 0. then None
   else
-    let flipped = compare_values baseline candidate > 0 in
-    let first, second =
-      if flipped then (candidate, baseline) else (baseline, candidate)
-    in
     let reps = Array.make resamples 0. in
     for r = 0 to resamples - 1 do
-      let m1 = Stats.median (resample rng first) in
-      let m2 = Stats.median (resample rng second) in
-      reps.(r) <- log m2 -. log m1
+      let r1 = Stats.median (pooled (fun (x, _) -> resample rng x)) in
+      let r2 = Stats.median (pooled (fun (_, y) -> resample rng y)) in
+      reps.(r) <- log r2 -. log r1
     done;
     (* Both resampled medians zero gives log 0 - log 0 = NaN: the ratio is
        undefined for that replicate, so it is dropped. *)
@@ -140,4 +135,8 @@ let log_ratio_of_medians ~rng ~resamples ~confidence ~baseline ~candidate =
         (List.filter (fun x -> not (Float.is_nan x)) (Array.to_list reps))
     in
     if Array.length defined = 0 then None
-    else Some (log mc -. log mb, orient flipped (percentile ~confidence defined))
+    else
+      let est = log m2 -. log m1 in
+      Some
+        ( (if flipped then -.est else est),
+          orient flipped (percentile ~confidence defined) )

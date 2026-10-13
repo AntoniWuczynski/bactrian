@@ -136,6 +136,9 @@ type t = {
   resamples : int;
   missing : (string * int * int * int) list;
       (** Variant, runs planned, errored, not run (with unfinished). *)
+  dropped : string list;
+      (** {!Compare.result.dropped}: scenarios with no finished run in one arm.
+      *)
   exit : int;
   metrics : metric_row list;
   scenarios : scenario_row list;
