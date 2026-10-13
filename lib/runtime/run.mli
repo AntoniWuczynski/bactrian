@@ -96,8 +96,18 @@ type config = {
   mcp : Mcp_proxy.config list;
       (** The run's MCP servers, see {!Model_proxy.run}. When there is one, the
           agent gets {!Mcp_proxy.url_variable} (for [mcp-shim]) and, for each
-          HTTP server, {!Mcp_proxy.http_variable} with its proxied URL. *)
+          HTTP server, {!Mcp_proxy.http_variable} with its proxied URL.
+          [meta.json] keeps each server's name, transport and policy, and
+          nothing of its command, environment or URL ({!Mcp_meta}). *)
 }
+
+val recorded_mcp :
+  Store.t -> from:string -> (Mcp_proxy.config list, string) Stdlib.result
+(** The MCP servers a replay of the recording [from] (a run ID or a run
+    directory, as in {!type-replay}) needs, from its [meta.json] (see
+    {!Mcp_meta.replaying}): the names and transports it recorded, every one
+    served from the recording. A recording without the field, or without a
+    [meta.json], has none. *)
 
 type result = {
   run_id : string;

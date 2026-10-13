@@ -428,14 +428,7 @@ let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
         Stdio { argv; env; cwd = Some Eio.Path.(fs / dir) }
     | Mcp_http { url } -> Http { url = Uri.of_string url }
   in
-  let policy : Mcp_proxy.policy =
-    match s.policy with
-    | Record -> Record
-    | Replay -> Replay
-    | Passthrough -> Passthrough
-    | Block -> Block
-  in
-  { name; server; policy }
+  { name; server; policy = s.policy }
 
 let run_config ~fs (l : loaded) (scenario : Scenario.t) ~scenario_dir
     (variant : Experiment.variant) : Run.config =

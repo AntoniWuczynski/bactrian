@@ -28,3 +28,5 @@ One port and one token per run cover models and tools, so the sandbox has one lo
 A miss on the MCP channel never switches a run to live, because the matcher only does that on the model channel.
 
 Server-to-client JSON-RPC requests from a legacy stdio server (sampling, roots) cannot reach the agent through the shim, whose transport is one POST per client message, and are dropped. 2026-07-28 servers must not send them. Notifications are forwarded when recording and dropped when replaying. They are not written to the cassette, because they have no response to replay and would otherwise be reported as unconsumed.
+
+A run's `meta.json` lists each MCP server's name, transport (`stdio` or `http`) and policy, and never its command, environment or URL, which may hold secrets. A replay needs the transport only to tell the agent which servers exist (`BACTRIAN_MCP_URL`, and `BACTRIAN_MCP_HTTP_<NAME>` for an HTTP one), so `bactrian replay` reads the list from the recording and serves every server from it, with no flags. `bactrian record` declares its servers with `--mcp-stdio`, `--mcp-http` and `--mcp-policy`, checked as an experiment's are.

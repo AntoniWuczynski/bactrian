@@ -29,7 +29,7 @@ type server =
       (** The server's real endpoint. A request to [.../mcp-http/<name>/x] goes
           to [url]'s path followed by [/x], with the agent's query. *)
 
-type policy =
+type policy = Experiment.policy =
   | Record
       (** Follows the run: live and recorded in a recording run, answered from
           the recording in a replay, live and unrecorded in a passthrough run.

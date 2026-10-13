@@ -179,48 +179,58 @@ let recorded_turns store ~run_id =
            (Ok [])
       |> Result.map List.rev
 
-(* The patterns a recording was made under, from its meta.json. Recordings
-   from before the patterns were saved have none. *)
-let recorded_patterns store ~run_id =
+(* A recording's meta.json fields. Recordings from before a field was saved
+   lack it, and a recording with no meta.json has none of them. *)
+let recorded_meta store ~run_id =
   let* dir = Result.map_error store_error (Store.run_dir store ~run_id) in
   match Eio.Path.load Eio.Path.(dir / "meta.json") with
-  | exception Eio.Io _ -> Ok ([], [])
+  | exception Eio.Io _ -> Ok []
   | text -> (
-      let strings key = function
-        | `Assoc fields -> (
-            match List.assoc_opt key fields with
-            | None -> Ok []
-            | Some (`List items) ->
-                List.fold_right
-                  (fun item acc ->
-                    let* rest = acc in
-                    match item with
-                    | `String s -> Ok (s :: rest)
-                    | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _
-                    | `Assoc _ ->
-                        Error
-                          (Printf.sprintf
-                             "recording %s: meta.json %s: not a string" run_id
-                             key))
-                  items (Ok [])
-            | Some
-                ( `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _
-                | `Assoc _ ) ->
-                Error
-                  (Printf.sprintf "recording %s: meta.json %s: not a list"
-                     run_id key))
-        | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _
-          ->
-            Error
-              (Printf.sprintf "recording %s: meta.json is not an object" run_id)
-      in
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m ->
           Error (Printf.sprintf "recording %s: meta.json: %s" run_id m)
-      | json ->
-          let* normalise = strings "normalise" json in
-          let* redact = strings "redact" json in
-          Ok (normalise, redact))
+      | `Assoc fields -> Ok fields
+      | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _ ->
+          Error
+            (Printf.sprintf "recording %s: meta.json is not an object" run_id))
+
+(* The patterns a recording was made under. *)
+let recorded_patterns store ~run_id =
+  let* fields = recorded_meta store ~run_id in
+  let strings key =
+    match List.assoc_opt key fields with
+    | None -> Ok []
+    | Some (`List items) ->
+        List.fold_right
+          (fun item acc ->
+            let* rest = acc in
+            match item with
+            | `String s -> Ok (s :: rest)
+            | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _
+            | `Assoc _ ->
+                Error
+                  (Printf.sprintf "recording %s: meta.json %s: not a string"
+                     run_id key))
+          items (Ok [])
+    | Some
+        (`Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `Assoc _)
+      ->
+        Error
+          (Printf.sprintf "recording %s: meta.json %s: not a list" run_id key)
+  in
+  let* normalise = strings "normalise" in
+  let* redact = strings "redact" in
+  Ok (normalise, redact)
+
+let recorded_mcp store ~from =
+  let run_id = recording_id from in
+  let* fields = recorded_meta store ~run_id in
+  match List.assoc_opt "mcp" fields with
+  | None -> Ok []
+  | Some json ->
+      Result.map_error
+        (Printf.sprintf "recording %s: meta.json mcp: %s" run_id)
+        (Mcp_meta.replaying json)
 
 (* The agent's environment *)
 
@@ -372,6 +382,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
        ("tokens", match tokens with Some n -> `Int n | None -> `Null);
        ("normalise", `List (List.map (fun p -> `String p) normalise));
        ("redact", `List (List.map (fun p -> `String p) redact));
+       ("mcp", Mcp_meta.to_json config.mcp);
        ("unenforced", `List (List.map (fun w -> `String w) config.unenforced));
      ]
     @ match replay_of with Some r -> [ ("replay_of", `String r) ] | None -> [])

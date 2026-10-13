@@ -279,6 +279,37 @@ let test_reserved_env () =
        (doc ~variants:{|"variants": [{"name": "a", "env": {"SIM_NOW": "x"}}]|}
           ""))
 
+(* The checks the command line shares with the experiment loader. *)
+let test_mcp_checks () =
+  let valid = Experiment.valid_mcp_name in
+  Alcotest.(check (list bool))
+    "names"
+    [ true; true; false; false; false ]
+    (List.map valid [ "a-b_9"; "X"; ""; "a/b"; "a b" ]);
+  Alcotest.(check (list bool))
+    "urls"
+    [ true; true; false; false; false ]
+    (List.map Experiment.valid_mcp_url
+       [ "http://x"; "https://x/mcp"; "http://"; "ftp://x"; "x" ]);
+  Alcotest.(check (option string))
+    "clash" (Some "BACTRIAN_MCP_HTTP_A_B")
+    (Experiment.mcp_http_clash ~http_names:[ "a-b"; "a_b" ] "a-b");
+  Alcotest.(check (option string))
+    "no clash with itself" None
+    (Experiment.mcp_http_clash ~http_names:[ "a-b"; "c" ] "a-b");
+  Alcotest.(check (list string))
+    "policies round trip"
+    [ "record"; "replay"; "passthrough"; "block" ]
+    (List.map
+       (fun (n, _) ->
+         match Experiment.policy_of_name n with
+         | Some p -> Experiment.policy_name p
+         | None -> "none")
+       Experiment.policies);
+  Alcotest.(check bool)
+    "unknown policy" true
+    (Option.is_none (Experiment.policy_of_name "maybe"))
+
 let test_thresholds_in_range () =
   Alcotest.check strings "zero and too large"
     [ "compare.thresholds.cost"; "compare.thresholds.pass_rate" ]
@@ -324,6 +355,8 @@ let () =
           case "root not an object" [ "" ] "3";
           case "unknown field" [ "colour" ] (doc {|, "colour": 1|});
           Alcotest.test_case "unknown message" `Quick test_message;
+          Alcotest.test_case "checks shared with the command line" `Quick
+            test_mcp_checks;
           Alcotest.test_case "reserved variant variables" `Quick
             test_reserved_env;
           Alcotest.test_case "baseline with other errors" `Quick

@@ -58,14 +58,26 @@ type t = {
 
 type error = Scenario.error
 
-let policy =
-  enum ~what:"policy"
-    [
-      ("record", Record);
-      ("replay", Replay);
-      ("passthrough", Passthrough);
-      ("block", Block);
-    ]
+let policies =
+  [
+    ("record", Record);
+    ("replay", Replay);
+    ("passthrough", Passthrough);
+    ("block", Block);
+  ]
+
+let policy_name = function
+  | Record -> "record"
+  | Replay -> "replay"
+  | Passthrough -> "passthrough"
+  | Block -> "block"
+
+let policy_of_name name =
+  List.find_map
+    (fun (n, p) -> if String.equal n name then Some p else None)
+    policies
+
+let policy = enum ~what:"policy" policies
 
 let timeouts ~path c =
   object_ ~path c (fun r ->
@@ -123,12 +135,15 @@ let mcp_policy ~path c =
          or passthrough"
   | Record | Passthrough | Block -> Ok p
 
-let mcp_url ~path c =
-  let* url = non_empty_string ~path c in
+let valid_mcp_url url =
   let after prefix =
     String.starts_with ~prefix url && String.length url > String.length prefix
   in
-  if after "http://" || after "https://" then Ok url
+  after "http://" || after "https://"
+
+let mcp_url ~path c =
+  let* url = non_empty_string ~path c in
+  if valid_mcp_url url then Ok url
   else fail ~path "expected an http:// or https:// URL"
 
 let mcp_server ~path c =
@@ -178,27 +193,37 @@ let valid_mcp_name name =
          | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
        name
 
+let mcp_http_clash ~http_names name =
+  let v = mcp_http_variable name in
+  if
+    List.exists
+      (fun other ->
+        (not (String.equal other name))
+        && String.equal v (mcp_http_variable other))
+      http_names
+  then Some v
+  else None
+
 let mcp_servers ~path c =
   let* servers = assoc mcp_server ~path c in
-  let variable (name, s) =
-    match s.transport with
-    | Mcp_http _ -> Some (name, mcp_http_variable name)
-    | Mcp_stdio _ -> None
+  let http_names =
+    List.filter_map
+      (fun (name, s) ->
+        match s.transport with Mcp_http _ -> Some name | Mcp_stdio _ -> None)
+      servers
   in
-  let variables = List.filter_map variable servers in
   let check (name, s) =
     let at message = fail ~path:(field_path path name) message in
     if not (valid_mcp_name name) then
       at "a server name has letters, digits, '_' and '-' only"
     else
-      match variable (name, s) with
-      | Some (_, v)
-        when List.exists
-               (fun (other, w) ->
-                 (not (String.equal other name)) && String.equal v w)
-               variables ->
-          at (Printf.sprintf "%s would also be another server's variable" v)
-      | Some _ | None -> Ok ()
+      match s.transport with
+      | Mcp_stdio _ -> Ok ()
+      | Mcp_http _ -> (
+          match mcp_http_clash ~http_names name with
+          | Some v ->
+              at (Printf.sprintf "%s would also be another server's variable" v)
+          | None -> Ok ())
   in
   let+ (_ : unit list) = collect (List.map check servers) in
   servers

@@ -8,7 +8,7 @@ type server =
     }
   | Http of { url : Uri.t }
 
-type policy = Record | Replay | Passthrough | Block
+type policy = Experiment.policy = Record | Replay | Passthrough | Block
 type config = { name : string; server : server; policy : policy }
 
 let url_variable = "BACTRIAN_MCP_URL"

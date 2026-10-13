@@ -144,3 +144,21 @@ let contains s sub =
 
 let strs = Alcotest.(list string)
 let record ctx = ok (execute ctx (config ()))
+
+(* The command line, run in the context's directory. *)
+
+let bactrian_bin = Filename.concat (Sys.getcwd ()) (Sys.getenv "BACTRIAN_BIN")
+
+let cli ctx args =
+  let out = Filename.concat (Sys.getcwd ()) "cli-out.txt" in
+  let cmd =
+    Printf.sprintf "cd %s && %s %s > %s 2>&1"
+      (Filename.quote
+         (Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn ctx.dir)))
+      (Filename.quote bactrian_bin)
+      args (Filename.quote out)
+  in
+  let code = Sys.command cmd in
+  let text = read out in
+  Sys.remove out;
+  (code, text)

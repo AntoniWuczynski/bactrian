@@ -1,0 +1,6 @@
+(test
+ (name test_mcp_flags)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime uri alcotest)
+ (flags
+  (:standard -w -70)))

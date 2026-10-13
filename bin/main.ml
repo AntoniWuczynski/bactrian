@@ -67,7 +67,9 @@ let live_problem caps =
 
 (* Running *)
 
-let run_command ~json ~live (config : Run.config) =
+(* [config] gets the store, because a replay reads the recording's MCP servers
+   from it. *)
+let run_command ~json ~live (config : Store.t -> (Run.config, string) result) =
   match read_caps () with
   | Error m -> Cli.fail ~json Output.exit_usage m
   | Ok caps -> (
@@ -93,10 +95,11 @@ let run_command ~json ~live (config : Run.config) =
               with
               | Error m -> Cli.fail ~json Output.exit_environment m
               | Ok proxy -> (
+                  let store = Store.create ~root in
                   match
                     Interrupt.run (fun () ->
-                        Run.execute ~env ~proxy ~store:(Store.create ~root)
-                          ~ledger config)
+                        Result.bind (config store) (fun config ->
+                            Run.execute ~env ~proxy ~store ~ledger config))
                   with
                   | Error signal ->
                       prerr_endline
@@ -213,6 +216,31 @@ let total_timeout =
     & info [ "total-timeout" ] ~docv:"SECONDS"
         ~doc:"Longest the whole run may take.")
 
+let mcp_flag name ~docv ~doc =
+  Arg.(value & opt_all string [] & info [ name ] ~docv ~doc)
+
+let mcp_stdio =
+  mcp_flag Mcp_flags.stdio_name ~docv:"NAME=JSON"
+    ~doc:
+      "Declare the stdio MCP server $(i,NAME), started with the command given \
+       as a JSON array of strings, for example \
+       $(b,'weather=[\"python3\",\"weather.py\"]'). It runs in the current \
+       directory with an empty environment beyond PATH, HOME and LANG. Repeat \
+       for several servers."
+
+let mcp_http =
+  mcp_flag Mcp_flags.http_name ~docv:"NAME=URL"
+    ~doc:
+      "Declare the Streamable HTTP MCP server $(i,NAME) at $(i,URL) (http:// \
+       or https://). Repeat for several servers."
+
+let mcp_policy =
+  mcp_flag Mcp_flags.policy_name ~docv:"NAME=POLICY"
+    ~doc:
+      "Set the policy of the declared server $(i,NAME) to $(b,record) \
+       (default), $(b,passthrough) (live, not recorded) or $(b,block) (every \
+       request refused). Repeat for several servers."
+
 let agent_argv ~pos_after =
   let docv = "AGENT" in
   let doc = "The agent command and its arguments, after $(b,--)." in
@@ -222,7 +250,7 @@ let agent_argv ~pos_after =
       Arg.(non_empty & pos_right (n - 1) string [] & info [] ~docv ~doc)
 
 let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
-    ~replay ~env_passthrough ~turn_timeout ~total_timeout : Run.config =
+    ~replay ~env_passthrough ~turn_timeout ~total_timeout ~mcp : Run.config =
   {
     agent;
     cwd;
@@ -242,8 +270,10 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     unenforced = [];
     turn_timeout;
     total_timeout;
-    mcp = [];
+    mcp;
   }
+
+let ( let* ) = Result.bind
 
 let positive name v =
   if Float.is_finite v && v > 0. then Ok ()
@@ -257,21 +287,25 @@ let record_cmd =
           ~doc:"A scripted user turn. Repeat for several turns, in order.")
   in
   let run json agent cwd turns scenario variant sim_now timezone env_passthrough
-      turn_timeout total_timeout =
+      turn_timeout total_timeout mcp_stdio mcp_http mcp_policy =
     match
-      match turns with
-      | [] -> Error "record needs at least one --turn"
-      | _ :: _ ->
-          Result.bind (positive "--turn-timeout" turn_timeout) (fun () ->
-              positive "--total-timeout" total_timeout)
+      let* () =
+        match turns with
+        | [] -> Error "record needs at least one --turn"
+        | _ :: _ ->
+            let* () = positive "--turn-timeout" turn_timeout in
+            positive "--total-timeout" total_timeout
+      in
+      Mcp_flags.parse ~stdio:mcp_stdio ~http:mcp_http ~policy:mcp_policy
     with
     | Error m -> `Error (false, m)
-    | Ok () ->
+    | Ok mcp ->
         `Ok
-          (run_command ~json ~live:true
-             (build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now
-                ~timezone ~replay:None ~env_passthrough ~turn_timeout
-                ~total_timeout))
+          (run_command ~json ~live:true (fun _ ->
+               Ok
+                 (build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now
+                    ~timezone ~replay:None ~env_passthrough ~turn_timeout
+                    ~total_timeout ~mcp)))
   in
   let info =
     Cmd.info "record" ~exits:Cli.exits
@@ -287,6 +321,13 @@ let record_cmd =
              $(b,BACTRIAN_CAP_OPENROUTER) (USD, default 0). Real keys come \
              from $(b,OPENAI_API_KEY), $(b,ANTHROPIC_API_KEY), \
              $(b,GEMINI_API_KEY) and $(b,OPENROUTER_API_KEY).";
+          `P
+            "The agent's MCP servers are declared with $(b,--mcp-stdio) and \
+             $(b,--mcp-http). The agent reaches a stdio server through \
+             $(b,bactrian mcp-shim) and an HTTP one through its \
+             $(b,BACTRIAN_MCP_HTTP_)$(i,NAME) variable. Their traffic is \
+             recorded with the model's, and $(b,bactrian replay) serves it \
+             from the recording.";
         ]
   in
   Cmd.v info
@@ -295,7 +336,8 @@ let record_cmd =
         (const run $ Cli.json
         $ agent_argv ~pos_after:`Start
         $ cwd $ turns $ scenario $ variant $ sim_now $ timezone
-        $ env_passthrough $ turn_timeout $ total_timeout))
+        $ env_passthrough $ turn_timeout $ total_timeout $ mcp_stdio $ mcp_http
+        $ mcp_policy))
 
 type matcher_choice = Strict | Until_divergence | Fuzzy
 
@@ -371,11 +413,13 @@ let replay_cmd =
           | Strict | Fuzzy _ -> false
         in
         `Ok
-          (run_command ~json ~live
-             (build_config ~agent ~cwd ~turns:[] ~scenario ~variant ~sim_now
-                ~timezone
-                ~replay:(Some { Run.from; matcher; allow_reorder; timing })
-                ~env_passthrough ~turn_timeout ~total_timeout))
+          (run_command ~json ~live (fun store ->
+               let* mcp = Run.recorded_mcp store ~from in
+               Ok
+                 (build_config ~agent ~cwd ~turns:[] ~scenario ~variant ~sim_now
+                    ~timezone
+                    ~replay:(Some { Run.from; matcher; allow_reorder; timing })
+                    ~env_passthrough ~turn_timeout ~total_timeout ~mcp)))
   in
   let info =
     Cmd.info "replay" ~exits:Cli.exits
@@ -386,7 +430,9 @@ let replay_cmd =
           `P
             "Runs $(i,AGENT) with the turns of the recording and answers its \
              model requests from the recording in $(i,RUN), looked up in \
-             ./.bactrian/runs. A request the recording lacks is a divergence.";
+             ./.bactrian/runs. A request the recording lacks is a divergence. \
+             The MCP servers the recording used are served from it too, with \
+             no flags: the real servers are never started.";
         ]
   in
   Cmd.v info

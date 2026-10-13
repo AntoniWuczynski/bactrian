@@ -98,6 +98,7 @@ let ok = function Ok v -> v | Error e -> Alcotest.failf "execute: %s" e
 
 type world = {
   up : F.t;
+  dir : string;  (** The world's directory, with its [.bactrian] store. *)
   execute :
     argv:string list ->
     ?replay:Run.replay ->
@@ -168,14 +169,14 @@ let with_world name f =
          ~upstream:(fun _ -> Uri.of_string (F.base_url up))
          ~env ~proxy ~store ~ledger config)
   in
-  f { up; execute }
+  f { up; dir = Filename.concat (Sys.getcwd ()) (snd dir); execute }
 
 let strict from : Run.replay =
   { from; matcher = Strict; allow_reorder = false; timing = P.Fast }
 
 let acceptance agent () =
   let argv = agent.argv () in
-  with_world agent.name @@ fun { up; execute } ->
+  with_world agent.name @@ fun { up; execute; dir = _ } ->
   let execute = execute ~argv in
   (* (a) record *)
   let recorded = execute () in
@@ -251,7 +252,8 @@ let mcp_acceptance agent era () =
   let argv = agent.argv () in
   let log = Filename.temp_file "fake-mcp" ".log" in
   Fun.protect ~finally:(fun () -> Sys.remove log) @@ fun () ->
-  with_world (agent.name ^ "-mcp-" ^ era.label) @@ fun { up; execute } ->
+  with_world (agent.name ^ "-mcp-" ^ era.label)
+  @@ fun { up; execute; dir = _ } ->
   let variant_env =
     [
       ( "AGENT_MCP_COMMAND",
@@ -300,6 +302,80 @@ let mcp_acceptance agent era () =
     "same joins in the replay's trace" [ "joined" ]
     (List.map (member_string "mcp") (entries "tool_call" replayed))
 
+(* The same through the command line's own pieces. [bactrian record] cannot
+   reach the fake upstream (a live record needs TLS and the providers' real
+   addresses), so the record goes through the library with the servers the
+   record flags declare, and the replay is the real [bactrian replay], which
+   gets the servers from the recording's meta.json and takes no MCP flags. *)
+let mcp_flags_acceptance agent era () =
+  let argv = agent.argv () in
+  let log = Filename.temp_file "fake-mcp" ".log" in
+  Fun.protect ~finally:(fun () -> Sys.remove log) @@ fun () ->
+  with_world (agent.name ^ "-mcp-flags-" ^ era.label)
+  @@ fun { up; dir; execute } ->
+  let shim_command =
+    Yojson.Safe.to_string
+      (`List
+         (List.map
+            (fun s -> `String s)
+            [ executable "BACTRIAN_EXE"; "mcp-shim"; "weather" ]))
+  in
+  let variant_env =
+    [
+      ("AGENT_MCP_COMMAND", shim_command); ("AGENT_MCP_PROTOCOL", era.protocol);
+    ]
+  in
+  let fake_command =
+    Yojson.Safe.to_string
+      (`List
+         (List.map
+            (fun s -> `String s)
+            [ executable "FAKE_MCP_SERVER"; "--era"; era.fake; "--log"; log ]))
+  in
+  let mcp =
+    match
+      Mcp_flags.parse ~stdio:[ "weather=" ^ fake_command ] ~http:[] ~policy:[]
+    with
+    | Ok mcp -> mcp
+    | Error m -> Alcotest.failf "flags: %s" m
+  in
+  let recorded = execute ~argv ~variant_env ~mcp () in
+  Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  Alcotest.(check int) "server saw" era.requests (List.length (lines log));
+  (* The replay finds no server: the fake's path is nowhere in its command. *)
+  List.iter (fun (k, v) -> Unix.putenv k v) variant_env;
+  let out = Filename.concat dir "replay-out.json" in
+  let command =
+    Printf.sprintf
+      "cd %s && %s replay %s --json --env AGENT_MCP_COMMAND --env \
+       AGENT_MCP_PROTOCOL --env %s -- %s > %s"
+      (Filename.quote dir)
+      (Filename.quote (executable "BACTRIAN_EXE"))
+      (Filename.quote (Filename.basename recorded.run_dir))
+      prompt_variable
+      (String.concat " " (List.map Filename.quote argv))
+      (Filename.quote out)
+  in
+  Alcotest.(check int) "bactrian replay exit status" 0 (Sys.command command);
+  let json = Yojson.Safe.from_string (read out) in
+  let open Yojson.Safe.Util in
+  Alcotest.(check string)
+    "replay outcome" "passed"
+    (to_string (member "kind" (member "outcome" json)));
+  Alcotest.(check int)
+    "no divergences" 0
+    (List.length (to_list (member "divergences" json)));
+  Alcotest.(check int) "server untouched" era.requests (List.length (lines log));
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
+  let meta =
+    Yojson.Safe.from_file
+      (Filename.concat (to_string (member "run_dir" json)) "meta.json")
+  in
+  Alcotest.(check string)
+    "the replay's meta.json lists the server, without its command"
+    {|[{"name":"weather","transport":"stdio","policy":"replay"}]|}
+    (Yojson.Safe.to_string (member "mcp" meta))
+
 let () =
   Alcotest.run "acceptance"
     [
@@ -315,6 +391,16 @@ let () =
                 Alcotest.test_case
                   (a.name ^ ", " ^ e.label)
                   `Slow (mcp_acceptance a e))
+              eras)
+          agents );
+      ( "mcp flags and bactrian replay",
+        List.concat_map
+          (fun a ->
+            List.map
+              (fun e ->
+                Alcotest.test_case
+                  (a.name ^ ", " ^ e.label)
+                  `Slow (mcp_flags_acceptance a e))
               eras)
           agents );
     ]

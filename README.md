@@ -120,11 +120,25 @@ The agent has to talk to bactrian instead of the real server. For a stdio server
 
 The shim reads JSON-RPC lines on its stdin, hands each one to bactrian and writes the replies to its stdout. It finds bactrian through `BACTRIAN_MCP_URL`, which bactrian sets for the agent, and exits when its stdin closes. For an HTTP server, give the agent the URL in `BACTRIAN_MCP_HTTP_<NAME>` as the server's address. The name is upper-cased and every character that is not a letter or a digit becomes `_`, so `search` is `BACTRIAN_MCP_HTTP_SEARCH`. Both variables are set only when `intercept` includes `mcp` (it does by default) and the experiment has servers, and a variant cannot set them. The example agents read `AGENT_MCP_COMMAND` (a JSON array such as `["bactrian", "mcp-shim", "weather"]`) and `AGENT_MCP_PROTOCOL` (`2026-07-28` by default, or `2025-11-25`), and then run their weather tool on that server.
 
+`bactrian record` declares its servers with flags instead of an experiment, all repeatable:
+
+```sh
+bactrian record --turn "What is the weather in Paris?" \
+  --mcp-stdio 'weather=["python3","tools/weather_server.py"]' \
+  --mcp-http search=https://search.example.com/mcp \
+  --mcp-policy search=passthrough \
+  -- node agent.js
+```
+
+`--mcp-stdio NAME=JSON` takes the server's command as a JSON array of strings after the `=`. `--mcp-http NAME=URL` takes an `http://` or `https://` URL. `--mcp-policy NAME=POLICY` is `record` (the default), `passthrough` or `block` for a server declared by one of the other two flags, and `replay` is refused for the same reason as in an experiment. Names and URLs are checked as in an experiment, and a usage error (exit status 64) names the flag at fault. A stdio server runs in the current directory with only `PATH`, `HOME` and `LANG`, so a server that needs more environment or another directory has to be declared in an experiment. The agent gets `BACTRIAN_MCP_URL` and `BACTRIAN_MCP_HTTP_<NAME>` as under `bactrian run`.
+
+Every run's `meta.json` has an `mcp` list with each server's name, transport (`stdio` or `http`) and policy, and never its command, environment or URL, which may hold secrets. `bactrian replay` reads that list from the recording and serves every server from it, so it takes no MCP flags and never starts a real server. A server that was blocked stays blocked, and one that was `passthrough` left nothing to replay, so its requests are divergences. A recording made before the list existed replays with no MCP servers.
+
 Each request and its response become one exchange in the cassette. The key is built from the server, the method and the parameters, without the JSON-RPC id and without the `_meta` entries that change from one client or run to the next (client information, trace context, progress tokens). Matching ignores order, so parallel calls answered in a different order still replay, and a replayed answer carries the id of the request it answers. A request that was never recorded is a divergence, and when it is a handshake (a legacy client against a modern recording, or the reverse) the divergence says so. Notifications have no response and are not recorded.
 
 In the trace, a `tools/call` is joined to the model's tool call of the same turn by tool name and equal arguments. The tool call's `mcp` field says `joined`, `joined_by_order` (several identical calls, matched in order) or `unjoined` (no MCP record, as for any tool that is not on an MCP server). An MCP call with no model call to join shows up as an agent event named `mcp_call`, and assertions count only the model's tool calls.
 
-Known limits. HTTP replies are buffered, so an event stream answering a POST reaches the agent whole. GET and DELETE answer 405, which means no server-to-client stream and no session termination. A legacy stdio server cannot send requests of its own (sampling, roots) through the shim, and they are dropped. `bactrian record` and `bactrian replay` do not set up MCP servers, so MCP traffic is recorded and replayed through `bactrian run` only. The servers run as the same user as bactrian until the sandbox arrives.
+Known limits. HTTP replies are buffered, so an event stream answering a POST reaches the agent whole. GET and DELETE answer 405, which means no server-to-client stream and no session termination. A legacy stdio server cannot send requests of its own (sampling, roots) through the shim, and they are dropped. The servers run as the same user as bactrian until the sandbox arrives.
 
 ## Comparing variants
 

@@ -75,6 +75,88 @@ Replaying a run that does not exist is a configuration error.
   bactrian: no cassette for run "no-such-run"
   [64]
 
+The MCP flags of record are checked before anything else, and each error names
+the flag. The helper prints the exit status and the message on one line.
+
+  $ mcp() { bactrian record --turn hi "$@" -- true 2> err.txt; echo "[$?]"; grep -v '^Usage\|^Try' err.txt | tr -s ' \n' '  ' | sed 's/ $//'; echo; }
+  $ mcp --mcp-stdio weather
+  [64]
+  bactrian: --mcp-stdio "weather": expected NAME=VALUE
+  $ mcp --mcp-stdio 'a/b=["x"]'
+  [64]
+  bactrian: --mcp-stdio: the server name "a/b" has letters, digits, '_' and '-' only
+  $ mcp --mcp-stdio 'a=[x'
+  [64]
+  bactrian: --mcp-stdio a: the command is not valid JSON (Line 1, bytes 1-2: Invalid token 'x')
+  $ mcp --mcp-stdio 'a={}'
+  [64]
+  bactrian: --mcp-stdio a: the command is not a JSON array of strings
+  $ mcp --mcp-stdio 'a=[]'
+  [64]
+  bactrian: --mcp-stdio a: the command is empty
+  $ mcp --mcp-stdio 'a=["x",1]'
+  [64]
+  bactrian: --mcp-stdio a: the command has an item that is not a string
+  $ mcp --mcp-http a=ftp://x
+  [64]
+  bactrian: --mcp-http a: "ftp://x" is not an http:// or https:// URL
+  $ mcp --mcp-http a=http://
+  [64]
+  bactrian: --mcp-http a: "http://" is not an http:// or https:// URL
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-http a=http://x
+  [64]
+  bactrian: --mcp-http a: the server a is already declared by --mcp-stdio
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-stdio 'a=["y"]'
+  [64]
+  bactrian: --mcp-stdio a: the server a is already declared by --mcp-stdio
+  $ mcp --mcp-http a-b=http://x --mcp-http a_b=http://y
+  [64]
+  bactrian: --mcp-http a-b: BACTRIAN_MCP_HTTP_A_B would also be another server's variable
+  $ mcp --mcp-policy a=block
+  [64]
+  bactrian: --mcp-policy a: no such server: declare it with --mcp-stdio or --mcp-http
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-policy a
+  [64]
+  bactrian: --mcp-policy "a": expected NAME=VALUE
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-policy a=replay
+  [64]
+  bactrian: --mcp-policy a: replay needs a recording and a record run makes one: use record, passthrough or block
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-policy a=maybe
+  [64]
+  bactrian: --mcp-policy a: "maybe" is not a policy: use record, passthrough or block
+  $ mcp --mcp-stdio 'a=["x"]' --mcp-policy a=block --mcp-policy a=record
+  [64]
+  bactrian: --mcp-policy a: given twice
+
+Valid flags get as far as the environment checks, and a stdio server does not
+need an HTTP one beside it.
+
+  $ mcp --mcp-stdio 'a=["x","y"]' --mcp-http b=https://x.example/mcp --mcp-policy b=passthrough --mcp-policy a=block
+  [69]
+  bactrian: no provider has a spend cap above 0: set BACTRIAN_CAP_OPENAI, BACTRIAN_CAP_ANTHROPIC, BACTRIAN_CAP_GEMINI, BACTRIAN_CAP_OPENROUTER (USD) for the providers this run calls
+
+Replay takes no MCP flags: the recording says which servers it had.
+
+  $ bactrian replay some-run --mcp-stdio 'a=["x"]' -- true 2> /dev/null
+  [64]
+  $ bactrian replay some-run --mcp-http a=http://x -- true 2> /dev/null
+  [64]
+  $ bactrian replay some-run --mcp-policy a=block -- true 2> /dev/null
+  [64]
+
+A recording whose meta.json has a malformed mcp field cannot be replayed, and
+one without the field replays as before (here it only lacks a cassette).
+
+  $ mkdir -p .bactrian/runs/r1
+  $ echo '{"mcp": 3}' > .bactrian/runs/r1/meta.json
+  $ bactrian replay r1 -- true
+  bactrian: recording r1: meta.json mcp: not a list
+  [64]
+  $ echo '{"outcome": "passed"}' > .bactrian/runs/r1/meta.json
+  $ bactrian replay r1 -- true
+  bactrian: no cassette for run "r1"
+  [64]
+
 The run and check commands document the same statuses.
 
   $ bactrian run --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -E '^ +[0-9]+ +(on|when)' | cut -c1-30

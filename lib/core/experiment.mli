@@ -101,6 +101,27 @@ val mcp_http_variable : string -> string
     uppercased, with every character outside [A-Z0-9] written as ['_']: the
     variable that carries an HTTP server's proxied URL to the agent. *)
 
+val valid_mcp_name : string -> bool
+(** Letters, digits, ['_'] and ['-'], and not empty: a server's name becomes a
+    URL path segment and, for an HTTP server, the suffix of its variable. *)
+
+val valid_mcp_url : string -> bool
+(** An [http://] or [https://] URL with something after the scheme. *)
+
+val mcp_http_clash : http_names:string list -> string -> string option
+(** [mcp_http_clash ~http_names name] is [name]'s {!mcp_http_variable} when
+    another name of [http_names] has the same one, so the agent could not tell
+    the two servers apart. *)
+
+val policies : (string * policy) list
+(** Every policy with its name in an experiment file: [record], [replay],
+    [passthrough] and [block]. *)
+
+val policy_name : policy -> string
+
+val policy_of_name : string -> policy option
+(** The inverse of {!policy_name}. *)
+
 val unenforced : t -> string list
 (** One line per setting this build accepts but does not enforce yet (spec §5.3:
     the sandbox under [auto], egress and faketime), each starting with the
