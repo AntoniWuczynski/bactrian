@@ -121,8 +121,9 @@ let biased (t1, e1, n1) (t2, e2, n2) =
   let m1 = e1 + n1 and m2 = e2 + n2 in
   e1 * 20 > t1 || e2 * 20 > t2 || abs ((m1 * t2) - (m2 * t1)) * 20 > t1 * t2
 
-(* M3 of the 2026-10-13 statistics review: below 5 values a scenario's
-   median has too coarse a bootstrap distribution (coverage 0.90 at n = 3). *)
+(* Below 5 values a scenario's median has too coarse a bootstrap
+   distribution: with 3 values, a nominal 0.95 interval covered the truth only
+   about 90% of the time in simulation. *)
 let min_values = 5
 
 let value_estimate (input : input) ~rng ~common metric ~level =

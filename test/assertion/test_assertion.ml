@@ -270,7 +270,7 @@ let test_max_tokens () =
   is_pass "at limit" (A.Max_tokens 135) t;
   fails "over" ~mentions:[ "135" ] (A.Max_tokens 134) t
 
-(* Review M9: a call without usage must not pass a token limit. *)
+(* A call without usage must not pass a token limit. *)
 let test_max_tokens_usage_gap () =
   let t =
     entries
@@ -315,13 +315,13 @@ let test_no_egress () =
     (A.No_egress [ "evil.example" ]) t;
   is_pass "empty trace" (A.No_egress [ "evil.example" ]) (entries [ Done ])
 
-(* Review M7: nothing intercepts egress yet, so a clean trace proves nothing. *)
+(* Nothing intercepts egress yet, so a clean trace proves nothing. *)
 let test_no_egress_unverifiable () =
   fails "not intercepted" ~egress_intercepted:false
     ~mentions:[ "cannot be verified"; "not intercepted" ]
     (A.No_egress [ "evil.example" ]) (entries [ Done ])
 
-(* Review m14: list elements are matched multiset-wise. *)
+(* List elements are matched multiset-wise. *)
 let test_args_partial_multiset () =
   let two = {|{"attendees":["bob@x","bob@x"]}|} in
   let one = {|{"attendees":["bob@x"]}|} in

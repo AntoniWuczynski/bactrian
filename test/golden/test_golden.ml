@@ -137,7 +137,7 @@ let test_unreadable_and_invalid_traces () =
     [ ("missing.jsonl", G.Pass); ("bad.jsonl", G.Fail) ]
     (offenders r)
 
-(* Review M6: assertions nobody exercised are not "ok". *)
+(* Assertions nobody exercised are not "ok". *)
 let test_no_golden_traces_is_an_error () =
   with_dir @@ fun env dir ->
   setup dir (scenario ~pass:"[]" ~fail:"[]" ());
@@ -170,7 +170,7 @@ let test_nothing_to_check () =
   Alcotest.(check bool) "passes" true (G.passed r);
   Alcotest.(check (list string)) "no warnings" [] r.warnings
 
-(* Review m7: the date a trace is priced at comes from the trace itself. *)
+(* The date a trace is priced at comes from the trace itself. *)
 let test_trace_date () =
   let entries =
     List.map

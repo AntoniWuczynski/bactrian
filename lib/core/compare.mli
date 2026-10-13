@@ -5,7 +5,7 @@
     under [`Scenarios] it is the hull (smallest interval containing both) of
     {!Bootstrap.hierarchical_diff} and {!Stats.stratified_newcombe_diff}, since
     the bootstrap alone collapses to zero width when every run of both arms
-    passes (statistics review of 2026-10-13, M1).
+    passes, and then calls a confident [No_change] on no evidence.
 
     Cost, median latency and tokens are compared on
     [log (median_candidate / median_baseline)] over the scenarios both arms have

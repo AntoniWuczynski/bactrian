@@ -1,5 +1,5 @@
 (* What a run writes about itself: verdicts, divergences, cost, and the
-   patterns a replay needs (review M1, M4, m12, and the M6 follow-ups). *)
+   patterns a replay needs. *)
 
 open Bactrian_runtime
 open Run_support
@@ -20,7 +20,7 @@ let verdict_names (r : Run.result) =
     (fun item -> J.(to_string (member "verdict" item)))
     J.(to_list (member "items" (json r "verdicts.json")))
 
-(* M1: a checker that cannot give a verdict is a fault outside the agent. *)
+(* A checker that cannot give a verdict is a fault outside the agent. *)
 let test_checker_error_is_errored =
   with_ctx "checker-error" @@ fun ctx ->
   let broken = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ] in
@@ -44,7 +44,7 @@ let test_checker_fail_is_failed =
   in
   Alcotest.(check string) "kind" "failed" (Run.outcome_kind r.outcome)
 
-(* m12: an agent failure still gets its assertions evaluated and written. *)
+(* An agent failure still gets its assertions evaluated and written. *)
 let test_failed_run_has_verdicts =
   with_ctx "failed-verdicts" @@ fun ctx ->
   let r =
@@ -67,7 +67,7 @@ let test_failed_run_has_verdicts =
       Alcotest.failf "expected Failed, got %s" (outcome_name r));
   Alcotest.check strs "verdicts.json" [ "pass"; "pass" ] (verdict_names r)
 
-(* M6 follow-up: divergences are persisted with their diff paths. *)
+(* Divergences are persisted with their diff paths. *)
 let test_divergences_file =
   with_ctx "divergences-file" @@ fun ctx ->
   let recorded = record ctx in
@@ -106,7 +106,7 @@ let test_divergences_file =
     "no temporary file" false
     (Sys.file_exists (file r "divergences.json.tmp"))
 
-(* M6 follow-up: cost, latency and tokens are stored once, in meta.json. *)
+(* Cost, latency and tokens are stored once, in meta.json. *)
 let test_meta_totals =
   with_ctx "meta-totals" @@ fun ctx ->
   let r = record ctx in
@@ -133,7 +133,7 @@ let test_meta_totals =
     "latency" true
     (J.(to_float (member "latency_ms" meta)) >= 0.)
 
-(* M4: the patterns a run recorded under are saved, and a replay uses them. *)
+(* The patterns a run recorded under are saved, and a replay uses them. *)
 let replays_with_patterns name ~record_config ~key =
   with_ctx name @@ fun ctx ->
   let recorded = ok (execute ctx record_config) in

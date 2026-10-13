@@ -209,7 +209,7 @@ let stratified_never_zero_width =
       && i.upper <= 1.)
 
 let test_stratified_unanimous () =
-  (* Review §3.1: every run passing in both arms must not look certain. *)
+  (* Every run passing in both arms must not look certain. *)
   let all_pass k n = List.init k (fun _ -> (n, n)) in
   List.iter
     (fun (k, n, half_width) ->

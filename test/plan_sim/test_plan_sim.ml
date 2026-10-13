@@ -49,7 +49,7 @@ let test_found_n_reaches_power () =
   | P.Unreachable _ -> Alcotest.fail "unexpected Unreachable"
 
 let test_no_change_at_ceiling () =
-  (* M2: with the old zero-width interval, one run per arm "proved" no change
+  (* A zero-width interval would let one run per arm "prove" no change
      between two 100% arms. The stratified Newcombe interval of n/n against
      n/n is +-z^2/(n + z^2), inside +-0.05 from n = 73 at 0.95. *)
   let a =

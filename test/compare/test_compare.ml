@@ -299,7 +299,7 @@ let test_undefined_median () =
   in
   let m = metric r C.Cost in
   Alcotest.(check bool) "undefined estimate" true (Float.is_nan m.estimate);
-  (* M4: a declared gate metric that is undefined stays in the gate as
+  (* A declared gate metric that is undefined stays in the gate as
      inconclusive, so it cannot pass silently. *)
   Alcotest.(check bool) "still in gate" true m.in_gate;
   Alcotest.check verdict_t "inconclusive" (inc `None) m.verdict;
@@ -314,7 +314,7 @@ let test_undefined_median () =
   Alcotest.(check int) "exit with flag" 2 r.exit
 
 let test_undefined_without_values () =
-  (* Review §7: gate [pass_rate; cost] with no cost data at all. *)
+  (* Gate [pass_rate; cost] with no cost data at all. *)
   let r =
     ok
       (C.run
@@ -348,7 +348,7 @@ let tallies k ~n ~kb ~kc =
   List.init k (fun _ -> (kb, n)) |> fun b -> (b, List.init k (fun _ -> (kc, n)))
 
 let test_suite_is_stratified_newcombe () =
-  (* B1: the suite interval is the stratified Newcombe interval at the gate
+  (* The suite interval is the stratified Newcombe interval at the gate
      level, independent of the seed. *)
   List.iter
     (fun (k, n, kb, kc) ->
@@ -363,7 +363,8 @@ let test_suite_is_stratified_newcombe () =
     [ (1, 3, 3, 3); (3, 5, 5, 4); (3, 10, 6, 5); (10, 3, 3, 3) ]
 
 let test_unanimous_not_certain () =
-  (* Review §3.1: unanimous arms gave [0, 0] and a confident No_change. *)
+  (* A percentile bootstrap gives unanimous arms the interval [0, 0] and a
+     confident No_change. *)
   List.iter
     (fun (population, k, n, too_few) ->
       let r =
@@ -385,8 +386,8 @@ let test_unanimous_not_certain () =
         (match m.verdict with
         | No_change -> true
         | Regression | Improvement | Inconclusive _ -> false))
-    (* 200 passing runs per arm do support No_change at ±0.05 (review §3.2):
-       the interval is ±0.027. *)
+    (* 200 passing runs per arm do support No_change at ±0.05: the interval
+       is ±0.027. *)
     [
       (`Suite, 1, 3, true);
       (`Suite, 1, 10, true);
@@ -481,7 +482,7 @@ let cost_runs ~n variant scale s =
         ~cost:(Some (scale *. (1. +. (float_of_int i /. 100.)))))
 
 let test_cost_needs_five_values () =
-  (* M3: a common scenario with fewer than 5 values in an arm makes the metric
+  (* A common scenario with fewer than 5 values in an arm makes the metric
      undefined. *)
   let rs n =
     cost_runs ~n:10 "A" 1. "s00"
@@ -497,7 +498,7 @@ let test_cost_needs_five_values () =
   Alcotest.(check bool) "4 values" false (defined 4)
 
 let test_cost_common_scenarios_only () =
-  (* M3: values from a scenario the other arm lacks are not pooled. *)
+  (* Values from a scenario the other arm lacks are not pooled. *)
   let common =
     List.concat_map
       (fun (s, scale) ->
@@ -514,7 +515,7 @@ let test_cost_common_scenarios_only () =
     (est (common @ extra))
 
 let test_cost_stratified_interval () =
-  (* M3: scenario costs differing by 100x no longer widen the interval: every
+  (* Scenario costs differing by 100x no longer widen the interval: every
      resample keeps each scenario's run count. *)
   let rs =
     List.concat_map
@@ -527,7 +528,7 @@ let test_cost_stratified_interval () =
   Alcotest.check verdict_t "regression" Regression m.verdict
 
 let test_dropped_scenario () =
-  (* Review m1: 30 scenarios x 10 runs, the candidate errors on every run of
+  (* 30 scenarios x 10 runs, the candidate errors on every run of
      one scenario (3.3% of its runs, under the 5% trip-wire). *)
   let sc = scenarios 30 in
   let lost = List.nth sc 29 in
@@ -559,8 +560,8 @@ let test_dropped_scenario () =
   let r = ok (C.run (input (suite_runs ~n:10 ~kb:10 ~kc:10 ()))) in
   Alcotest.(check (list string)) "none dropped" [] r.dropped
 
-(* M5 regression (review 2026-10-13): seeded simulations at the boundary,
-   where a percentile bootstrap collapsed to zero width. Each cell draws
+(* Seeded simulations at the boundary, where a percentile bootstrap
+   collapses to zero width. Each cell draws
    [datasets] experiments with K scenarios and n runs per scenario and arm,
    true rates [p_base] and [p_cand] in every scenario, and runs the real gate
    at 0.95 with a 0.05 threshold. The true difference is 2δ, so any No_change

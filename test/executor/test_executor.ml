@@ -49,7 +49,7 @@ let test_plan_interleaved () =
     (List.map (fun (x : E.planned) -> x.variant) of_s0
     <> List.sort compare (List.map (fun (x : E.planned) -> x.variant) of_s0))
 
-(* Review m13: manifests of old experiments are only resumable while the same
+(* Manifests of old experiments are only resumable while the same
    seed gives the same plan, so a change of the stdlib generator or of the
    allocation must show up here. *)
 let test_plan_pinned () =

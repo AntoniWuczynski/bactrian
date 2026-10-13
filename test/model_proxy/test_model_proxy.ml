@@ -624,7 +624,7 @@ let redact_setting =
   Alcotest.(check bool) "secret gone" false (contains text "tok_abcdef");
   Alcotest.(check bool) "placeholder present" true (contains text "<secret:1>")
 
-(* Review M5: a pattern that matches across JSON syntax must not break the
+(* A pattern that matches across JSON syntax must not break the
    request, nor the stored recording. *)
 let redact_wide_pattern =
   Alcotest.test_case "a wide redact pattern leaves the request valid JSON"
@@ -656,7 +656,7 @@ let redact_wide_pattern =
     "placeholder present" true
     (contains (Canon.to_string e.canonical) "<secret:1>")
 
-(* Review m19: normalise must not merge two secrets into one marker. *)
+(* Normalise must not merge two secrets into one marker. *)
 let normalise_keeps_placeholders =
   Alcotest.test_case "normalise leaves redaction placeholders alone" `Quick
   @@ with_ctx "normalise-placeholders"

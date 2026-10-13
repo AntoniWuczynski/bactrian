@@ -203,8 +203,8 @@ let test_gate_without_threshold =
         (String.length m > 0 && String.contains m '"')
   | Ok _ -> Alcotest.fail "an unknown gate metric must be refused"
 
-(* The follow-ups of review M6: cost, latency, tokens and divergences are read
-   from what the run wrote, not recomputed. *)
+(* Cost, latency, tokens and divergences are read from what the run wrote,
+   not recomputed. *)
 let test_reads_what_the_run_wrote =
   with_experiment "reads" @@ fun ctx ->
   let l = load ctx in

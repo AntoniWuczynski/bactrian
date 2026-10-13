@@ -195,7 +195,7 @@ let test_message () =
   | [ { path = "colour"; message = "unknown field" } ] -> ()
   | es -> Alcotest.failf "got %a" pp_errors es
 
-(* Review M7: settings this build parses but does not enforce are listed. *)
+(* Settings this build parses but does not enforce are listed. *)
 let test_unenforced () =
   let names t =
     List.map
@@ -217,7 +217,7 @@ let test_unenforced () =
     [ "egress"; "clock" ]
     (names (decoded (doc {|, "sandbox": "strict"|})))
 
-(* Review m16: a variant cannot set a variable bactrian sets itself. *)
+(* A variant cannot set a variable bactrian sets itself. *)
 let test_reserved_env () =
   let reserved = Experiment.reserved_env in
   Alcotest.(check bool) "TZ" true (List.mem "TZ" reserved);
@@ -235,7 +235,7 @@ let test_reserved_env () =
        (doc ~variants:{|"variants": [{"name": "a", "env": {"SIM_NOW": "x"}}]|}
           ""))
 
-(* Review m1: a bad baseline is reported together with the other errors. *)
+(* A bad baseline is reported together with the other errors. *)
 let test_baseline_with_other_errors () =
   Alcotest.check strings "both reported"
     [ "compare.baseline"; "repeats" ]
