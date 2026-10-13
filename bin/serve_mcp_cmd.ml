@@ -28,6 +28,9 @@ let serve ~bactrian_exe (policy : Policy.t) =
     match Launch_env.scrub ~exe:bactrian_exe with
     | Error m -> fail m
     | Ok () -> (
+        (* A call or job that ends in an exception logs its backtrace to
+           standard error. *)
+        Printexc.record_backtrace true;
         match (Confine.create (Sys.getcwd ()), private_channel ()) with
         | exception Unix.Unix_error (e, _, _) -> fail (Unix.error_message e)
         | Error m, _ -> fail m
