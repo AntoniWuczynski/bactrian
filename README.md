@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
 
@@ -16,7 +16,7 @@ Run `bactrian doctor` to see whether this host is ready (see [Checking the host]
 
 An agent talks to bactrian over a small JSON Lines protocol on stdin and stdout: it receives `start`, one `turn` per user message and `end`, and answers each turn with a `reply`. bactrian points the agent's model SDK at its own proxy through the usual base-URL variables (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) and gives it placeholder API keys. The real keys are never placed in the agent's environment and are added to requests on their way upstream. The agent runs inside a sandbox (see [Sandbox](#sandbox)), which stops it from reaching anything but bactrian's proxy and from writing outside its run. [`examples/agents/`](examples/agents/) has a TypeScript agent (build it with `pnpm install --dir examples/agents/typescript` and `pnpm --dir examples/agents/typescript build`) and a Python agent managed by uv.
 
-Record a run (live spending needs an explicit cap per provider, in US dollars). This needs a build with HTTPS support, which does not exist yet, so for now it cannot reach a real provider:
+Record a run (live spending needs an explicit cap per provider, in US dollars). The real providers need a build with HTTPS support, which does not exist yet, so for now this reaches only a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)):
 
 ```sh
 BACTRIAN_CAP_OPENAI=0.50 bactrian record --turn "What is the weather in Paris?" -- node examples/agents/typescript/dist/agent.js
@@ -76,7 +76,7 @@ bactrian check scenarios/*.yaml
 bactrian run experiment.yaml
 ```
 
-`check` exits 1 and lists the offending traces (or the missing golden traces) otherwise, and both commands exit 64 on a configuration error, printing every mistake of every file as `file:line:column` in the order it appears. `check --json` prints one JSON object instead, with each scenario's offenders, errors and warnings. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`. A run that passed, failed or diverged is never repeated. A run that never started, was interrupted, was not run because a spend cap was reached or errored (a fault of bactrian's own, or a checker that could not give a verdict) is run again under a new run ID, and the manifest keeps the old one under `previous_run_ids`. So raising `caps_usd` and resuming fills in the runs that the cap held back. The resume is refused, naming what changed, if the experiment file (apart from `caps_usd` and `concurrency`), the agent, a scenario file or the price file is different from when the experiment started. Only one process can run an experiment at a time. Each finished run's directory also gets a `verdicts.json` with the result of every assertion and checker. A failing assertion or checker makes a passing run `failed`, while a checker that crashes, hangs or prints something that is not a verdict makes it `errored`, which is left out of the pass rates and listed separately. `run` exits 70 if any run errored, so a continuous integration job sees it. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls real providers, so for now it needs HTTPS support that is not built yet.
+`check` exits 1 and lists the offending traces (or the missing golden traces) otherwise, and both commands exit 64 on a configuration error, printing every mistake of every file as `file:line:column` in the order it appears. `check --json` prints one JSON object instead, with each scenario's offenders, errors and warnings. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`. A run that passed, failed or diverged is never repeated. A run that never started, was interrupted, was not run because a spend cap was reached or errored (a fault of bactrian's own, or a checker that could not give a verdict) is run again under a new run ID, and the manifest keeps the old one under `previous_run_ids`. So raising `caps_usd` and resuming fills in the runs that the cap held back. The resume is refused, naming what changed, if the experiment file (apart from `caps_usd` and `concurrency`), the agent, a scenario file or the price file is different from when the experiment started. Only one process can run an experiment at a time. Each finished run's directory also gets a `verdicts.json` with the result of every assertion and checker. A failing assertion or checker makes a passing run `failed`, while a checker that crashes, hangs or prints something that is not a verdict makes it `errored`, which is left out of the pass rates and listed separately. `run` exits 70 if any run errored, so a continuous integration job sees it. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls providers live, so for now it reaches only a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)).
 
 Four more fields shape a run. A scenario's `fixtures` names a directory, relative to the scenario file, whose files are copied into the run's `BACTRIAN_STATE_DIR` before the agent starts, and a directory that does not exist is a configuration error. In the experiment, `normalise` lists regular expressions that are masked out of each model request before it is keyed, so two runs that differ only in, say, a date still match on replay, and each run's `meta.json` counts the masks that fired in `findings.normalise_masks`. `redact` lists further regular expressions whose matches are replaced by numbered placeholders in the cassette, on top of the provider key formats. They are matched against the strings inside the JSON of each request and response, one string at a time, so a wide pattern such as `Bearer .+` stops at the end of its string and cannot damage the JSON around it. `normalise` leaves those placeholders alone. `pricing` names a YAML file, relative to the experiment, that overrides or extends the built-in price table:
 
@@ -93,6 +93,37 @@ prices:
 ```
 
 An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
+
+## Local and self-hosted models
+
+Each provider's address can be replaced with an environment variable, to use a server you run yourself (Ollama, vLLM, LM Studio, LiteLLM or any OpenAI-compatible one) or a gateway: `BACTRIAN_UPSTREAM_OPENAI`, `BACTRIAN_UPSTREAM_ANTHROPIC`, `BACTRIAN_UPSTREAM_GEMINI` and `BACTRIAN_UPSTREAM_OPENROUTER`. A plain `http` URL works in a build without HTTPS support. The agent is not changed: it still calls bactrian's proxy through the usual base-URL variables, and the proxy forwards to your server.
+
+Ollama serves its OpenAI-compatible API under `/v1` at `http://localhost:11434` ([Ollama's documentation](https://docs.ollama.com/api/openai-compatibility)). The `/v1` is part of the path the OpenAI SDKs already send, so leave it out of the variable:
+
+```sh
+export BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:11434
+export OPENAI_API_KEY=ollama           # any value, see below
+export BACTRIAN_CAP_OPENAI=1           # for record; an experiment uses caps_usd
+bactrian run experiment.yaml
+```
+
+- The value must be an absolute `http` or `https` URL with a host, an optional port and an optional path prefix, for a gateway that mounts the provider under a path. User information, a query and a fragment are refused with exit 64, and the message names the variable.
+- bactrian still requires the provider's key variable when the provider has a spend cap above 0, and the cap itself, whatever the upstream. A server that needs no key is given any placeholder value, as Ollama's documentation does. The key is sent to the upstream, so use a placeholder, or a real key only over HTTPS or to your own machine: `bactrian doctor` warns about plain `http` to another machine.
+- The "no TLS support" refusal (exit 69) applies only when a provider the run calls has an `https` upstream.
+- A model with no price is refused, not treated as free: the agent gets a 402, and the run is `errored` with "no price for model llama3.2". Give the model a price in the experiment's price file, with zero rates for a local model. `record` and `replay` use the built-in prices only, so use an experiment for a local model.
+
+```yaml
+# prices.yaml
+version: 1
+prices:
+  - model: llama3.2
+    provider: openai
+    rates: { input: 0, cached_input: 0, cache_write: 0, output: 0 }
+    max_output: 4096
+    max_input: 131072
+```
+
+- `meta.json` records each overridden upstream under `upstreams` (provider name to URL), so a run against a local server can be told from one against the real provider. A strict replay, which calls nobody, records none. `bactrian doctor` prints an `upstream-<provider>` line for each. See [decision 0012](docs/decisions/0012-upstream-override.md).
 
 ## HTTP-mode agents
 
@@ -231,7 +262,8 @@ skip  tls: HTTPS support is not built in
 - `agent` (with `--experiment`): the agent command is found on `PATH`, or relative to the experiment file's directory. For an HTTP-mode agent the URL is well-formed. It is not contacted.
 - `sandbox`: the sandbox works here. It runs the same probe as a run's preflight and prints the same cause and fix, including the two AppArmor commands on Linux. An unavailable sandbox is a `fail` under `sandbox: strict` in the experiment and a `warn` otherwise. `off` and HTTP-mode agents are `skip`.
 - `clock`: with an experiment, the clock label its command agent would get (`enforced`, or `contract-only` with the reason). Without one, whether `libfaketime` is found on Linux. Contract-only on macOS is expected and is `ok`.
-- `tls`: `skip` while this build has no HTTPS support, or `fail` when the experiment calls a provider or an agent over HTTPS.
+- `upstream-<provider>` (only for a provider whose `BACTRIAN_UPSTREAM_<PROVIDER>` is set): the URL. A `warn` for plain `http` to a host other than this machine, because the API key is sent to it unencrypted.
+- `tls`: `skip` while this build has no HTTPS support, or `fail` when the experiment calls a provider whose upstream is an `https` URL, or an agent over HTTPS.
 - `ca` and `node`: `skip`, because egress interception is not built.
 
 `--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file is reported with its location and exits 64, as for `bactrian run`.

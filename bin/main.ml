@@ -223,7 +223,11 @@ let record_cmd =
              $(b,BACTRIAN_CAP_ANTHROPIC), $(b,BACTRIAN_CAP_GEMINI) and \
              $(b,BACTRIAN_CAP_OPENROUTER) (USD, default 0). Real keys come \
              from $(b,OPENAI_API_KEY), $(b,ANTHROPIC_API_KEY), \
-             $(b,GEMINI_API_KEY) and $(b,OPENROUTER_API_KEY).";
+             $(b,GEMINI_API_KEY) and $(b,OPENROUTER_API_KEY). \
+             $(b,BACTRIAN_UPSTREAM_OPENAI), $(b,BACTRIAN_UPSTREAM_ANTHROPIC), \
+             $(b,BACTRIAN_UPSTREAM_GEMINI) and \
+             $(b,BACTRIAN_UPSTREAM_OPENROUTER) replace a provider's address \
+             with an $(b,http) or $(b,https) URL, for a local server.";
           `P
             "The agent's MCP servers are declared with $(b,--mcp-stdio) and \
              $(b,--mcp-http). The agent reaches a stdio server through \
@@ -351,11 +355,12 @@ let run_cmd =
              $(b,repeats) times, at most $(b,concurrency) at a time, in a \
              seeded blocked and interleaved order. Each run is judged by its \
              scenario's assertions and checkers. Spend is capped per provider \
-             by $(b,caps_usd). Progress is kept in \
-             ./.bactrian/experiments/ID/manifest.json. Interrupt with Ctrl-C \
-             and continue with $(b,--resume). The exit status is 70 if a run \
-             errored, else 1 if a run failed, else 2 if a run did not happen, \
-             else 0.";
+             by $(b,caps_usd). A provider's address can be replaced with \
+             $(b,BACTRIAN_UPSTREAM_)$(i,PROVIDER), for a local server. \
+             Progress is kept in ./.bactrian/experiments/ID/manifest.json. \
+             Interrupt with Ctrl-C and continue with $(b,--resume). The exit \
+             status is 70 if a run errored, else 1 if a run failed, else 2 if \
+             a run did not happen, else 0.";
         ]
   in
   Cmd.v info
