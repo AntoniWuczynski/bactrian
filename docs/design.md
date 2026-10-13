@@ -2,7 +2,7 @@
 
 This document describes how bactrian is designed. Sections are numbered so that code comments can point at them. Parts of the design that the current build does not implement are marked as planned. The README's Status section says what works today, and [`decisions/`](decisions/) records individual choices with their reasons.
 
-Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), HTTPS for HTTP-mode agents, the `ca` command, published JSON Schemas, and the MCP server mode (`serve-mcp`).
+Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), HTTPS for HTTP-mode agents, the `ca` command and published JSON Schemas.
 
 ## 1. Purpose
 
@@ -22,7 +22,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 
 1. A toy agent in TypeScript and one in Python can be recorded, replayed strictly with zero divergence, and a prompt change produces exactly the expected divergence report.
 2. An experiment comparing two live model variants over several scenarios with repeats produces a verdict per metric (`regression`, `improvement`, `no-change`, `inconclusive`) whose statistics match reference implementations.
-3. A coding agent can drive all of this through the MCP server (planned).
+3. A coding agent can drive all of this through the MCP server.
 4. Prebuilt binaries run on macOS arm64 and Linux x86_64 and arm64 (planned).
 5. Every run is sandboxed by default where the host allows it, and otherwise visibly labelled `unsandboxed`. In sandboxed runs, escape attempts (direct network, writes outside the run, reads of credential paths) fail on macOS and Linux, and real API keys never enter the sandbox.
 
@@ -32,7 +32,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 |---|---|
 | Name | `bactrian`, after the two-humped camel, because most of what it does is compare two things. |
 | Licence | Apache-2.0 |
-| Interfaces | Command line first, with `--json` on every command. An MCP server mapping onto the command line is planned. |
+| Interfaces | Command line first, with `--json` on every command. `bactrian serve-mcp` offers the same commands as MCP tools whose results are that JSON (decision record 0011). |
 | Agent contract | Two driving protocols, both interactive JSON Lines from the start: command mode (subprocess, standard input and output) and HTTP mode (a long-lived server, one POST per message, run ID and state namespace on every request, the per-run environment in the `start` message; decision 0008). |
 | Model comparison | v1: the agent picks the model from variant environment variables. Later: bactrian translates between protocols to swap models underneath an agent. |
 | Provider protocols | Five adapters: OpenAI Chat Completions (also used for OpenRouter), OpenAI Responses, Anthropic Messages, Gemini `generateContent` and Gemini Interactions. |
@@ -84,8 +84,8 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. |
 | `Agent_clock` | Finds `libfaketimeMT.so.1`, decides whether the agent's clock is enforced, and adds the `LD_PRELOAD` and `FAKETIME` variables to its environment (section 5 step 2, decision record 0009). |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
-| `Launch_env` | Re-executes `record`, `replay` and `run` with an allowlisted launch environment and restores the rest from an unlinked temporary file (section 5.2, decision record 0010). |
-| `Proc_util`, `Process_group`, `Interrupt` | Helpers shared by the modules that start processes: paths, finding an executable on `PATH`, exit-status text, ending a process group (SIGTERM, then SIGKILL), and signal handlers. |
+| `Launch_env` | Re-executes `record`, `replay`, `run` and `serve-mcp` with an allowlisted launch environment and restores the rest from an unlinked temporary file (section 5.2, decision record 0010). |
+| `Proc_util`, `Process_group`, `Interrupt` | Helpers shared by the modules that start processes: paths, finding an executable on `PATH`, exit-status text, ending a process group (SIGTERM, then SIGKILL), and signal handlers, or a per-caller stop trigger in their place (the MCP server's jobs). |
 | `Checker_runner` | Runs external checker commands with the trace on standard input. Running checkers sandboxed is planned. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
 | `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |
@@ -93,11 +93,24 @@ One binary, one process. Pure logic and input and output live in separate librar
 
 ### `bactrian.app`
 
-One module per command (`Record_command`, `Replay_command`, `Run_command`, `Check_command`, `Compare_command`, `Plan_command`, `Report_command`, `Doctor_command`). Each takes a typed `request` record and returns a typed result or a `Command_error.t` that carries its exit status, and the commands that have a `--json` output also have the `to_json` that prints it. A command that reports while it works takes an `~on_progress` callback (`Progress.t`: a warning, or the ID of the experiment that has started) and prints nothing itself. `Single_run` is what `record` and `replay` share, and `Comparison` what `compare` and `report` share.
+One module per command (`Record_command`, `Replay_command`, `Run_command`, `Check_command`, `Compare_command`, `Plan_command`, `Report_command`, `Doctor_command`), and `Divergences_command`, which reads one run's stored divergences for the MCP server. Each takes a typed `request` record and returns a typed result or a `Command_error.t` that carries its exit status, and the commands that have a `--json` output also have the `to_json` that prints it. A command that reports while it works takes an `~on_progress` callback (`Progress.t`: a warning, or the ID of the experiment that has started) and prints nothing itself. `Single_run` is what `record` and `replay` share, and `Comparison` what `compare` and `report` share. The commands that start agents take an optional stop trigger, which stands in for SIGINT and SIGTERM.
+
+### `bactrian.server`
+
+The MCP server (decision record 0011), kept apart from the command library so that the protocol does not leak into the commands. It maps one-to-one onto the command line: each tool calls a `bactrian.app` command and returns its `to_json`.
+
+| Module | Responsibility |
+|---|---|
+| `Mcp_dispatch` | Pure. The protocol era of a connection, fixed by its first request (`initialize` for 2025-11-25 and earlier, `_meta` with a protocol version for 2026-07-28), the answers to `server/discover`, `initialize`, `ping` and `tools/list`, the checks on `tools/call`, and the JSON-RPC errors. Built on `Mcp_msg`. |
+| `Tool_schema` | Each tool's arguments as one hand-written table: the JSON Schema 2020-12 of `tools/list` and the strict check before the typed decoders. |
+| `Mcp_tools` | The tools: argument decoding, root confinement, the call into `bactrian.app`, and the result as `structuredContent` with the same JSON in a text block. |
+| `Jobs` | The job table of `run_start`, `record_start` and `replay_start`: state, progress, result or error, and a stop trigger per job, in the server's switch. |
+| `Confine` | Path arguments resolved, symbolic links included, under the server's working directory, and IDs that cannot climb. |
+| `Mcp_server` | The stdio transport: one writer, a fibre per tool call, `notifications/cancelled`, and teardown at the end of input or on a signal. |
 
 ### `bin/`
 
-`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check`, `doctor` and `mcp-shim`. It parses arguments into the requests of `bactrian.app`, renders text and colour, prints progress and maps results to exit statuses. `ca` and `serve-mcp` are planned. The MCP server maps one-to-one onto the command line.
+`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check`, `doctor`, `serve-mcp` and `mcp-shim`. It parses arguments into the requests of `bactrian.app`, renders text and colour, prints progress and maps results to exit statuses. `ca` is planned. `serve-mcp` moves the protocol to descriptors of its own before it starts, so that nothing else can write to the client.
 
 Every library module has an interface file (`.mli`). No source file is over 1000 lines.
 
@@ -300,6 +313,8 @@ Modes:
 
 Streams replay chunk by chunk. `--timing fast` (default) sends them without delay. `--timing recorded` reproduces the original pacing. Latency figures from a replay always come from recorded timing and are labelled as such.
 
+Each run's divergences are kept in its `divergences.json`, in the form `replay --json` reports them, and the MCP server's `divergences` tool reads them back for one run, named by ID or directory as `replay` names its recording.
+
 Replay tests the agent's own code, never model variance. `compare` therefore computes statistics over live runs only, and replay reports show divergences, not pass rates.
 
 ## 8. Statistics and reports
@@ -375,7 +390,7 @@ Modules return `result` with their own error types, chained with `let*`. Excepti
 | Provider | 429 and 5xx responses pass through unchanged and are recorded. bactrian never retries on the agent's behalf. An unreachable provider gives the agent a 502 with a bactrian error body, recorded as an upstream error. |
 | bactrian itself | `Errored` with an error ID and a stack trace in the run's `bactrian-error.log`. Other runs are unaffected. Exit 70 if the whole command fails. |
 | Spend cap | Refused requests end their run `Not_run (cap reached)`, and remaining runs are not started. Usage gaps from interrupted streams are reported. |
-| Interrupt | Ctrl-C cancels the experiment's switch: agents are killed, unfinished cassettes are marked `partial`, the ledger is flushed and a report is written for completed runs. Exit 130. `run --resume <id>` skips runs whose outcome is Passed, Failed or Diverged, re-runs `Not_run` and `Errored` runs, and refuses if the experiment, its scenarios, the agent command or the price file changed since the manifest was written. |
+| Interrupt | Ctrl-C cancels the experiment's switch: agents are killed, unfinished cassettes are marked `partial`, the ledger is flushed and a report is written for completed runs. Exit 130. The MCP server's `job_cancel` does the same to one job through a stop trigger, without signal handlers. `run --resume <id>` skips runs whose outcome is Passed, Failed or Diverged, re-runs `Not_run` and `Errored` runs, and refuses if the experiment, its scenarios, the agent command or the price file changed since the manifest was written. |
 
 Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per record. `meta.json` and `verdicts.json` are written to a temporary file and renamed. Shared state (the ledger, the CA's per-host certificate cache) is guarded by Eio mutexes. Authorisation headers are removed before storage, secrets are never logged, and an invalid redaction pattern is a configuration error.
 
@@ -394,6 +409,7 @@ Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per r
    - fake upstream servers in OCaml for the provider protocols, with streaming, slow chunks, 429, 5xx and mid-stream errors
    - toy agents in `examples/` (TypeScript with pnpm, Python with uv) run as real subprocesses through record, strict replay with zero divergence, and a prompt change with the exact expected divergence
    - MCP: fake servers for both protocol eras through `mcp-shim` and over Streamable HTTP
+   - the MCP server: its dispatch in both eras, its transport over in-memory flows, its jobs, root confinement and argument decoding, and the real `bactrian serve-mcp` driven by a small client whose `doctor` result must equal `bactrian doctor --json`
    - egress (planned): a fake HTTPS server reached through the interception proxy from Node `fetch` and from Python `httpx` and `requests`
    - clock: a Python and a Node agent print their time, in a time zone other than UTC and inside the sandbox too. On Linux with `libfaketime` it must equal `SIM_NOW` and the run is `enforced`. On macOS the run is flagged `contract-only` (`macos`). ELF, `#!`, library search and environment injection are unit-tested on constructed fixtures.
    - sandbox: escape-attempt agents in TypeScript and Python (`test/sandbox/`) make one model call through the proxy, then try a direct HTTPS request ignoring proxy variables, a raw TCP connection, a WebSocket, a DNS lookup, a write to `$HOME` and outside the state directory, a read of a deny-listed path, and a write to the Linux forwarder's violation log through `/proc/<parent>/fd/3`, which must be refused for permission. Every attempt must fail, and each reports its own outcome. On macOS each must also appear as a `sandbox_violation` event. On Linux the operating system logs nothing, so the agent's reported failure is the evidence. The agent dumps its environment, and the test searches it and every file of the run's world for the real provider key, which is set in bactrian's own environment as well. It must find the placeholder and never the key.
@@ -421,7 +437,7 @@ The facts below were checked in October 2026 against vendor documentation and lo
 | HTML | tyxml 5.0.0 | |
 | Storage | plain files, no SQLite in v1 | `sqlite3` links the system library, which complicates static builds. |
 | Statistics | hand-rolled, tested against SciPy and statsmodels fixtures | Owl's last release was January 2025. `pareto` does not install on OCaml 5. |
-| MCP | in-tree | No OCaml library targets 2026-07-28. The server side targets 2026-07-28 (stateless, `server/discover`, a tasks extension for long operations) with a 2025-11-25 fallback. The proxy and the shim pass either era through unchanged, so a recording replays its own handshake (`server/discover` or `initialize`). The HTTP route answers 405 to the legacy GET stream so older clients fail fast. Claude Code negotiates 2026-07-28. Cursor still speaks 2025-11-25. |
+| MCP | in-tree | No OCaml library targets 2026-07-28. The server (`serve-mcp`) targets 2026-07-28 (stateless, `server/discover`) and answers `initialize` for 2025-11-25 and earlier. Long commands are jobs polled through tool calls. The Tasks extension is deferred (decision record 0011). The proxy and the shim pass either era through unchanged, so a recording replays its own handshake (`server/discover` or `initialize`). The HTTP route answers 405 to the legacy GET stream so older clients fail fast. Claude Code negotiates 2026-07-28. Cursor still speaks 2025-11-25. |
 | Sandbox | `sandbox-exec` (macOS), bubblewrap (Linux) | The same model as Anthropic's Apache-2.0 sandbox runtime (`anthropic-experimental/sandbox-runtime`). Checked on macOS 26.6.1: external HTTPS and DNS blocked, loopback allowed, writes outside the allowed subpath denied. Ubuntu 24.04 needs the AppArmor user-namespace restriction lifted for `bwrap --unshare-net`. Landlock was considered and rejected as the network layer, because it filters TCP by port only, not by address, and needs Linux 6.7. |
 | Clock | libfaketime 0.9.13 (Ubuntu ships 0.9.10 to 0.9.12, and 0.9.10 parses the same) | Works on Linux via `LD_PRELOAD`, with the multi-thread build `libfaketimeMT.so.1`. Not injected on macOS in v1: SIP strips `DYLD_*` variables from platform binaries and hardened-runtime ones ignore them. Go binaries and statically linked ones bypass it everywhere. The `@` start-at form is read by `mktime` in the process's own `TZ`, so bactrian passes a Unix time with `FAKETIME_FMT=%s` instead (decision record 0009). |
 
