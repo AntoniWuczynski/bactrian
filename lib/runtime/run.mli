@@ -92,6 +92,6 @@ val execute :
     [connector] default to {!Model_proxy.default_upstream} and
     {!Upstream.plain}.
 
-    In a replay, the run's own cassette exists only for [Until_divergence] (the
-    live tail), and the trace is derived from that cassette, so a strict
-    replay's trace has the agent's side only. *)
+    In a replay, the run's own cassette holds a copy of every exchange served
+    from the recording plus any live-tail exchanges, so a strict replay's trace
+    has the same model calls as the recording's. *)

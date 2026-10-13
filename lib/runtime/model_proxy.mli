@@ -50,8 +50,11 @@ type run = {
   store : Store.t;
       (** Where large payloads go when recording and are read from in replay. *)
   cassette : Store.writer option;
-      (** Where exchanges go: required for Record, and for Replay with
-          Until_divergence (the live tail). *)
+      (** Where exchanges go: required for Record and for Replay. A replay
+          appends a copy of every exchange it serves from the recording (this
+          run's [seq] and [t_ms], the recorded key, occurrence, canonical
+          request and response), so the run's trace has the model calls, plus
+          the live-tail exchanges under Until_divergence. *)
   ledger : Ledger.t;
   keys : (provider * string) list;  (** Real keys, never sent to the agent. *)
   upstream : provider -> Uri.t;  (** Tests point this at the fake upstream. *)

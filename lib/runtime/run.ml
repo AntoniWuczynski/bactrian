@@ -366,14 +366,6 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
             timing = r.timing;
           }
   in
-  let needs_cassette =
-    match recording with
-    | None -> true
-    | Some (r, _, _) -> (
-        match r.matcher with
-        | Until_divergence -> true
-        | Strict | Fuzzy _ -> false)
-  in
   let spend_before = spent_by_provider ledger in
   let started = ref 0. in
   let t_ms () = Float.to_int ((Eio.Time.now clock -. !started) *. 1000.) in
@@ -394,10 +386,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
   let drive () =
     Eio.Switch.run @@ fun sw ->
     let* writer =
-      if needs_cassette then
-        Result.map Option.some
-          (Result.map_error store_error (Store.open_cassette ~sw store header))
-      else Ok None
+      Result.map Option.some
+        (Result.map_error store_error (Store.open_cassette ~sw store header))
     in
     started := Eio.Time.now clock;
     P.register proxy
@@ -465,9 +455,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
   in
   let replay = Option.map (fun (r, _, _) -> r) recording in
   let cassette =
-    if needs_cassette then
-      Result.map_error store_error (Store.read_cassette store ~run_id)
-    else Ok { Cassette.header; exchanges = []; complete = true }
+    Result.map_error store_error (Store.read_cassette store ~run_id)
   in
   let fault, cassette =
     match (fault, cassette) with

@@ -598,7 +598,14 @@ let replay t ~conn_sw st x (r : replaying) =
         st.divergences <- List.rev_append found st.divergences;
         (match decision with
         | Matcher.Refuse d -> st.divergences <- d :: st.divergences
-        | Serve _ -> st.exchanges <- st.exchanges + 1
+        | Serve { exchange; _ } -> (
+            st.exchanges <- st.exchanges + 1;
+            match st.run.cassette with
+            | Some writer ->
+                Store.append writer
+                  { exchange with seq = st.next_seq; t_ms = x.t_ms };
+                st.next_seq <- st.next_seq + 1
+            | None -> ())
         | Go_live -> ());
         decision)
   in

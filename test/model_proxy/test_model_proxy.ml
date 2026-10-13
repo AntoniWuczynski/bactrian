@@ -215,6 +215,8 @@ let recording ctx (run : P.run) =
   Option.iter Store.close run.cassette;
   store_ok (Store.read_cassette ctx.store ~run_id:run.run_id)
 
+let run_cassette = recording
+
 (* Agent-side client. [Upstream] reports a body cut off mid-stream as
    [Truncated], which cohttp-eio's client does not. *)
 
@@ -490,7 +492,7 @@ let record_all ctx ~token fixtures =
   ignore (P.unregister ctx.proxy ~token);
   recording ctx run
 
-let replay_run ?(record = false) ?(matcher = Matcher.Strict) ?(timing = P.Fast)
+let replay_run ?(record = true) ?(matcher = Matcher.Strict) ?(timing = P.Fast)
     ctx ~token ~upstream recording =
   make_run ctx ~token ~upstream ~record
     ~mode:(P.Replay { recording; matcher; allow_reorder = false; timing })
@@ -507,8 +509,8 @@ let replay_strict =
   in
   let recording = record_all ctx ~token:token_a fs in
   let up = fake ctx (F.Fixtures fixtures_root) in
-  P.register ctx.proxy
-    (replay_run ctx ~token:token_b ~upstream:(F.base_url up) recording);
+  let run = replay_run ctx ~token:token_b ~upstream:(F.base_url up) recording in
+  P.register ctx.proxy run;
   List.iter
     (fun f ->
       let r = send_fixture ctx ~token:token_b f in
@@ -519,6 +521,19 @@ let replay_strict =
   let findings = P.unregister ctx.proxy ~token:token_b in
   Alcotest.(check int) "divergences" 0 (List.length findings.divergences);
   Alcotest.(check int) "exchanges" 2 findings.exchanges;
+  let copies = (run_cassette ctx run).exchanges in
+  Alcotest.(check int) "served exchanges copied" 2 (List.length copies);
+  List.iteri
+    (fun i ((c : Cassette.exchange), (o : Cassette.exchange)) ->
+      Alcotest.(check int) "fresh seq" i c.seq;
+      Alcotest.(check string) "key" o.key c.key;
+      Alcotest.(check int) "occurrence" o.occurrence c.occurrence;
+      Alcotest.(check bool)
+        "canonical" true
+        (Canon.equal o.canonical c.canonical);
+      Alcotest.(check bool) "request" true (o.request = c.request);
+      Alcotest.(check bool) "outcome" true (o.outcome = c.outcome))
+    (List.combine copies recording.exchanges);
   Alcotest.(check int) "nothing upstream" 0 (List.length (F.requests up))
 
 let replay_miss =

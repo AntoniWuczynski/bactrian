@@ -157,6 +157,15 @@ let trace_types (r : Run.result) =
       Yojson.Safe.Util.(to_string (member "type" (Yojson.Safe.from_string l))))
     (lines (file r "trace.jsonl"))
 
+let tool_names (r : Run.result) =
+  List.filter_map
+    (fun l ->
+      let j = Yojson.Safe.from_string l in
+      if String.equal Yojson.Safe.Util.(to_string (member "type" j)) "tool_call"
+      then Some Yojson.Safe.Util.(to_string (member "name" j))
+      else None)
+    (lines (file r "trace.jsonl"))
+
 let contains s sub =
   let n = String.length sub in
   let rec go i =
@@ -328,9 +337,11 @@ let test_replay_strict =
     (List.length (F.requests ctx.up));
   Alcotest.(check bool) "new run" true (r.run_id <> recorded.run_id);
   Alcotest.(check bool) "nothing spent" true (r.spend = []);
-  Alcotest.check strs "agent side of the trace"
-    [ "run_start"; "turn_start"; "agent_event"; "reply"; "done" ]
-    (trace_types r);
+  (* Entries are ordered by time, which differs between the runs. *)
+  Alcotest.check strs "same trace kinds as the recording"
+    (List.sort String.compare (trace_types recorded))
+    (List.sort String.compare (trace_types r));
+  Alcotest.check strs "same tool calls" (tool_names recorded) (tool_names r);
   Alcotest.(check string)
     "turns come from the recording" first_turn
     Yojson.Safe.Util.(
