@@ -564,6 +564,7 @@ let escapes agent () =
   in
   List.iter
     (fun name ->
+      Printf.printf "%s: %s\n" name (detail name);
       Alcotest.(check string) (name ^ " is denied") "failed" (outcome name))
     escapes;
   Alcotest.(check bool)
