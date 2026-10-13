@@ -133,6 +133,11 @@ let unsandboxed_warning (d : D.t) =
              (String.concat "; " (List.sort_uniq String.compare reasons)));
       ]
 
+let clock_warning (d : D.t) =
+  match F.clock_warning d with
+  | None -> []
+  | Some text -> [ para ~cls:[ "warning" ] text ]
+
 let missing_table (d : D.t) =
   table ~caption:"Missing data per arm"
     ~head:[ "Variant"; "Runs"; "Errored"; "Not run or unfinished" ]
@@ -649,7 +654,7 @@ let page (d : D.t) =
        [
          H.main
            ([ header d ]
-           @ unsandboxed_warning d
+           @ unsandboxed_warning d @ clock_warning d
            @ [
                section "verdicts" "Verdicts"
                  (verdict_table d

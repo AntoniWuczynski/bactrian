@@ -28,6 +28,7 @@ type run = {
   latency_ms : float option;
   tokens : int option;
   unsandboxed : string option;
+  clock_unenforced : string option;
 }
 
 let model_calls trace =
@@ -657,6 +658,7 @@ let run_json ~detail (r : run) : Yojson.Safe.t =
        ("status", `String (status_name r.status));
        ("reason", opt (fun s -> `String s) r.reason);
        ("unsandboxed", opt (fun s -> `String s) r.unsandboxed);
+       ("clock_unenforced", opt (fun s -> `String s) r.clock_unenforced);
      ]
     @
     if detail then
@@ -733,6 +735,12 @@ let summary_fields (t : t) =
         (List.length
            (List.filter (fun (r : run) -> Option.is_some r.unsandboxed) t.order))
     );
+    ( "clock_unenforced_runs",
+      `Int
+        (List.length
+           (List.filter
+              (fun (r : run) -> Option.is_some r.clock_unenforced)
+              t.order)) );
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));

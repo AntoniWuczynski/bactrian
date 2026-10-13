@@ -44,6 +44,12 @@ val trace_line : Trace.entry -> string
 val exit_meaning : int -> string
 (** What a gate exit status means. *)
 
+val clock_warning : Report_data.t -> string option
+(** Names the runs whose clock was only a contract (design §5 step 2), with the
+    reasons, and says that an agent reading the system clock saw real time in
+    them. When only some runs are affected it adds that a difference between
+    arms may come from the clock. [None] when every run's clock was enforced. *)
+
 val value_estimand_text : string
 (** What the cost, tokens and latency comparisons estimate, for a report header.
 *)

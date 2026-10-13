@@ -121,6 +121,8 @@ let make ~index ~scenario ~variant ~repeat : R.run =
       (if scenario = "search" && repeat = 1 then
          Some "unavailable: bubblewrap (bwrap) is not installed"
        else None);
+    clock_unenforced =
+      (if scenario = "search" && repeat <= 2 then Some "static-binary" else None);
   }
 
 let runs : R.run list =

@@ -110,6 +110,24 @@ let exit_meaning = function
   | 3 -> "missing data may bias the comparison"
   | n -> Printf.sprintf "exit status %d" n
 
+let clock_warning (d : Report_data.t) =
+  match
+    List.filter_map (fun (r : Report_data.run) -> r.clock_unenforced) d.order
+  with
+  | [] -> None
+  | reasons ->
+      let affected = List.length reasons and total = List.length d.order in
+      Some
+        (Printf.sprintf
+           "%d of %d runs had a contract-only clock (%s): an agent that reads \
+            the system clock saw real time, not SIM_NOW.%s"
+           affected total
+           (String.concat ", " (List.sort_uniq String.compare reasons))
+           (if affected < total then
+              " Not every run is affected, so a difference between arms may \
+               come from the clock."
+            else ""))
+
 let value_estimand_text =
   "Cost and tokens: the ratio of the candidate's mean per run to the \
    baseline's, each mean weighting every scenario equally. Latency: the \

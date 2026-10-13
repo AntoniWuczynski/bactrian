@@ -18,6 +18,7 @@
   ],
   "dropped_scenarios": [],
   "unsandboxed_runs": 2,
+  "clock_unenforced_runs": 4,
   "exit": 3,
   "metrics": [
     {
@@ -432,6 +433,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": 0.01,
       "latency_ms": 930.0,
       "tokens": 410,
@@ -535,6 +537,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": 0.01,
       "latency_ms": 960.0,
       "tokens": 410,
@@ -629,6 +632,7 @@
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": 0.01,
       "latency_ms": 990.0,
       "tokens": 410,
@@ -723,6 +727,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": 0.011,
       "latency_ms": 640.0,
       "tokens": 210,
@@ -804,6 +809,7 @@
       "status": "errored",
       "reason": "proxy fault",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": null,
       "latency_ms": null,
       "tokens": null,
@@ -820,6 +826,7 @@
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
       "unsandboxed": null,
+      "clock_unenforced": null,
       "cost_usd": 0.012,
       "latency_ms": 680.0,
       "tokens": 210,
@@ -902,7 +909,8 @@
       "run_id": "run-000",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 1,
@@ -912,7 +920,8 @@
       "run_id": "run-001",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 2,
@@ -922,7 +931,8 @@
       "run_id": "run-002",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 3,
@@ -932,7 +942,8 @@
       "run_id": "run-003",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 4,
@@ -942,7 +953,8 @@
       "run_id": "run-004",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 5,
@@ -952,7 +964,8 @@
       "run_id": "run-005",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 6,
@@ -962,7 +975,8 @@
       "run_id": "run-006",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 7,
@@ -972,7 +986,8 @@
       "run_id": "run-007",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 8,
@@ -982,7 +997,8 @@
       "run_id": "run-008",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 9,
@@ -992,7 +1008,8 @@
       "run_id": "run-009",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 10,
@@ -1002,7 +1019,8 @@
       "run_id": "run-010",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 11,
@@ -1012,7 +1030,8 @@
       "run_id": "run-011",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 12,
@@ -1022,7 +1041,8 @@
       "run_id": "run-012",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 13,
@@ -1032,7 +1052,8 @@
       "run_id": "run-013",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 14,
@@ -1042,7 +1063,8 @@
       "run_id": "run-014",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 15,
@@ -1052,7 +1074,8 @@
       "run_id": "run-015",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 16,
@@ -1062,7 +1085,8 @@
       "run_id": "run-016",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 17,
@@ -1072,7 +1096,8 @@
       "run_id": "run-017",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 18,
@@ -1082,7 +1107,8 @@
       "run_id": "run-018",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 19,
@@ -1092,7 +1118,8 @@
       "run_id": "run-019",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 20,
@@ -1102,7 +1129,8 @@
       "run_id": "run-020",
       "status": "passed",
       "reason": null,
-      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed"
+      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
+      "clock_unenforced": "static-binary"
     },
     {
       "index": 21,
@@ -1112,7 +1140,8 @@
       "run_id": "run-021",
       "status": "passed",
       "reason": null,
-      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed"
+      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
+      "clock_unenforced": "static-binary"
     },
     {
       "index": 22,
@@ -1122,7 +1151,8 @@
       "run_id": "run-022",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": "static-binary"
     },
     {
       "index": 23,
@@ -1132,7 +1162,8 @@
       "run_id": "run-023",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": "static-binary"
     },
     {
       "index": 24,
@@ -1142,7 +1173,8 @@
       "run_id": "run-024",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 25,
@@ -1152,7 +1184,8 @@
       "run_id": "run-025",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 26,
@@ -1162,7 +1195,8 @@
       "run_id": "run-026",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 27,
@@ -1172,7 +1206,8 @@
       "run_id": "run-027",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 28,
@@ -1182,7 +1217,8 @@
       "run_id": "run-028",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 29,
@@ -1192,7 +1228,8 @@
       "run_id": "run-029",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 30,
@@ -1202,7 +1239,8 @@
       "run_id": "run-030",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 31,
@@ -1212,7 +1250,8 @@
       "run_id": "run-031",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 32,
@@ -1222,7 +1261,8 @@
       "run_id": "run-032",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 33,
@@ -1232,7 +1272,8 @@
       "run_id": "run-033",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 34,
@@ -1242,7 +1283,8 @@
       "run_id": "run-034",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 35,
@@ -1252,7 +1294,8 @@
       "run_id": "run-035",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 36,
@@ -1262,7 +1305,8 @@
       "run_id": "run-036",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 37,
@@ -1272,7 +1316,8 @@
       "run_id": "run-037",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 38,
@@ -1282,7 +1327,8 @@
       "run_id": "run-038",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 39,
@@ -1292,7 +1338,8 @@
       "run_id": "run-039",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 40,
@@ -1302,7 +1349,8 @@
       "run_id": "run-040",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 41,
@@ -1312,7 +1360,8 @@
       "run_id": "run-041",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 42,
@@ -1322,7 +1371,8 @@
       "run_id": "run-042",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 43,
@@ -1332,7 +1382,8 @@
       "run_id": "run-043",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 44,
@@ -1342,7 +1393,8 @@
       "run_id": "run-044",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 45,
@@ -1352,7 +1404,8 @@
       "run_id": "run-045",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 46,
@@ -1362,7 +1415,8 @@
       "run_id": "run-046",
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 47,
@@ -1372,7 +1426,8 @@
       "run_id": "run-047",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 48,
@@ -1382,7 +1437,8 @@
       "run_id": "run-048",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 49,
@@ -1392,7 +1448,8 @@
       "run_id": "run-049",
       "status": "errored",
       "reason": "proxy fault",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 50,
@@ -1402,7 +1459,8 @@
       "run_id": "run-050",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 51,
@@ -1412,7 +1470,8 @@
       "run_id": "run-051",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 52,
@@ -1422,7 +1481,8 @@
       "run_id": "run-052",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 53,
@@ -1432,7 +1492,8 @@
       "run_id": "run-053",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 54,
@@ -1442,7 +1503,8 @@
       "run_id": "run-054",
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 55,
@@ -1452,7 +1514,8 @@
       "run_id": "run-055",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 56,
@@ -1462,7 +1525,8 @@
       "run_id": "run-056",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 57,
@@ -1472,7 +1536,8 @@
       "run_id": "run-057",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 58,
@@ -1482,7 +1547,8 @@
       "run_id": "run-058",
       "status": "passed",
       "reason": null,
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     },
     {
       "index": 59,
@@ -1492,7 +1558,8 @@
       "run_id": "run-059",
       "status": "not_run",
       "reason": "spend cap reached",
-      "unsandboxed": null
+      "unsandboxed": null,
+      "clock_unenforced": null
     }
   ]
 }
