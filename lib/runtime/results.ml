@@ -310,9 +310,32 @@ let valid_id id =
 (* [None] when the file no longer exists. Any other problem with it is an
    error, so that a mistake in the file is shown where it is rather than as a
    missing setting. *)
+(* A manifest written from the command line can name its experiment by an
+   absolute path. One under the working directory is read by its path relative
+   to it, the same file, which a capability for that directory also accepts:
+   any [..] in the rest is still resolved against the directory. *)
+let under_cwd file =
+  let prefix = Filename.concat (Sys.getcwd ()) "" in
+  if (not (Filename.is_relative file)) && String.starts_with ~prefix file then
+    String.sub file (String.length prefix)
+      (String.length file - String.length prefix)
+  else file
+
 let load_experiment ~fs file =
-  let path = Eio.Path.(fs / file) in
+  let path = Eio.Path.(fs / under_cwd file) in
   match Eio.Path.kind ~follow:true path with
+  | exception Eio.Io _ ->
+      Error
+        (Bad_experiment
+           [
+             {
+               Config_loader.file;
+               line = 1;
+               column = 1;
+               path = "";
+               message = "the experiment file cannot be opened";
+             };
+           ])
   | `Not_found -> Ok None
   | `Unknown | `Fifo | `Character_special | `Directory | `Block_device
   | `Regular_file | `Symbolic_link | `Socket -> (
