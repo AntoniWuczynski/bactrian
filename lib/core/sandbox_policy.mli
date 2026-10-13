@@ -36,6 +36,10 @@ type input = {
   bactrian_exe : string;
       (** Absolute path of the bactrian executable, which Linux re-executes as
           [__sandbox-init] inside the sandbox. Unused on macOS. *)
+  tag : string;
+      (** Text that Seatbelt appends to the system log line of every denial, so
+          the caller can find the run's violations. Non-empty. Unused on Linux.
+      *)
 }
 
 type error =
@@ -47,6 +51,7 @@ type error =
   | Invalid_port of int
   | Duplicate_port of int
   | Missing_socket of int  (** A Linux listener without a Unix socket. *)
+  | Empty_tag  (** An empty [tag] on macOS. *)
 
 val describe_error : error -> string
 
@@ -86,12 +91,15 @@ val generate : exists:(string -> kind) -> input -> (output, error) result
     {!deny_list}, writes only to [state_dir], [temp_dir], [allow_write] and a
     few [/dev] files, and outbound connections only to [localhost] on the
     listeners' ports (and their Unix sockets). DNS and every other address fail.
-    [exists] is not used.
+    Every denial is logged with [tag] ([(with message (param "TAG"))]). [exists]
+    is not used.
 
     Linux: [bwrap] with a new network, process and IPC namespace over a
     read-only copy of [/], fresh [/dev], [/proc], [/tmp], [/dev/shm] and [/run],
-    then the writable binds, the sockets read-only, and the {!deny_list} masks
-    ([--tmpfs] over a directory, [/dev/null] over a file), then
+    the bactrian executable read-only (it may live under one of those), then the
+    writable binds, the sockets read-only, and the {!deny_list} masks ([--tmpfs]
+    over a directory, [/dev/null] over a file), then each directory mask made
+    read-only with [--remount-ro] (a tmpfs is writable), then
     [bactrian __sandbox-init PORT=SOCKET... -- AGENT...]. Mounts come in that
     order because a later mount hides what an earlier one put at the same path.
     The run's own directories are bound again after the [.bactrian/runs] mask

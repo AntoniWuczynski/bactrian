@@ -20,6 +20,7 @@ let base : P.input =
       ];
     agent = [ "node"; "agent.js"; "--flag" ];
     bactrian_exe = "/opt/bin/bactrian";
+    tag = "bactrian-sandbox:r1";
   }
 
 let linux : P.input =
@@ -51,13 +52,19 @@ let bwrap ~exists i =
 (* ---- snapshots ---- *)
 
 let deny_rule n =
-  Printf.sprintf "(deny file-read-data (subpath (param \"DENY_%d\")))" n
+  Printf.sprintf
+    "(deny file-read-data (subpath (param \"DENY_%d\")) (with message (param \
+     \"TAG\")))"
+    n
 
 let expected_profile =
   String.concat "\n"
     ([
        "(version 1)";
-       "(deny default)";
+       "(deny default (with message (param \"TAG\")))";
+       "(deny mach-lookup (global-name \"com.apple.logd\" \
+        \"com.apple.system.notification_center\" \
+        \"com.apple.SystemConfiguration.configd\") (with no-log))";
        "(allow process-exec)";
        "(allow process-fork)";
        "(allow signal (target same-sandbox))";
@@ -87,6 +94,7 @@ let expected_profile =
 
 let expected_params =
   [
+    ("TAG", "bactrian-sandbox:r1");
     ("STATE", run_dir ^ "/state");
     ("TEMP", run_dir ^ "/tmp");
     ("DENY_0", "/home/u/.ssh");
@@ -152,6 +160,7 @@ let test_bwrap_snapshot () =
          [ "--unshare-pid"; "--unshare-ipc"; "--ro-bind"; "/"; "/" ];
          [ "--dev"; "/dev"; "--proc"; "/proc"; "--tmpfs"; "/tmp" ];
          [ "--tmpfs"; "/dev/shm"; "--tmpfs"; "/run" ];
+         ro_bind "/opt/bin/bactrian";
          bind state;
          bind (run_dir ^ "/tmp");
          bind "/work/proj/out";
@@ -166,6 +175,10 @@ let test_bwrap_snapshot () =
          bind (run_dir ^ "/tmp");
          ro_bind sock;
          [ "--tmpfs"; "/work/proj/private" ];
+         [ "--remount-ro"; "/home/u/.ssh" ];
+         [ "--remount-ro"; "/home/u/.config/gcloud" ];
+         [ "--remount-ro"; "/work/proj/.bactrian/runs" ];
+         [ "--remount-ro"; "/work/proj/private" ];
          [ "--"; "/opt/bin/bactrian"; "__sandbox-init" ];
          [ "8080=" ^ sock; "8081=/run/u/egress.sock" ];
          [ "--"; "node"; "agent.js"; "--flag" ];
@@ -239,6 +252,7 @@ let test_errors () =
     (Not_absolute { what = "socket"; path = "s" })
     { base with listeners = [ { port = 1; socket = Some "s" } ] };
   check_error "empty agent" Empty_agent { base with agent = [] };
+  check_error "empty tag" Empty_tag { base with tag = "" };
   check_error "port 0" (Invalid_port 0)
     { base with listeners = [ { port = 0; socket = None } ] };
   check_error "port 65536" (Invalid_port 65536)
@@ -333,6 +347,7 @@ let gen_input platform : P.input QCheck.Gen.t =
       listeners;
       agent = [ "agent"; "--x" ];
       bactrian_exe = "/opt/bin/bactrian";
+      tag = "bactrian-sandbox:t";
     }
 
 let print_input (i : P.input) =
@@ -396,6 +411,7 @@ type op =
   | Ro_bind of string * string
   | Bind of string * string
   | Tmpfs of string
+  | Remount of string
 
 let parse_ops argv =
   let rec go acc = function
@@ -403,6 +419,7 @@ let parse_ops argv =
     | "--ro-bind" :: a :: b :: tl -> go (Ro_bind (a, b) :: acc) tl
     | "--bind" :: a :: b :: tl -> go (Bind (a, b) :: acc) tl
     | "--tmpfs" :: a :: tl -> go (Tmpfs a :: acc) tl
+    | "--remount-ro" :: a :: tl -> go (Remount a :: acc) tl
     | _ :: tl -> go acc tl
   in
   go [] (List.tl argv)
@@ -464,6 +481,26 @@ let prop_own_dirs_survive_runs_mask =
           || last ops (Bind (p, p)) >? mask)
         [ i.state_dir; i.temp_dir ])
 
+(* A tmpfs is writable: every directory mask is remounted read-only after the
+   last mount inside it. *)
+let prop_masks_read_only =
+  QCheck.Test.make ~name:"bwrap: every directory mask ends read-only" ~count:500
+    (arb Linux) (fun i ->
+      let ops = parse_ops (bwrap ~exists:(fun _ -> `Dir) i) in
+      List.for_all
+        (fun d ->
+          let remount = last ops (Remount d) in
+          remount >? first ops (Tmpfs d)
+          && List.for_all
+               (fun (n, op) ->
+                 match op with
+                 | (Bind (_, p) | Ro_bind (_, p) | Tmpfs p)
+                   when String.starts_with ~prefix:(d ^ "/") p ->
+                     remount >? Some n
+                 | Bind _ | Ro_bind _ | Tmpfs _ | Remount _ -> true)
+               (List.mapi (fun n op -> (n, op)) ops))
+        (P.deny_list i))
+
 let () =
   Alcotest.run "sandbox_policy"
     [
@@ -492,5 +529,6 @@ let () =
             prop_argv_carries_params;
             prop_mount_order;
             prop_own_dirs_survive_runs_mask;
+            prop_masks_read_only;
           ] );
     ]

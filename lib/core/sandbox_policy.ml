@@ -13,6 +13,7 @@ type input = {
   listeners : listener list;
   agent : string list;
   bactrian_exe : string;
+  tag : string;
 }
 
 type error =
@@ -22,9 +23,11 @@ type error =
   | Invalid_port of int
   | Duplicate_port of int
   | Missing_socket of int
+  | Empty_tag
 
 let describe_error = function
   | Empty_agent -> "the agent command is empty"
+  | Empty_tag -> "the violation tag is empty"
   | Nul_byte { what; value } ->
       Printf.sprintf "%s contains a NUL byte: %S" what value
   | Not_absolute { what; path } ->
@@ -101,7 +104,9 @@ let validate i =
   let* () =
     match i.platform with
     | Linux -> check_path "bactrian_exe" i.bactrian_exe
-    | Macos -> Ok ()
+    | Macos ->
+        let* () = check_text "tag" i.tag in
+        if String.equal i.tag "" then Error Empty_tag else Ok ()
   in
   let* () = match i.agent with [] -> Error Empty_agent | _ :: _ -> Ok () in
   let* () = check_all check_text (labelled "agent argument" i.agent) in
@@ -172,10 +177,13 @@ let seatbelt_of i =
     numbered "SOCKET" (List.filter_map (fun l -> l.socket) i.listeners)
   in
   let own = [ subpath "STATE"; subpath "TEMP" ] in
+  (* Every denial is logged with the run's tag, which is how the run's
+     violations are found in the system log (design §5.3). *)
+  let tagged = Printf.sprintf "(with message %s)" (param "TAG") in
   let deny_rules =
     List.concat_map
       (fun (name, d) ->
-        Printf.sprintf "(deny file-read-data %s)" (subpath name)
+        Printf.sprintf "(deny file-read-data %s %s)" (subpath name) tagged
         ::
         (if d.keep_own_run then
            [
@@ -193,7 +201,13 @@ let seatbelt_of i =
     String.concat "\n"
       ([
          "(version 1)";
-         "(deny default)";
+         Printf.sprintf "(deny default %s)" tagged;
+         (* Node and Python ask for these at start, and Python's proxy
+            discovery asks configd: refused, harmlessly, and not logged, so
+            they do not bury real violations. *)
+         "(deny mach-lookup (global-name \"com.apple.logd\" \
+          \"com.apple.system.notification_center\" \
+          \"com.apple.SystemConfiguration.configd\") (with no-log))";
          "(allow process-exec)";
          "(allow process-fork)";
          "(allow signal (target same-sandbox))";
@@ -225,7 +239,7 @@ let seatbelt_of i =
     ^ "\n"
   in
   let params =
-    [ ("STATE", i.state_dir); ("TEMP", i.temp_dir) ]
+    [ ("TAG", i.tag); ("STATE", i.state_dir); ("TEMP", i.temp_dir) ]
     @ List.map (fun (n, d) -> (n, d.path)) deny
     @ writes
     @ List.map (fun (n, p) -> (n, string_of_int p)) ports
@@ -269,19 +283,24 @@ let bwrap_of ~exists i =
   in
   let binds = writable @ sockets in
   let mask d =
-    let masked =
-      match exists d.path with
-      | `Dir -> [ "--tmpfs"; d.path ]
-      | `File -> [ "--ro-bind"; "/dev/null"; d.path ]
-      | `Absent -> []
+    let rebinds () =
+      if d.keep_own_run then
+        List.concat_map mount_args
+          (List.filter (fun m -> is_under ~dir:d.path (mount_path m)) binds)
+      else []
     in
-    match masked with
-    | [] -> []
-    | _ :: _ when d.keep_own_run ->
-        masked
-        @ List.concat_map mount_args
-            (List.filter (fun m -> is_under ~dir:d.path (mount_path m)) binds)
-    | _ :: _ -> masked
+    match exists d.path with
+    | `Dir -> [ "--tmpfs"; d.path ] @ rebinds ()
+    | `File -> [ "--ro-bind"; "/dev/null"; d.path ] @ rebinds ()
+    | `Absent -> []
+  in
+  (* A tmpfs is writable, so every directory mask is made read-only, after all
+     the mounts, because bwrap creates mount points inside a mask (the run's own
+     directories, a deny-list path under another). *)
+  let read_only d =
+    match exists d.path with
+    | `Dir -> [ "--remount-ro"; d.path ]
+    | `File | `Absent -> []
   in
   let pairs =
     List.filter_map
@@ -292,8 +311,11 @@ let bwrap_of ~exists i =
   @ [ "--unshare-pid"; "--unshare-ipc"; "--ro-bind"; "/"; "/" ]
   @ [ "--dev"; "/dev"; "--proc"; "/proc"; "--tmpfs"; "/tmp" ]
   @ [ "--tmpfs"; "/dev/shm"; "--tmpfs"; "/run" ]
+  (* The executable may live under one of the fresh tmpfs mounts. *)
+  @ mount_args (Ro i.bactrian_exe)
   @ List.concat_map mount_args binds
   @ List.concat_map mask (denies i)
+  @ List.concat_map read_only (denies i)
   @ [ "--"; i.bactrian_exe; "__sandbox-init" ]
   @ pairs @ ("--" :: i.agent)
 
