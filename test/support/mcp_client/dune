@@ -1,0 +1,3 @@
+(library
+ (name mcp_client)
+ (libraries bactrian.core unix))
