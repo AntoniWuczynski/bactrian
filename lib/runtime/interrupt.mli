@@ -1,4 +1,4 @@
-(** Turning SIGINT and SIGTERM into Eio cancellation (spec §9, Interrupt). *)
+(** Turning SIGINT and SIGTERM into Eio cancellation (design §9, Interrupt). *)
 
 val signals : int list
 (** The signals handled: [Sys.sigint] and [Sys.sigterm]. *)

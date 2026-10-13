@@ -1,5 +1,5 @@
 (* Model-based test of Matcher.decide / finish against a naive reference model
-   written from spec section 7 and the plan's matching rules. *)
+   written from the matching rules in design §7. *)
 
 open Bactrian_core
 

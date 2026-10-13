@@ -1,4 +1,4 @@
-(** Spend per provider against caps (spec §5.3, §11).
+(** Spend per provider against caps (design §5.3, §11).
 
     Caps are enforced by reservation: the worst-case cost of a request is
     reserved before it is forwarded, and the cap is checked against settled

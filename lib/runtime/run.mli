@@ -1,5 +1,5 @@
-(** One run end to end (spec §5): setup, the agent conversation, teardown, trace
-    and metadata. *)
+(** One run end to end (design §5): setup, the agent conversation, teardown,
+    trace and metadata. *)
 
 open Bactrian_core
 
@@ -51,7 +51,7 @@ type checks = {
   checks_cwd : string;  (** Where the checker commands run. *)
   checker_timeout : float;  (** Per checker, seconds. *)
 }
-(** A scenario's assertions and checkers (spec §6). *)
+(** A scenario's assertions and checkers (design §6). *)
 
 type config = {
   agent : string list;  (** argv *)
@@ -81,8 +81,8 @@ type config = {
           recorded in [meta.json]. *)
   fixtures : string option;
       (** A directory whose files are copied, recursively, into the state
-          directory before the agent starts (spec §5 step 1). Symbolic links are
-          not followed. *)
+          directory before the agent starts (design §5 step 1). Symbolic links
+          are not followed. *)
   normalise : string list;
       (** Experiment [normalise] patterns, see {!Model_proxy.run}. Saved in
           [meta.json]. A replay ignores them and uses its recording's. *)
@@ -134,11 +134,12 @@ val execute :
   config ->
   (result, string) Stdlib.result
 (** Creates the run directory, cassette and state dir, builds the agent's
-    environment (spec §5 step 2 minus egress, sandbox and libfaketime: provider
-    base URLs from the proxy, placeholder keys, SIM_NOW, TZ, BACTRIAN_RUN_ID,
-    BACTRIAN_STATE_DIR, the MCP variables, PATH, HOME, LANG, TERM and the
-    passthrough list, and nothing else), drives the turns, tears down, derives
-    and writes trace.jsonl and meta.json (atomically), and returns the outcome.
+    environment (design §5 step 2 minus egress, sandbox and libfaketime:
+    provider base URLs from the proxy, placeholder keys, SIM_NOW, TZ,
+    BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP variables, PATH, HOME, LANG,
+    TERM and the passthrough list, and nothing else), drives the turns, tears
+    down, derives and writes trace.jsonl and meta.json (atomically), and returns
+    the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
     failure, unreadable fixtures, an invalid pattern): no agent was started.

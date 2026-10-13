@@ -31,7 +31,7 @@ val build : input -> Trace.entry list
     Model-channel exchanges make the model calls and tool calls. MCP-channel
     exchanges are used only for [tools/call] requests, which are joined to the
     model's tool calls of the same turn (the turn in progress at the exchange's
-    [t_ms]) by tool name and equal arguments (spec §6). The k-th call with a
+    [t_ms]) by tool name and equal arguments (design §6). The k-th call with a
     given name and arguments takes the k-th MCP record with them: [Joined] when
     each side has exactly one, [Joined_by_order] when there are several, and a
     call without a record stays [Unjoined]. An MCP call with no model call to

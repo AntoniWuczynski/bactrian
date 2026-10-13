@@ -1,5 +1,5 @@
 (** Checking a scenario's assertions and checkers against its golden traces
-    (spec §6, [bactrian check]): every [golden.pass] trace must pass them all
+    (design §6, [bactrian check]): every [golden.pass] trace must pass them all
     and every [golden.fail] trace must fail at least one, so a broken assertion
     or checker is caught before it judges real runs. *)
 

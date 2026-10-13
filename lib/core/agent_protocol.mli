@@ -1,5 +1,5 @@
-(** The wire contract between bactrian and an agent (spec §5.1), version 1. One
-    JSON object per line. *)
+(** The wire contract between bactrian and an agent (design §5.1), version 1.
+    One JSON object per line. *)
 
 type to_agent =
   | Start of {

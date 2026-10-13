@@ -155,7 +155,7 @@ let model_call_entries ~resolve ~turn st (ex : Cassette.exchange) =
   in
   (st, result_entries @ (call :: call_entries))
 
-(* MCP calls and the join with the model's tool calls (spec section 6) *)
+(* MCP calls and the join with the model's tool calls (design §6) *)
 
 type mcp_call = {
   at : int;

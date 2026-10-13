@@ -1,4 +1,4 @@
-(** The wire format between bactrian and an external checker (spec §6). The
+(** The wire format between bactrian and an external checker (design §6). The
     checker reads the trace as JSON on stdin and prints one verdict object. *)
 
 type verdict = { pass : bool; score : float option; message : string option }

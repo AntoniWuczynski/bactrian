@@ -31,7 +31,7 @@ type join =
   | Joined
   | Joined_by_order
   | Unjoined
-      (** How an MCP record was matched to a model tool call (spec §6). *)
+      (** How an MCP record was matched to a model tool call (design §6). *)
 
 type event =
   | Run_start of {

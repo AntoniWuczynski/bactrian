@@ -58,9 +58,9 @@ type t = {
 type error = Scenario.error
 
 val decode : Canon.t -> (t, error list) result
-(** Durations accept "120s", "2m", "1.5s". Defaults as in spec §6.
+(** Durations accept "120s", "2m", "1.5s". Defaults as in design §6.
 
-    Document shape (spec §6), all keys strict:
+    Document shape (design §6), all keys strict:
     - [version: 1], [name], [scenarios] (non-empty list of globs)
     - [agent: {protocol: command | http, command, url, namespace_header,
        timeouts: {turn, total}, env_passthrough}]: [command] is required for
@@ -123,7 +123,7 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce yet (spec §5.3:
-    the sandbox under [auto], egress and faketime), each starting with the
+(** One line per setting this build accepts but does not enforce yet (design
+    §5.3: the sandbox under [auto], egress and faketime), each starting with the
     setting's name and a colon. [sandbox: strict] is not listed: it is refused
     outright where the run starts. *)

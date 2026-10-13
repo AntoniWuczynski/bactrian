@@ -1,5 +1,5 @@
 (** Experiments: scenarios × variants × repeats under a concurrency limit, with
-    spend caps, a manifest and resume (spec §5 experiment level, §9). *)
+    spend caps, a manifest and resume (design §5 experiment level, §9). *)
 
 type planned = {
   index : int;
@@ -16,7 +16,7 @@ val plan :
   variants:string list ->
   repeats:int ->
   planned list
-(** Blocked and interleaved allocation (spec §5). For each scenario, all the
+(** Blocked and interleaved allocation (design §5). For each scenario, all the
     variants' repeats are put in one random order drawn from [seed] and the
     scenario's position, then the scenarios' orders are interleaved one run at a
     time. Pure: the same arguments give the same plan, with [index] 0, 1, 2, …

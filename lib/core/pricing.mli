@@ -1,4 +1,4 @@
-(** Built-in prices (spec §11), USD per million tokens. *)
+(** Built-in prices (design §11), USD per million tokens. *)
 
 type rates = {
   input : float;

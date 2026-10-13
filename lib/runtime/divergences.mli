@@ -1,5 +1,5 @@
 (** A run's replay divergences as stored in [divergences.json] and shown in
-    reports (spec §7). The exchanges themselves stay in the recording, so a
+    reports (design §7). The exchanges themselves stay in the recording, so a
     stored divergence keeps only what a reader needs: its kind, the sequence
     number of the recorded exchange it concerns, the similarity of the nearest
     candidate and the structural diff paths. *)

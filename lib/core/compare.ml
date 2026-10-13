@@ -127,7 +127,7 @@ let count_missing runs variant =
         | None, (Some Not_run | None) -> (total + 1, errored, not_run + 1))
     (0, 0, 0) runs
 
-(* Spec §8: more than 5% of an arm errored, or the errored plus not-run share
+(* Design §8: more than 5% of an arm errored, or the errored plus not-run share
    differing by more than 5 points. Exact integer arithmetic, so a share of
    exactly 5% does not trip it. *)
 let biased (t1, e1, n1) (t2, e2, n2) =

@@ -4,6 +4,8 @@ bactrian is a tool for testing AI agents the way you would test any other progra
 
 The name comes from the two-humped camel. Most of what bactrian does is compare two things.
 
+The design, including the parts that are still planned, is described in [`docs/design.md`](docs/design.md).
+
 ## Status
 
 Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording and the sandbox are also still to come. Until then the settings that ask for them (`sandbox`, `egress` and `clock`) are read but not enforced. `sandbox: strict` stops with exit status 69 because there is no sandbox to be strict about, and every other unenforced setting is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.

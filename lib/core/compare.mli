@@ -1,4 +1,4 @@
-(** Comparison of a candidate variant with a baseline (spec §8).
+(** Comparison of a candidate variant with a baseline (design §8).
 
     Pass rate is compared on the difference of equal-weighted per-scenario
     means. Under [`Suite] its interval is {!Stats.stratified_newcombe_diff};
@@ -93,8 +93,8 @@ type result = {
       (** Scenarios with runs of either variant but no finished outcome in one
           of them, sorted. They are left out of every comparison. *)
   exit : int;
-      (** Spec §8 gate exit codes. 1 when a gate metric is a regression, else 3
-          when missing data may bias the comparison (the errored and not-run
+      (** Design §8 gate exit codes. 1 when a gate metric is a regression, else
+          3 when missing data may bias the comparison (the errored and not-run
           shares, or any [dropped] scenario), else 2 when a gate metric is
           inconclusive and [fail_on_inconclusive] is set, else 0. *)
 }

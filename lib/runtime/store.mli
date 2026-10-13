@@ -1,5 +1,5 @@
 (** Run directories, cassettes and content-addressed blobs under a project's
-    [.bactrian/] directory (spec §4, §7).
+    [.bactrian/] directory (design §4, §7).
 
     {v
     <root>/runs/<run-id>/cassette.jsonl
@@ -75,7 +75,7 @@ val read_cassette : t -> run_id:string -> (Cassette.t, error) result
 (** {1 Blobs} *)
 
 val inline_limit : int
-(** 65536 bytes. Payloads above it go to blobs (spec §7). *)
+(** 65536 bytes. Payloads above it go to blobs (design §7). *)
 
 val put_blob : t -> string -> string
 (** Stores the bytes unless already present and returns their BLAKE2b-256 digest

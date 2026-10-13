@@ -62,7 +62,7 @@ let test_ordinary_words () =
   let _, out = scrub text in
   Alcotest.(check string) "unchanged" text out
 
-(* Spec decision: placeholders are numbered in order of first replacement
+(* Design §7: placeholders are numbered in order of first replacement
    (literals, then each pattern in order), not by position in the text. Here
    the OpenRouter pattern runs before the Google one, so the key that appears
    later in the text gets number 1. *)

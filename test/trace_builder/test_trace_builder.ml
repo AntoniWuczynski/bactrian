@@ -258,7 +258,7 @@ let test_exchanges_before_first_turn () =
     ]
     (kinds entries)
 
-(* MCP joins (spec section 6) *)
+(* MCP joins (design §6) *)
 
 let chat_calls ~seq ~t_ms calls =
   let base = exchange ~seq ~t_ms "luna_nonstream" in

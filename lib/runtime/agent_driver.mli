@@ -1,4 +1,4 @@
-(** Command-mode driver for an agent subprocess (spec §5.1).
+(** Command-mode driver for an agent subprocess (design §5.1).
 
     The agent runs in its own process group with exactly the environment given
     (nothing is inherited). bactrian writes {!Agent_protocol.to_agent} messages

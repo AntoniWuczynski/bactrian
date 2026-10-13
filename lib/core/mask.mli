@@ -1,5 +1,5 @@
 (** Masking of an experiment's [normalise] patterns in a canonical request
-    before it is keyed (spec §7). *)
+    before it is keyed (design §7). *)
 
 val marker : string
 (** What every match is replaced with: ["<normalised>"]. *)

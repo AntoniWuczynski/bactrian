@@ -74,7 +74,7 @@ let table =
   [
     (* OpenAI, standard tier, short context (<= 272K). Long-context rates were
        not verified, so none are listed. Cache write is published only for
-       gpt-6-luna (spec §11, 0.125). Elsewhere it is not published and the
+       gpt-6-luna (design §11, 0.125). Elsewhere it is not published and the
        input rate is used. *)
     openai "gpt-6-luna" (r 0.10 0.01 0.125 0.50);
     openai "gpt-5-nano" (r 0.05 0.005 0.05 0.40);

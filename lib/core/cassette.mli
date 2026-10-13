@@ -25,7 +25,7 @@ type response_body =
 
 type response = {
   status : int;
-  headers : (string * string) list;  (** Allowlisted only (spec §7). *)
+  headers : (string * string) list;  (** Allowlisted only (design §7). *)
   body : response_body;
 }
 

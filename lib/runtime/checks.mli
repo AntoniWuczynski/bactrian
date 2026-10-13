@@ -1,4 +1,5 @@
-(** A scenario's assertions and checkers evaluated over one trace (spec §6). *)
+(** A scenario's assertions and checkers evaluated over one trace (design §6).
+*)
 
 open Bactrian_core
 

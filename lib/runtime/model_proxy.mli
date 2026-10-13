@@ -62,7 +62,7 @@ type run = {
   normalise : Re.re list;
       (** The experiment's [normalise] patterns
           ({!Bactrian_core.Regex.compile}d), masked in each model request's
-          canonical form before it is keyed (spec §7), when recording and when
+          canonical form before it is keyed (design §7), when recording and when
           replaying alike. *)
   redact : Redact.pattern list;
       (** The experiment's [redact] patterns, scrubbed in addition to the

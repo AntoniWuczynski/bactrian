@@ -1,5 +1,6 @@
 (** What an experiment was started from, recorded in its manifest so that a
-    resume refuses to mix two configurations under one experiment ID (spec §9).
+    resume refuses to mix two configurations under one experiment ID (design
+    §9).
 
     Everything is a digest of the content, never of the path alone: the
     experiment document (without the agent, [caps_usd] and [concurrency]), the

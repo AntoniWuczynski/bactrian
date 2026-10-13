@@ -1,8 +1,8 @@
-(** Statistics of one scenario's runs in one variant (spec §8, per scenario and
-    variant): the pass rate with a Wilson interval, pass^k for every k up to the
-    number of finished runs, and the median and 90th percentile of cost, tokens,
-    total latency and time to first token, with bootstrap intervals. Pure: every
-    random draw comes from the [rng] passed in. *)
+(** Statistics of one scenario's runs in one variant (design §8, per scenario
+    and variant): the pass rate with a Wilson interval, pass^k for every k up to
+    the number of finished runs, and the median and 90th percentile of cost,
+    tokens, total latency and time to first token, with bootstrap intervals.
+    Pure: every random draw comes from the [rng] passed in. *)
 
 type outcome = Passed | Failed | Errored | Not_run
 

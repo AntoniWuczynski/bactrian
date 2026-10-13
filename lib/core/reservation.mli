@@ -1,4 +1,4 @@
-(** What a request can cost beyond what its body shows (spec §5, spend caps).
+(** What a request can cost beyond what its body shows (design §5, spend caps).
     Reads the request JSON for the fields that make the provider bill more than
     the body suggests, and prices the worst case. *)
 

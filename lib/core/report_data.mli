@@ -1,6 +1,6 @@
 (** Everything a report shows, built purely from an experiment's runs and a
-    {!Compare.result} (spec §8, Outputs). {!Report_html} and {!to_json} are two
-    views of this one value. *)
+    {!Compare.result} (design §8, Outputs). {!Report_html} and {!to_json} are
+    two views of this one value. *)
 
 val schema_version : int
 (** 1 *)

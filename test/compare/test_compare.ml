@@ -695,7 +695,7 @@ let boundary_cell ?(population = `Suite) ?(threshold = 0.05) ~p_base ~p_cand ~n
     bootstrap_no_change = rate !bootstrap_no_change;
   }
 
-(* Spec: a false verdict on one side of a two-sided interval at level 1 - α
+(* Design §8: a false verdict on one side of a two-sided interval at level 1 - α
    happens at most α/2 of the time, so a false No_change rate above
    α/2 = 0.025 by more than three Monte Carlo standard errors fails. *)
 let no_change_limit =
