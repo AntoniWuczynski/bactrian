@@ -236,10 +236,13 @@ let load path =
   | Error { at; ppath; msg } ->
       Error [ locate ~file at ~path:ppath ~message:msg ]
 
-let load_with decode path =
+let load_with ?(validate = fun (_ : 'a) -> []) decode path =
   let file = file_name path in
   let* canon, find = load path in
-  match decode canon with
+  match
+    Result.bind (decode canon) (fun v ->
+        match validate v with [] -> Ok v | errs -> Error errs)
+  with
   | Ok v -> Ok v
   | Error errs ->
       Error
@@ -250,7 +253,25 @@ let load_with decode path =
                ~path:e.path ~message:e.message)
            errs)
 
-let load_scenario path = load_with Scenario.decode path
+(* The fixtures directory is relative to the scenario file. *)
+let fixtures_exist path (s : Scenario.t) =
+  match (s.fixtures, Eio.Path.split path) with
+  | Some dir, Some (parent, _)
+    when not (Eio.Path.is_directory Eio.Path.(parent / dir)) ->
+      [
+        {
+          Config_error.path = "fixtures";
+          message = Printf.sprintf "%S is not a directory" dir;
+        };
+      ]
+  | Some _, (Some _ | None) | None, (Some _ | None) -> []
+
+let load_scenario path =
+  load_with ~validate:(fixtures_exist path) Scenario.decode path
+
+let load_pricing path =
+  Result.map Pricing.with_overrides (load_with Price_file.decode path)
+
 let load_experiment path = load_with Experiment.decode path
 
 (* {1 Globs} *)

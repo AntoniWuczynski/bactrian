@@ -202,6 +202,56 @@ let test_scenario_ok_and_json () =
   let j = loaded (Loader.load_scenario Eio.Path.(dir / "s.json")) in
   Alcotest.(check string) "json id" "j" j.Scenario.id
 
+let with_fixtures line = valid_scenario ^ Printf.sprintf "%s\n" line
+
+let test_fixtures_directory () =
+  with_dir @@ fun dir ->
+  write dir "s/sc.yaml" (with_fixtures "fixtures: ./data");
+  (match errors (Loader.load_scenario Eio.Path.(dir / "s" / "sc.yaml")) with
+  | [ e ] ->
+      Alcotest.(check (triple int string bool))
+        "located at the fixtures line" (7, "fixtures", true)
+        (e.line, e.path, String.length e.message > 0)
+  | _ -> Alcotest.fail "one error expected");
+  write dir "s/data/file.txt" "hello";
+  let s = loaded (Loader.load_scenario Eio.Path.(dir / "s" / "sc.yaml")) in
+  Alcotest.(check (option string)) "kept" (Some "./data") s.Scenario.fixtures;
+  write dir "s/sc2.yaml" (with_fixtures "fixtures: data/file.txt");
+  Alcotest.(check int)
+    "a file is not a directory" 1
+    (List.length
+       (errors (Loader.load_scenario Eio.Path.(dir / "s" / "sc2.yaml"))))
+
+let test_pricing_file () =
+  with_dir @@ fun dir ->
+  write dir "p.yaml"
+    "version: 1\n\
+     prices:\n\
+    \  - model: gpt-6-luna\n\
+    \    provider: openai\n\
+    \    effective_from: 2026-11-01\n\
+    \    rates: { input: 7, cached_input: 1, cache_write: 1, output: 2 }\n\
+    \    max_output: 10\n\
+    \    max_input: 20\n";
+  let table = loaded (Loader.load_pricing Eio.Path.(dir / "p.yaml")) in
+  let input date =
+    Option.map
+      (fun (e : Pricing.entry) -> e.rates.input)
+      (Pricing.find_in table ~model:"gpt-6-luna" ~date)
+  in
+  Alcotest.(check (option (float 1e-9)))
+    "before" (Some 0.10) (input "2026-10-01");
+  Alcotest.(check (option (float 1e-9))) "after" (Some 7.) (input "2026-11-02");
+  write dir "bad.yaml" "version: 1\nprices:\n  - model: m\n    provider: acme\n";
+  let paths =
+    List.map
+      (fun (e : Loader.located_error) -> (e.line, e.path))
+      (errors (Loader.load_pricing Eio.Path.(dir / "bad.yaml")))
+  in
+  Alcotest.(check bool)
+    "provider located" true
+    (List.mem (4, "prices[0].provider") paths)
+
 let test_experiment_error_located () =
   with_dir @@ fun dir ->
   write dir "e.yaml" "version: 1\nname: x\nrepeats: 0\nwat: 1\n";
@@ -238,5 +288,7 @@ let () =
             test_scenario_three_mistakes;
           Alcotest.test_case "valid and json" `Quick test_scenario_ok_and_json;
           Alcotest.test_case "experiment" `Quick test_experiment_error_located;
+          Alcotest.test_case "fixtures directory" `Quick test_fixtures_directory;
+          Alcotest.test_case "pricing file" `Quick test_pricing_file;
         ] );
     ]

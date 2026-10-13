@@ -74,6 +74,22 @@ bactrian run experiment.yaml
 
 `check` exits 1 and lists the offending traces otherwise, and both commands exit 64 on a configuration error, printing every mistake as `file:line:column`. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`: runs that finished are not repeated. Each run directory also gets a `verdicts.json` with the result of every assertion and checker. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls real providers, so for now it needs HTTPS support that is not built yet.
 
+Four more fields shape a run. A scenario's `fixtures` names a directory, relative to the scenario file, whose files are copied into the run's `BACTRIAN_STATE_DIR` before the agent starts, and a directory that does not exist is a configuration error. In the experiment, `normalise` lists regular expressions that are masked out of each model request before it is keyed, so two runs that differ only in, say, a date still match on replay, and each run's `meta.json` counts the masks that fired in `findings.normalise_masks`. `redact` lists further regular expressions whose matches are replaced by numbered placeholders in the cassette, on top of the provider key formats. `pricing` names a YAML file, relative to the experiment, that overrides or extends the built-in price table:
+
+```yaml
+# prices.yaml (USD per million tokens)
+version: 1
+prices:
+  - model: gpt-6-luna
+    provider: openai          # openai, anthropic, gemini or openrouter
+    effective_from: 2026-11-01  # optional
+    rates: { input: 0.2, cached_input: 0.02, cache_write: 0.25, output: 1.0 }
+    max_output: 65536
+    max_input: 272000
+```
+
+An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
+
 ## Building from source
 
 You need [opam](https://opam.ocaml.org). From the repository root:

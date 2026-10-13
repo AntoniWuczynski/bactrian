@@ -90,11 +90,12 @@ let max_over ~model body f =
       | None, _ | _, None -> None)
     (Some 0.) models
 
-let worst_case ~model ~date ~input_bytes ~max_output body =
+let worst_case ?(table = Pricing.default) ~model ~date ~input_bytes ~max_output
+    body =
   let { external_input; candidates; fallbacks = _ } = analyse body in
   max_over ~model body (fun model ->
-      Pricing.worst_case ~model ~date ~input_bytes ~external_input ~candidates
-        ~max_output)
+      Pricing.worst_case_in table ~model ~date ~input_bytes ~external_input
+        ~candidates ~max_output)
 
-let cost ~model ~date body usage =
-  max_over ~model body (fun model -> Pricing.cost ~model ~date usage)
+let cost ?(table = Pricing.default) ~model ~date body usage =
+  max_over ~model body (fun model -> Pricing.cost_in table ~model ~date usage)

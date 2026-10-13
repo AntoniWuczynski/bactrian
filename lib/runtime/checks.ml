@@ -3,14 +3,16 @@ open Bactrian_core
 type verdict = Pass | Fail of string | Checker_failed of string
 type item = { name : string; verdict : verdict }
 
-let cost ~date entries =
+let cost ?(table = Pricing.default) ~date entries =
   List.fold_left
     (fun acc ({ event; _ } : Trace.entry) ->
       match (acc, event) with
       | None, _ -> None
       | Some total, Model_call { model; usage; _ } ->
           Option.bind usage (fun u ->
-              Option.map (fun c -> total +. c) (Pricing.cost ~model ~date u))
+              Option.map
+                (fun c -> total +. c)
+                (Pricing.cost_in table ~model ~date u))
       | ( Some _,
           ( Run_start _ | Turn_start _ | Tool_call _ | Tool_result _
           | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done
@@ -28,11 +30,11 @@ let kind : Assertion.t -> string = function
   | Max_latency_ms _ -> "max_latency"
   | No_egress _ -> "no_egress"
 
-let evaluate ~process_mgr ~clock ~timeout ~cwd ~date ~assertions ~checkers
-    entries =
+let evaluate ?table ~process_mgr ~clock ~timeout ~cwd ~date ~assertions
+    ~checkers entries =
   let assertion i a =
     let verdict =
-      match Assertion.evaluate ~cost:(cost ~date) a entries with
+      match Assertion.evaluate ~cost:(cost ?table ~date) a entries with
       | Pass -> Pass
       | Fail reason -> Fail reason
     in

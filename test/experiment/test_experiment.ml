@@ -294,6 +294,8 @@ let () =
             (doc {|, "clock": {"faketime": "sometimes"}|});
           case "negative cap" [ "caps_usd.openai" ]
             (doc {|, "caps_usd": {"openai": -1}|});
+          case "unknown cap provider" [ "caps_usd.openia" ]
+            (doc {|, "caps_usd": {"openai": 1, "openia": 2}|});
           case "bad confidence" [ "compare.confidence" ]
             (doc {|, "compare": {"baseline": "a", "confidence": 1.5}|});
           case "unknown baseline" [ "compare.baseline" ]

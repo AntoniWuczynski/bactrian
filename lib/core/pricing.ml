@@ -66,6 +66,10 @@ let gemini =
   entry ~provider:"gemini" ~max_output:assumed_max_output
     ~max_input:assumed_gemini_max_input
 
+let providers = [ "openai"; "anthropic"; "gemini"; "openrouter" ]
+
+type table = entry list
+
 let table =
   [
     (* OpenAI, standard tier, short context (<= 272K). Long-context rates were
@@ -92,6 +96,18 @@ let table =
       ~long_context:(200_000, r 4.00 0.40 4.00 18.00);
   ]
 
+let default = table
+
+let with_overrides overrides =
+  let replaced (e : entry) =
+    List.exists
+      (fun (o : entry) ->
+        String.equal o.model e.model
+        && String.equal o.effective_from e.effective_from)
+      overrides
+  in
+  List.filter (fun e -> not (replaced e)) default @ overrides
+
 let free_suffix = ":free"
 
 (* OpenRouter [:free] models cost nothing whatever their id. ASSUMPTION for
@@ -107,7 +123,7 @@ let matches ~model (e : entry) =
      && String.starts_with ~prefix:e.model model
      && Char.equal model.[n] '-'
 
-let find ~model ~date =
+let find_in table ~model ~date =
   if
     String.ends_with ~suffix:free_suffix model
     && String.length model > String.length free_suffix
@@ -140,7 +156,7 @@ let applicable_rates (e : entry) ~prompt_tokens =
 
 let per_million tokens rate = float_of_int tokens *. rate /. 1e6
 
-let cost ~model ~date (u : Trace.usage) =
+let cost_in table ~model ~date (u : Trace.usage) =
   Option.map
     (fun e ->
       let rates = applicable_rates e ~prompt_tokens:u.input_tokens in
@@ -151,10 +167,10 @@ let cost ~model ~date (u : Trace.usage) =
       +. per_million cached rates.cached_input
       +. per_million written rates.cache_write
       +. per_million u.output_tokens rates.output)
-    (find ~model ~date)
+    (find_in table ~model ~date)
 
-let worst_case ~model ~date ~input_bytes ~external_input ~candidates ~max_output
-    =
+let worst_case_in table ~model ~date ~input_bytes ~external_input ~candidates
+    ~max_output =
   Option.map
     (fun e ->
       let estimate = max 0 input_bytes / 3 in
@@ -166,4 +182,8 @@ let worst_case ~model ~date ~input_bytes ~external_input ~candidates ~max_output
         max 0 (Option.value max_output ~default:e.max_output) * max 1 candidates
       in
       per_million tokens rates.input +. per_million output rates.output)
-    (find ~model ~date)
+    (find_in table ~model ~date)
+
+let find = find_in default
+let cost = cost_in default
+let worst_case = worst_case_in default

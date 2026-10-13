@@ -825,6 +825,147 @@ let routing =
   ignore (P.unregister ctx.proxy ~token:token_a);
   Alcotest.(check int) "nothing forwarded" 0 (List.length (F.requests up))
 
+let contains s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s
+    && (String.equal (String.sub s i n) sub || go (i + 1))
+  in
+  go 0
+
+(* Run settings: normalise, redact, pricing *)
+
+let with_text text body =
+  let v = canon body in
+  let messages =
+    Canon.list
+      [
+        Result.get_ok
+          (Canon.obj
+             [ ("role", Canon.string "user"); ("content", Canon.string text) ]);
+      ]
+  in
+  Canon.to_string (Canon.set_member "messages" messages v)
+
+(* Answers any request with the fixture's response. *)
+let any_request ctx (f : fixture) =
+  fake ctx
+    (F.Script
+       [
+         {
+           F.status = f.status;
+           headers = [ ("content-type", f.content_type) ];
+           chunks = [ f.raw ];
+           ending = Complete;
+         };
+       ])
+
+let date_pattern = {|\d{4}-\d{2}-\d{2}|}
+let on date = with_text ("It is " ^ date ^ ". What is the weather?")
+
+let normalise_setting =
+  Alcotest.test_case "normalise masks patterns before keying, in both modes"
+    `Quick
+  @@ with_ctx "normalise"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = any_request ctx f in
+  let run =
+    make_run ctx ~token:token_a ~upstream:(F.base_url up)
+      ~normalise:[ date_pattern ]
+  in
+  P.register ctx.proxy run;
+  check_ok (send_fixture ctx ~token:token_a ~body_of:(on "2026-10-01") f);
+  let recorded = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check int) "mask fired while recording" 1 recorded.masks_fired;
+  let recording = recording ctx run in
+  let e = only recording.exchanges in
+  Alcotest.(check bool)
+    "the canonical request holds the marker" true
+    (contains (Canon.to_string e.canonical) Mask.marker);
+  let replay ~token ~normalise date =
+    let run =
+      make_run ctx ~token ~upstream:(F.base_url up) ~normalise
+        ~mode:
+          (P.Replay
+             {
+               recording;
+               matcher = Matcher.Strict;
+               allow_reorder = false;
+               timing = P.Fast;
+             })
+    in
+    P.register ctx.proxy run;
+    let r = send_fixture ctx ~token ~body_of:(on date) f in
+    (r, P.unregister ctx.proxy ~token)
+  in
+  let r, findings =
+    replay ~token:token_b ~normalise:[ date_pattern ] "2027-03-04"
+  in
+  Alcotest.(check int) "another date matches" 200 r.status;
+  Alcotest.(check string) "recorded bytes" f.raw r.body;
+  Alcotest.(check int) "mask fired in replay" 1 findings.masks_fired;
+  let r, findings = replay ~token:token_c ~normalise:[] "2027-03-04" in
+  Alcotest.(check int) "without the pattern it is a miss" 409 r.status;
+  Alcotest.(check int) "no masks without a pattern" 0 findings.masks_fired
+
+let secret_pattern = "tok_[a-z]{6}"
+
+let redact_setting =
+  Alcotest.test_case "redact patterns never reach the cassette" `Quick
+  @@ with_ctx "redact"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = any_request ctx f in
+  let run =
+    make_run ctx ~token:token_a ~upstream:(F.base_url up)
+      ~redact:[ secret_pattern ]
+  in
+  P.register ctx.proxy run;
+  check_ok
+    (send_fixture ctx ~token:token_a
+       ~body_of:(with_text "my token is tok_abcdef, keep it safe")
+       f);
+  ignore (P.unregister ctx.proxy ~token:token_a);
+  Option.iter Store.close run.cassette;
+  let path = store_ok (Store.cassette_path ctx.store ~run_id:run.run_id) in
+  let text = Eio.Path.load path in
+  Alcotest.(check bool) "secret gone" false (contains text "tok_abcdef");
+  Alcotest.(check bool) "placeholder present" true (contains text "<secret:1>")
+
+let pricing_setting =
+  Alcotest.test_case "the run's price table settles and reserves" `Quick
+  @@ with_ctx "pricing"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  let spend pricing =
+    let token = if Option.is_some pricing then token_b else token_a in
+    let run = make_run ctx ~token ~upstream:(F.base_url up) ?pricing in
+    P.register ctx.proxy run;
+    let r = send_fixture ctx ~token f in
+    ignore (P.unregister ctx.proxy ~token);
+    (r, Ledger.spent run.ledger ~provider:"openai")
+  in
+  let _, base = spend None in
+  let double : Pricing.entry =
+    let e = Option.get (Pricing.find ~model:"gpt-6-luna" ~date:(today ())) in
+    {
+      e with
+      rates =
+        {
+          e.rates with
+          input = e.rates.input *. 10.;
+          output = e.rates.output *. 10.;
+        };
+    }
+  in
+  let _, tenfold = spend (Some (Pricing.with_overrides [ double ])) in
+  Alcotest.(check bool) "default spend is positive" true (base > 0.);
+  Alcotest.(check bool)
+    "ten times the rates, ten times the spend" true
+    (close_to tenfold (base *. 10.))
+
 let () =
   Alcotest.run "model_proxy"
     [
@@ -850,4 +991,5 @@ let () =
       ( "errors",
         [ scripted_429; errors_in_findings; unattributed_count; body_limit ] );
       ("isolation", [ two_runs ]);
+      ("run settings", [ normalise_setting; redact_setting; pricing_setting ]);
     ]

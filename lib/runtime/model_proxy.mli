@@ -59,6 +59,16 @@ type run = {
   keys : (provider * string) list;  (** Real keys, never sent to the agent. *)
   upstream : provider -> Uri.t;  (** Tests point this at the fake upstream. *)
   connector : Upstream.connector;
+  normalise : Re.re list;
+      (** The experiment's [normalise] patterns
+          ({!Bactrian_core.Regex.compile}d), masked in each model request's
+          canonical form before it is keyed (spec §7), when recording and when
+          replaying alike. *)
+  redact : Redact.pattern list;
+      (** The experiment's [redact] patterns, scrubbed in addition to the
+          provider key formats and the known literals. *)
+  pricing : Pricing.table;
+      (** Prices for this run's reservations and settlements. *)
   run_started : float;  (** Eio clock time, for exchange t_ms. *)
 }
 
@@ -73,6 +83,9 @@ type findings = {
           cut off mid-body, or an agent that disconnected before the response
           ended (the reservation stays charged in each case). *)
   refused_keys : int;  (** Requests with a missing or wrong placeholder key. *)
+  masks_fired : int;
+      (** Matches of the [normalise] patterns masked across the run's model
+          requests. *)
   cap_refusals : Ledger.refusal list;
       (** Requests refused with 402 before forwarding: an unknown model or a
           reached cap. *)

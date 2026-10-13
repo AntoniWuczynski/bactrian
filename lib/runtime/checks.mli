@@ -13,11 +13,14 @@ type item = { name : string; verdict : verdict }
 (** [name] is e.g. ["assertions[2] max_steps"] or
     ["checkers[0] python3 check.py"]. *)
 
-val cost : date:string -> Trace.entry list -> float option
+val cost :
+  ?table:Pricing.table -> date:string -> Trace.entry list -> float option
 (** Sum of {!Bactrian_core.Pricing.cost} over the model calls, priced at [date]
-    (["YYYY-MM-DD"]). [None] when a model call has no usage or no price. *)
+    in [table] (default {!Bactrian_core.Pricing.default}) (["YYYY-MM-DD"]).
+    [None] when a model call has no usage or no price. *)
 
 val evaluate :
+  ?table:Pricing.table ->
   process_mgr:_ Eio_unix.Process.mgr ->
   clock:_ Eio.Time.clock ->
   timeout:float ->

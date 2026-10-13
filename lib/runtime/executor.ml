@@ -231,6 +231,7 @@ type loaded = {
   argv : string list;
   turn_timeout : float;
   total_timeout : float;
+  pricing : Pricing.table;
 }
 
 (* [expand_globs] knows only the pattern: point at it in the experiment file. *)
@@ -275,10 +276,27 @@ let load ~fs ~experiment_file =
              (Config_loader.load_scenario Eio.Path.(base / rel)))
          files)
   in
+  let* pricing =
+    match experiment.pricing with
+    | None -> Ok Pricing.default
+    | Some file ->
+        Result.map_error
+          (fun e -> Configuration e)
+          (Config_loader.load_pricing Eio.Path.(base / file))
+  in
   match experiment.agent with
   | Http _ -> Error (Usage "http agents are not supported yet")
   | Command { argv; turn_timeout; total_timeout } ->
-      Ok { experiment; dir; scenarios; argv; turn_timeout; total_timeout }
+      Ok
+        {
+          experiment;
+          dir;
+          scenarios;
+          argv;
+          turn_timeout;
+          total_timeout;
+          pricing;
+        }
 
 (* Running *)
 
@@ -303,6 +321,11 @@ let run_config (l : loaded) (scenario : Scenario.t) ~scenario_dir
           checks_cwd = scenario_dir;
           checker_timeout = l.turn_timeout;
         };
+    fixtures =
+      Option.map (fun dir -> Filename.concat scenario_dir dir) scenario.fixtures;
+    normalise = l.experiment.normalise;
+    redact = l.experiment.redact;
+    pricing = l.pricing;
     turn_timeout = l.turn_timeout;
     total_timeout = l.total_timeout;
   }

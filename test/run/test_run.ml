@@ -79,6 +79,10 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     replay;
     env_passthrough = [];
     variant_env = [];
+    fixtures = None;
+    normalise = [];
+    redact = [];
+    pricing = Pricing.default;
     checks = None;
     turn_timeout = 20.;
     total_timeout = 30.;
@@ -634,6 +638,88 @@ let test_unknown_recording =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected a setup error"
 
+(* Settings from the experiment *)
+
+let fixtures_agent =
+  {|
+import os
+d = os.environ["BACTRIAN_STATE_DIR"]
+with open(os.path.join(d, "sub", "data.txt")) as f:
+    seen = f.read()
+with open(os.path.join(d, "seen.txt"), "w") as f:
+    f.write("saw:" + seen)
+|}
+  ^ python_agent
+
+let test_fixtures =
+  with_ctx "fixtures" @@ fun ctx ->
+  let src = Eio.Path.(ctx.dir / "fx") in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 Eio.Path.(src / "sub");
+  Eio.Path.save ~create:(`Or_truncate 0o600)
+    Eio.Path.(src / "sub" / "data.txt")
+    "hello";
+  Eio.Path.save ~create:(`Or_truncate 0o755)
+    Eio.Path.(src / "run.sh")
+    "#!/bin/sh\n";
+  let c =
+    {
+      (config ~agent:[ "python3"; "-I"; "-c"; fixtures_agent ] ()) with
+      fixtures = Some (Filename.concat (snd ctx.dir) "fx");
+    }
+  in
+  let r = ok (execute ctx c) in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check string)
+    "the agent saw the nested fixture" "saw:hello"
+    (read (file r "state/seen.txt"));
+  Alcotest.(check string) "copied" "hello" (read (file r "state/sub/data.txt"));
+  Alcotest.(check bool)
+    "mode kept" true
+    (not (Int.equal ((Unix.stat (file r "state/run.sh")).st_perm land 0o100) 0))
+
+let test_normalise_counted =
+  with_ctx "normalise" @@ fun ctx ->
+  let r = ok (execute ctx { (config ()) with normalise = [ "Paris" ] }) in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check bool) "masks in findings" true (r.findings.masks_fired > 0);
+  let meta = Yojson.Safe.from_file (file r "meta.json") in
+  Alcotest.(check int)
+    "masks in meta.json" r.findings.masks_fired
+    Yojson.Safe.Util.(
+      to_int (member "normalise_masks" (member "findings" meta)));
+  Alcotest.(check bool)
+    "bad pattern is a setup error" true
+    (Result.is_error (execute ctx { (config ()) with normalise = [ "(" ] }))
+
+let tenfold =
+  let e = Option.get (Pricing.find ~model:"gpt-6-luna" ~date:"2026-10-13") in
+  Pricing.with_overrides
+    [
+      {
+        e with
+        rates =
+          {
+            e.rates with
+            input = e.rates.input *. 10.;
+            cached_input = e.rates.cached_input *. 10.;
+            output = e.rates.output *. 10.;
+          };
+      };
+    ]
+
+let test_pricing_override =
+  with_ctx "pricing" @@ fun ctx ->
+  let spent (r : Run.result) = List.assoc "openai" r.spend in
+  let base = ok (execute ctx (config ())) in
+  let dear = ok (execute ctx { (config ()) with pricing = tenfold }) in
+  Alcotest.(check bool)
+    "the override changes the recorded spend" true
+    (Float.abs (spent dear -. (10. *. spent base)) < 1e-9 *. spent dear);
+  let meta = Yojson.Safe.from_file (file dear "meta.json") in
+  Alcotest.(check (float 1e-12))
+    "meta.json agrees" (spent dear)
+    Yojson.Safe.Util.(to_float (member "openai" (member "spend_usd" meta)))
+
 let () =
   Alcotest.run "run"
     [
@@ -650,6 +736,15 @@ let () =
             test_replay_diverged;
           Alcotest.test_case "unknown recording" `Quick test_unknown_recording;
           Alcotest.test_case "command line replay" `Slow test_cli_replay;
+        ] );
+      ( "settings",
+        [
+          Alcotest.test_case "fixtures are copied into the state directory"
+            `Slow test_fixtures;
+          Alcotest.test_case "normalise masks are counted" `Slow
+            test_normalise_counted;
+          Alcotest.test_case "pricing override changes the spend" `Slow
+            test_pricing_override;
         ] );
       ( "failures",
         [

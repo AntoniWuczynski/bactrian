@@ -7,6 +7,9 @@ type rates = {
   output : float;
 }
 
+val providers : string list
+(** The provider names an entry or a spend cap may use. *)
+
 type entry = {
   model : string;
       (** Exact ID, also matched as a prefix of dated IDs such as
@@ -25,6 +28,35 @@ type entry = {
 }
 
 val table : entry list
+(** The built-in entries. *)
+
+type table
+(** A price table: the built-in entries, optionally changed by an experiment's
+    price file. Immutable. *)
+
+val default : table
+(** The built-in entries only. {!find}, {!cost} and {!worst_case} use it. *)
+
+val with_overrides : entry list -> table
+(** The built-in entries with [entries] applied: an entry replaces the built-in
+    one of the same [model] and [effective_from], and any other adds a model or
+    another period of one. *)
+
+val find_in : table -> model:string -> date:string -> entry option
+
+val cost_in :
+  table -> model:string -> date:string -> Trace.usage -> float option
+
+val worst_case_in :
+  table ->
+  model:string ->
+  date:string ->
+  input_bytes:int ->
+  external_input:bool ->
+  candidates:int ->
+  max_output:int option ->
+  float option
+(** {!find}, {!cost} and {!worst_case} in a given table. *)
 
 val find : model:string -> date:string -> entry option
 (** Exact match first, then the longest table model that is a prefix of [model].

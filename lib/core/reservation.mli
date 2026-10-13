@@ -17,6 +17,7 @@ type t = {
 val analyse : Canon.t -> t
 
 val worst_case :
+  ?table:Pricing.table ->
   model:string ->
   date:string ->
   input_bytes:int ->
@@ -30,7 +31,13 @@ val worst_case :
     fallback is refused, and one with a paid fallback is reserved at the paid
     price. *)
 
-val cost : model:string -> date:string -> Canon.t -> Trace.usage -> float option
+val cost :
+  ?table:Pricing.table ->
+  model:string ->
+  date:string ->
+  Canon.t ->
+  Trace.usage ->
+  float option
 (** {!Pricing.cost} at the most expensive of [model] and the request's
     fallbacks, because the response does not say which one served it. [None]
     when any of them is unknown. *)

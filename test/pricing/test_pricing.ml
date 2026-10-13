@@ -409,6 +409,161 @@ let test_monotonic () =
   QCheck_alcotest.to_alcotest prop |> fun (name, speed, f) ->
   Alcotest.test_case name speed f
 
+(* Overrides *)
+
+let entry ?(effective_from = "1970-01-01") ?long_context model input : P.entry =
+  {
+    model;
+    provider = "openai";
+    effective_from;
+    rates = { input; cached_input = input; cache_write = input; output = 1. };
+    long_context;
+    max_output = 1000;
+    max_input = 5000;
+  }
+
+let input_rate table ?(date = today) model =
+  Option.map (fun (e : P.entry) -> e.rates.input) (P.find_in table ~model ~date)
+
+let test_override_replaces () =
+  let table = P.with_overrides [ entry "gpt-6-luna" 7. ] in
+  Alcotest.(check (option (float 1e-9)))
+    "overridden" (Some 7.)
+    (input_rate table "gpt-6-luna");
+  Alcotest.(check (option (float 1e-9)))
+    "other models untouched" (Some 2.)
+    (input_rate table "gpt-6-sol");
+  Alcotest.(check (option (float 1e-9)))
+    "default table unchanged" (Some 0.10)
+    (input_rate P.default "gpt-6-luna");
+  Alcotest.(check cost_t)
+    "cost uses the table" (Some 7.)
+    (P.cost_in table ~model:"gpt-6-luna" ~date:today
+       (usage ~i:1_000_000 ~o:0 ()))
+
+let test_override_extends () =
+  let table = P.with_overrides [ entry "my-model" 3. ] in
+  Alcotest.(check (option (float 1e-9)))
+    "new model" (Some 3.)
+    (input_rate table "my-model");
+  Alcotest.(check (option (float 1e-9)))
+    "dated id" (Some 3.)
+    (input_rate table "my-model-2026-01-01");
+  Alcotest.(check bool)
+    "unknown in the default table" true
+    (Option.is_none (input_rate P.default "my-model"))
+
+let test_override_dates () =
+  (* Same model and date replaces, another date adds a period. *)
+  let table =
+    P.with_overrides
+      [
+        entry ~effective_from:"2027-01-01" "gemini-3.8-flash" 9.;
+        entry ~effective_from:"2026-06-01" "gemini-3.8-flash" 4.;
+      ]
+  in
+  Alcotest.(check (option (float 1e-9)))
+    "before the first period" (Some 0.75)
+    (input_rate table ~date:"2026-01-01" "gemini-3.8-flash");
+  Alcotest.(check (option (float 1e-9)))
+    "added period" (Some 4.)
+    (input_rate table ~date:"2026-10-13" "gemini-3.8-flash");
+  Alcotest.(check (option (float 1e-9)))
+    "replaced period" (Some 9.)
+    (input_rate table ~date:"2027-02-01" "gemini-3.8-flash")
+
+let test_override_worst_case () =
+  let table = P.with_overrides [ entry "gpt-6-luna" 6_000_000. ] in
+  let wc table =
+    P.worst_case_in table ~model:"gpt-6-luna" ~date:today ~input_bytes:3
+      ~external_input:false ~candidates:1 ~max_output:(Some 0)
+  in
+  Alcotest.(check cost_t) "override reserves more" (Some 6.) (wc table);
+  Alcotest.(check bool)
+    "default reserves less" true
+    (Option.get (wc P.default) < 1e-3)
+
+(* The pricing file *)
+
+let price_file json =
+  match Canon.of_string json with
+  | Error _ -> Alcotest.fail "test document is not JSON"
+  | Ok c -> Price_file.decode c
+
+let test_price_file () =
+  match
+    price_file
+      {|{"version": 1, "prices": [
+          {"model": "my-model", "provider": "openai",
+           "effective_from": "2026-11-01",
+           "rates": {"input": 1, "cached_input": 0.1, "cache_write": 1.25, "output": 5},
+           "long_context": {"above": 200000,
+             "rates": {"input": 2, "cached_input": 0.2, "cache_write": 2.5, "output": 10}},
+           "max_output": 4096, "max_input": 100000},
+          {"model": "plain", "provider": "gemini",
+           "rates": {"input": 1, "cached_input": 1, "cache_write": 1, "output": 2},
+           "max_output": 10, "max_input": 20}]}|}
+  with
+  | Error es ->
+      Alcotest.failf "unexpected: %a" Fmt.(list ~sep:semi Config_error.pp) es
+  | Ok [ a; b ] ->
+      Alcotest.(check string) "model" "my-model" a.model;
+      Alcotest.(check string) "date" "2026-11-01" a.effective_from;
+      Alcotest.(check (float 1e-9)) "cache write" 1.25 a.rates.cache_write;
+      Alcotest.(check (option int))
+        "threshold" (Some 200000)
+        (Option.map fst a.long_context);
+      Alcotest.(check int) "max input" 100000 a.max_input;
+      Alcotest.(check string) "default date" "1970-01-01" b.effective_from;
+      Alcotest.(check string) "provider" "gemini" b.provider
+  | Ok _ -> Alcotest.fail "expected two entries"
+
+let price_file_paths json =
+  match price_file json with
+  | Ok _ -> Alcotest.fail "expected errors"
+  | Error es ->
+      List.sort String.compare
+        (List.map (fun (e : Config_error.error) -> e.path) es)
+
+let test_price_file_errors () =
+  let entry extra =
+    Printf.sprintf
+      {|{"version": 1, "prices": [{"model": "m", "provider": "openai",
+         "rates": {"input": 1, "cached_input": 1, "cache_write": 1, "output": 1},
+         "max_output": 1, "max_input": 1 %s}]}|}
+      extra
+  in
+  Alcotest.(check (list string))
+    "unknown provider" [ "prices[0].provider" ]
+    (price_file_paths
+       {|{"version": 1, "prices": [{"model": "m", "provider": "acme",
+         "rates": {"input": 1, "cached_input": 1, "cache_write": 1, "output": 1},
+         "max_output": 1, "max_input": 1}]}|});
+  Alcotest.(check (list string))
+    "bad date"
+    [ "prices[0].effective_from" ]
+    (price_file_paths (entry {|, "effective_from": "next week"|}));
+  Alcotest.(check (list string))
+    "unknown field" [ "prices[0].colour" ]
+    (price_file_paths (entry {|, "colour": 1|}));
+  Alcotest.(check (list string))
+    "missing rate"
+    [ "prices[0].rates.output" ]
+    (price_file_paths
+       {|{"version": 1, "prices": [{"model": "m", "provider": "openai",
+         "rates": {"input": 1, "cached_input": 1, "cache_write": 1},
+         "max_output": 1, "max_input": 1}]}|});
+  Alcotest.(check (list string))
+    "negative rate"
+    [ "prices[0].rates.input" ]
+    (price_file_paths
+       {|{"version": 1, "prices": [{"model": "m", "provider": "openai",
+         "rates": {"input": -1, "cached_input": 1, "cache_write": 1, "output": 1},
+         "max_output": 1, "max_input": 1}]}|});
+  Alcotest.(check (list string))
+    "wrong version" [ "version" ]
+    (price_file_paths {|{"version": 2, "prices": []}|})
+
 let () =
   Alcotest.run "pricing"
     [
@@ -418,6 +573,15 @@ let () =
           Alcotest.test_case "find" `Quick test_find;
           Alcotest.test_case "latest effective entry" `Quick
             test_find_picks_latest;
+        ] );
+      ( "overrides",
+        [
+          Alcotest.test_case "replace" `Quick test_override_replaces;
+          Alcotest.test_case "extend" `Quick test_override_extends;
+          Alcotest.test_case "dates" `Quick test_override_dates;
+          Alcotest.test_case "worst case" `Quick test_override_worst_case;
+          Alcotest.test_case "file" `Quick test_price_file;
+          Alcotest.test_case "file errors" `Quick test_price_file_errors;
         ] );
       ( "cost",
         [

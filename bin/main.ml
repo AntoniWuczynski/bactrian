@@ -296,6 +296,10 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     replay;
     env_passthrough;
     variant_env = [];
+    fixtures = None;
+    normalise = [];
+    redact = [];
+    pricing = Bactrian_core.Pricing.default;
     checks = None;
     turn_timeout;
     total_timeout;

@@ -21,6 +21,13 @@ val load :
 
 val load_scenario :
   _ Eio.Path.t -> (Bactrian_core.Scenario.t, located_error list) result
+(** Also an error at path [fixtures] when the directory it names (relative to
+    the scenario file) does not exist. *)
+
+val load_pricing :
+  _ Eio.Path.t -> (Bactrian_core.Pricing.table, located_error list) result
+(** A price file ({!Bactrian_core.Price_file}) applied over the built-in table.
+*)
 
 val load_experiment :
   _ Eio.Path.t -> (Bactrian_core.Experiment.t, located_error list) result

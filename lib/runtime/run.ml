@@ -46,6 +46,10 @@ type config = {
   env_passthrough : string list;
   variant_env : (string * string) list;
   checks : checks option;
+  fixtures : string option;
+  normalise : string list;
+  redact : string list;
+  pricing : Pricing.table;
   turn_timeout : float;
   total_timeout : float;
 }
@@ -300,6 +304,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
              ("transport_errors", `Int findings.transport_errors);
              ("usage_gaps", `Int findings.usage_gaps);
              ("refused_keys", `Int findings.refused_keys);
+             ("normalise_masks", `Int findings.masks_fired);
              ("cap_refusals", count findings.cap_refusals);
              ("divergences", count findings.divergences);
              ("errors", count findings.errors);
@@ -325,9 +330,56 @@ let no_findings : P.findings =
     transport_errors = 0;
     usage_gaps = 0;
     refused_keys = 0;
+    masks_fired = 0;
     cap_refusals = [];
     errors = [];
   }
+
+let compile_patterns ~what sources =
+  List.fold_right
+    (fun source acc ->
+      let* rest = acc in
+      match Regex.compile source with
+      | Ok re -> Ok (re :: rest)
+      | Error reason ->
+          Error (Printf.sprintf "invalid %s pattern %S: %s" what source reason))
+    sources (Ok [])
+
+let redaction_patterns sources =
+  List.fold_right
+    (fun source acc ->
+      let* rest = acc in
+      match Redact.pattern source with
+      | Ok p -> Ok (p :: rest)
+      | Error e -> Error (Format.asprintf "%a" Redact.pp_error e))
+    sources (Ok [])
+
+(* Copies the regular files and directories of [src] into [dst]. Symbolic links
+   and other special files are left out, so a link cannot lead out of the
+   fixtures directory. *)
+let rec copy_tree src dst =
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 dst;
+  List.iter
+    (fun (kind, name) ->
+      let from = Eio.Path.(src / name) and into = Eio.Path.(dst / name) in
+      match kind with
+      | `Directory -> copy_tree from into
+      | `Regular_file ->
+          let perm = (Eio.Path.stat ~follow:false from).perm land 0o777 in
+          Eio.Path.save ~create:(`Or_truncate perm) into (Eio.Path.load from)
+      | `Unknown | `Fifo | `Character_special | `Symbolic_link | `Block_device
+      | `Socket ->
+          ())
+    (Eio.Path.read_dir_entries src)
+
+let copy_fixtures ~env ~state_dir = function
+  | None -> Ok ()
+  | Some dir -> (
+      try
+        copy_tree Eio.Path.(Eio.Stdenv.fs env / dir) state_dir;
+        Ok ()
+      with Eio.Io _ as e ->
+        Error (Printf.sprintf "fixtures %S: %s" dir (Printexc.to_string e)))
 
 (* After [end] the agent gets this long to exit on its own, and after SIGTERM
    this long before SIGKILL. *)
@@ -344,6 +396,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let run_id = fresh_id ~random_bytes now in
   let token = hex (random_bytes 16) in
   on_start run_id;
+  let* normalise = compile_patterns ~what:"normalise" config.normalise in
+  let* redact = redaction_patterns config.redact in
   let keys = match keys with Some k -> k | None -> keys_from_environment () in
   let* run_dir =
     Result.map_error store_error (Store.ensure_run_dir store ~run_id)
@@ -373,6 +427,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let state_dir = Eio.Path.(run_dir / "state") in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 state_dir;
   let state_dir_path = Filename.concat run_dir_path "state" in
+  let* () = copy_fixtures ~env ~state_dir config.fixtures in
   let header : Cassette.header =
     {
       run_id;
@@ -431,6 +486,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         keys;
         upstream;
         connector;
+        normalise;
+        redact;
+        pricing = config.pricing;
         run_started = !started;
       };
     registered := true;
@@ -535,7 +593,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           let items =
             Checks.evaluate
               ~process_mgr:(Eio.Stdenv.process_mgr env)
-              ~clock ~timeout:c.checker_timeout
+              ~table:config.pricing ~clock ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
               ~date:(String.sub (rfc3339 now) 0 10)
               ~assertions:c.assertions ~checkers:c.checkers entries

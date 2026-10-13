@@ -73,6 +73,15 @@ type config = {
       (** Evaluated over the trace of a run that otherwise passed; the result is
           written to [verdicts.json] (atomically) in the run directory. [None]
           for record and replay from the command line. *)
+  fixtures : string option;
+      (** A directory whose files are copied, recursively, into the state
+          directory before the agent starts (spec §5 step 1). Symbolic links are
+          not followed. *)
+  normalise : string list;
+      (** Experiment [normalise] patterns, see {!Model_proxy.run}. *)
+  redact : string list;  (** Experiment [redact] patterns. *)
+  pricing : Pricing.table;
+      (** For the run's reservations, settlement and [max_cost_usd]. *)
   turn_timeout : float;
   total_timeout : float;  (** Longest the whole run may take. *)
 }
@@ -106,7 +115,7 @@ val execute :
     and meta.json (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
-    failure): no agent was started.
+    failure, unreadable fixtures, an invalid pattern): no agent was started.
 
     [on_start] is called with the run ID as soon as it is chosen, before
     anything can fail or be cancelled, so the caller knows which run directory a

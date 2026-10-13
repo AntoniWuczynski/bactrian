@@ -61,6 +61,9 @@ type run = {
   keys : (provider * string) list;
   upstream : provider -> Uri.t;
   connector : Upstream.connector;
+  normalise : Re.re list;
+  redact : Redact.pattern list;
+  pricing : Pricing.table;
   run_started : float;
 }
 
@@ -70,6 +73,7 @@ type findings = {
   transport_errors : int;
   usage_gaps : int;
   refused_keys : int;
+  masks_fired : int;
   cap_refusals : Ledger.refusal list;
   errors : string list;
 }
@@ -93,6 +97,7 @@ type state = {
   mutable transport_errors : int;
   mutable usage_gaps : int;
   mutable refused_keys : int;
+  mutable masks_fired : int;
   mutable cap_refusals : Ledger.refusal list;  (** Newest first. *)
   mutable errors : string list;  (** Newest first. *)
   mutable ended : bool;
@@ -296,7 +301,8 @@ let known_secrets run = run.token :: List.map snd run.keys
 
 let scrub st text =
   let redact, text =
-    Redact.scrub ~patterns:Redact.provider_key_patterns
+    Redact.scrub
+      ~patterns:(Redact.provider_key_patterns @ st.run.redact)
       ~known:(known_secrets st.run) st.redact text
   in
   st.redact <- redact;
@@ -392,13 +398,13 @@ let response_body x (head : Upstream.head) chunks : Protocol.body option =
 
 (* The actual cost of a finished call, or [None] for a usage gap. Providers do
    not bill requests they reject, so an error status costs nothing. *)
-let actual_cost x ~model ~date (head : Upstream.head) chunks =
+let actual_cost x ~table ~model ~date (head : Upstream.head) chunks =
   if head.status >= 400 then Some 0.
   else
     let (module A : Protocol.S) = x.adapter in
     match Option.map A.summarise (response_body x head chunks) with
     | Some (Ok { usage = Some u; _ }) ->
-        Reservation.cost ~model ~date x.parsed u
+        Reservation.cost ~table ~model ~date x.parsed u
     | Some (Ok { usage = None; _ }) | Some (Error _) | None -> None
 
 (* Live calls *)
@@ -467,7 +473,7 @@ let finish_live st x ~record ~model ~date ~reservation ~head ~chunks finish =
     | Upstream (Ok ()), None ->
         None
     | Upstream (Ok ()), Some h ->
-        actual_cost x ~model ~date h (List.map snd chunks)
+        actual_cost x ~table:st.run.pricing ~model ~date h (List.map snd chunks)
   in
   Ledger.settle st.run.ledger reservation ~actual;
   locked st (fun () ->
@@ -521,7 +527,7 @@ let live t ~conn_sw st x ~record =
   | Some real_key -> (
       let reservation =
         match
-          Reservation.worst_case ~model ~date
+          Reservation.worst_case ~table:run.pricing ~model ~date
             ~input_bytes:(String.length x.body)
             ~max_output:(max_output x.parsed) x.parsed
         with
@@ -651,6 +657,16 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
             match A.canonical_request ~path parsed with
             | Error e -> Error (Format.asprintf "%a" Protocol.pp_error e)
             | Ok canonical -> Ok (parsed, canonical))
+      in
+      (* The one place [normalise] applies: keys, cassette and replay all use
+         the masked canonical request. *)
+      let parsed =
+        Result.map
+          (fun (parsed, canonical) ->
+            let masks, canonical = Mask.canon st.run.normalise canonical in
+            locked st (fun () -> st.masks_fired <- st.masks_fired + masks);
+            (parsed, canonical))
+          parsed
       in
       match parsed with
       | Error reason ->
@@ -844,6 +860,7 @@ let register t run =
       transport_errors = 0;
       usage_gaps = 0;
       refused_keys = 0;
+      masks_fired = 0;
       cap_refusals = [];
       errors = [];
       ended = false;
@@ -867,6 +884,7 @@ let unregister t ~token =
             transport_errors = st.transport_errors;
             usage_gaps = st.usage_gaps;
             refused_keys = st.refused_keys;
+            masks_fired = st.masks_fired;
             cap_refusals = List.rev st.cap_refusals;
             errors = List.rev st.errors;
           })

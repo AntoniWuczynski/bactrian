@@ -186,6 +186,21 @@ let compare_block ~path c =
       in
       { baseline; confidence; thresholds; gate; population })
 
+let caps_usd ~path c =
+  let names =
+    Option.fold ~none:[] ~some:(List.map fst) (Canon.to_fields_opt c)
+  in
+  let known name =
+    if List.exists (String.equal name) Pricing.providers then Ok ()
+    else
+      fail ~path:(field_path path name)
+        (Printf.sprintf "unknown provider %S (expected one of: %s)" name
+           (String.concat ", " Pricing.providers))
+  in
+  let+ caps = assoc (float_at_least 0.0) ~path c
+  and+ (_ : unit list) = collect (List.map known names) in
+  caps
+
 let sandbox =
   enum ~what:"sandbox mode"
     [ ("auto", `Auto); ("strict", `Strict); ("off", `Off) ]
@@ -224,7 +239,7 @@ let decode c =
         and+ redact = default r "redact" [] (list regex)
         and+ sandbox = default r "sandbox" `Auto sandbox
         and+ faketime = default r "clock" true clock
-        and+ caps_usd = default r "caps_usd" [] (assoc (float_at_least 0.0))
+        and+ caps_usd = default r "caps_usd" [] caps_usd
         and+ pricing = optional r "pricing" non_empty_string
         and+ seed = default r "seed" 0 int
         and+ compare = optional r "compare" compare_block in

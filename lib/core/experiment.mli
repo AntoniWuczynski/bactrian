@@ -38,7 +38,7 @@ type t = {
   sandbox : [ `Auto | `Strict | `Off ];
   faketime : bool;
   caps_usd : (string * float) list;
-  pricing : string option;
+  pricing : string option;  (** Price file, relative to the experiment file. *)
   seed : int;
   env_passthrough : string list;
   compare : compare option;
@@ -62,6 +62,7 @@ val decode : Canon.t -> (t, error list) result
       [mcp: {server: policy}], policies [record|replay|passthrough|block]
     - [normalise], [redact]: lists of regular expressions
     - [sandbox: auto|strict|off] (default auto), [clock: {faketime: auto|off}]
-      (default auto), [caps_usd: {provider: n}], [pricing]
+      (default auto), [caps_usd: {provider: n}] ([provider] is one of
+      {!Pricing.providers}), [pricing] (a price file, see {!Price_file})
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)

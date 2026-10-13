@@ -138,6 +138,10 @@ let acceptance agent () =
         replay;
         env_passthrough = [ prompt_variable ];
         variant_env = [];
+        fixtures = None;
+        normalise = [];
+        redact = [];
+        pricing = Pricing.default;
         checks = None;
         turn_timeout = 60.;
         total_timeout = 90.;

@@ -113,14 +113,14 @@ let block_path ctx = Filename.concat (Sys.getcwd ()) (ctx.dir ^ "/block")
 let scenario_json
     ?(assertions =
       {|[{"tool_sequence": {"mode": "exact", "tools": ["get_weather"]}}, {"max_steps": 2}]|})
-    ?(checkers = "[]") id =
+    ?(checkers = "[]") ?(extra = "") id =
   Printf.sprintf
     {|{"version": 1, "id": %S, "timezone": "Europe/London",
- "turns": [{"user": %S}], "assertions": %s, "checkers": %s}|}
-    id weather_turn assertions checkers
+ "turns": [{"user": %S}], "assertions": %s, "checkers": %s%s}|}
+    id weather_turn assertions checkers extra
 
 let experiment_json ctx ?(repeats = 2) ?(concurrency = 2)
-    ?(caps = {|{"openai": 100}|}) ?(seed = 3) () =
+    ?(caps = {|{"openai": 100}|}) ?(seed = 3) ?(extra = "") ?(prelude = "") () =
   let variant name =
     Printf.sprintf
       {|%S: {"env": {"AGENT_LOG": %S, "AGENT_BLOCK": %S, "VARIANT_NAME": %S}}|}
@@ -131,9 +131,10 @@ let experiment_json ctx ?(repeats = 2) ?(concurrency = 2)
  "agent": {"protocol": "command", "command": ["python3", "-I", "-c", %s]},
  "scenarios": ["scenarios/*.json"],
  "variants": {%s, %s},
- "repeats": %d, "concurrency": %d, "caps_usd": %s, "seed": %d}|}
-    (Yojson.Safe.to_string (`String (agent_prefix ^ Weather_agent.script)))
-    (variant "a") (variant "b") repeats concurrency caps seed
+ "repeats": %d, "concurrency": %d, "caps_usd": %s, "seed": %d%s}|}
+    (Yojson.Safe.to_string
+       (`String (prelude ^ agent_prefix ^ Weather_agent.script)))
+    (variant "a") (variant "b") repeats concurrency caps seed extra
 
 let with_ctx name ?(scenarios = [ "s1"; "s2" ]) f () =
   Eio_main.run @@ fun env ->
@@ -454,6 +455,110 @@ let test_failing_assertion_and_checker =
   failed "strict.json" "assertions[0] max_steps";
   failed "checked.json" "nope"
 
+(* Scenario and experiment settings *)
+
+let run_meta ctx id =
+  Yojson.Safe.from_string
+    (read ctx (Printf.sprintf ".bactrian/runs/%s/meta.json" id))
+
+let run_ids (s : E.summary) = List.filter_map (fun (_, _, id) -> id) s.runs
+
+let spent ctx id =
+  Yojson.Safe.Util.(
+    to_float (member "openai" (member "spend_usd" (run_meta ctx id))))
+
+let settings_ctx name f =
+  with_ctx name ~scenarios:[ "s1" ] (fun ctx ->
+      write ctx "scenarios/fx/sub/data.txt" "hello";
+      write ctx "scenarios/s1.json"
+        (scenario_json ~extra:{|, "fixtures": "./fx"|} "s1");
+      f ctx)
+
+let fixtures_prelude =
+  {|
+import os
+d = os.environ["BACTRIAN_STATE_DIR"]
+with open(os.path.join(d, "sub", "data.txt")) as f:
+    seen = f.read()
+with open(os.path.join(d, "seen.txt"), "w") as f:
+    f.write("saw:" + seen)
+|}
+
+let test_fixtures_and_normalise =
+  settings_ctx "settings" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx ~prelude:fixtures_prelude
+       ~extra:{|, "normalise": ["Paris"]|} ());
+  let s = ok (go ctx) in
+  Alcotest.(check (list string))
+    "all passed"
+    [ "passed"; "passed"; "passed"; "passed" ]
+    (kinds s);
+  List.iter
+    (fun id ->
+      Alcotest.(check string)
+        "fixture seen by the agent" "saw:hello"
+        (read ctx (Printf.sprintf ".bactrian/runs/%s/state/seen.txt" id));
+      Alcotest.(check bool)
+        "masks counted" true
+        Yojson.Safe.Util.(
+          to_int
+            (member "normalise_masks" (member "findings" (run_meta ctx id)))
+          > 0))
+    (run_ids s)
+
+let test_missing_fixtures =
+  settings_ctx "nofixtures" @@ fun ctx ->
+  write ctx "scenarios/s1.json"
+    (scenario_json ~extra:{|, "fixtures": "./nowhere"|} "s1");
+  match go ctx with
+  | Error (E.Configuration [ e ]) ->
+      Alcotest.(check (pair string string))
+        "located at fixtures"
+        ("fixtures", "scenarios/s1.json")
+        (e.path, Filename.concat "scenarios" (Filename.basename e.file))
+  | Ok _ | Error (E.Configuration _ | E.Environment _ | E.Usage _) ->
+      Alcotest.fail "expected one configuration error"
+
+let prices =
+  {|version: 1
+prices:
+  - model: gpt-6-luna
+    provider: openai
+    rates: { input: 1.0, cached_input: 0.1, cache_write: 1.25, output: 5.0 }
+    max_output: 65536
+    max_input: 272000
+|}
+
+let test_pricing_file =
+  settings_ctx "pricing" @@ fun ctx ->
+  let first_spend () =
+    let s = ok (go ctx) in
+    spent ctx (List.hd (run_ids s))
+  in
+  let base = first_spend () in
+  write ctx "prices.yaml" prices;
+  write ctx "exp.json"
+    (experiment_json ctx ~extra:{|, "pricing": "prices.yaml"|} ());
+  let dear = first_spend () in
+  Alcotest.(check bool) "base is positive" true (base > 0.);
+  Alcotest.(check bool)
+    "the file's rates (ten times the built-in ones) set the spend" true
+    (Float.abs (dear -. (10. *. base)) < 1e-9 *. dear);
+  write ctx "prices.yaml"
+    "version: 1\nprices:\n  - model: m\n    provider: acme\n";
+  match go ctx with
+  | Error (E.Configuration es) ->
+      Alcotest.(check bool)
+        "errors are in the price file" true
+        (List.exists
+           (fun (e : Config_loader.located_error) ->
+             Filename.basename e.file = "prices.yaml"
+             && e.path = "prices[0].provider")
+           es)
+  | Ok _ | Error (E.Environment _ | E.Usage _) ->
+      Alcotest.fail "expected configuration errors"
+
 let () =
   Alcotest.run "executor"
     [
@@ -479,6 +584,13 @@ let () =
           Alcotest.test_case "interrupt then resume" `Slow
             test_interrupt_and_resume;
           Alcotest.test_case "resume errors" `Slow test_resume_errors;
+        ] );
+      ( "settings",
+        [
+          Alcotest.test_case "fixtures and normalise" `Slow
+            test_fixtures_and_normalise;
+          Alcotest.test_case "missing fixtures" `Slow test_missing_fixtures;
+          Alcotest.test_case "pricing file" `Slow test_pricing_file;
         ] );
       ("caps", [ Alcotest.test_case "caps respected" `Slow test_caps ]);
     ]

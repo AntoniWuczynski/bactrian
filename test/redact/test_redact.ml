@@ -261,6 +261,26 @@ let test_provider_patterns_compile () =
     "all six provider patterns compile" 6
     (List.length Bactrian_core.Redact.provider_key_patterns)
 
+(* Mask *)
+
+let test_mask () =
+  let re source = Result.get_ok (Regex.compile source) in
+  let doc =
+    Result.get_ok
+      (Canon.of_string
+         {|{"2026-10-01": "on 2026-10-01 and 2026-10-02", "n": 2026, "l": ["x 2026-01-01", true, null]}|})
+  in
+  let n, out = Mask.canon [ re {|\d{4}-\d{2}-\d{2}|} ] doc in
+  Alcotest.(check int) "three matches" 3 n;
+  Alcotest.(check string)
+    "string values only"
+    {|{"2026-10-01":"on <normalised> and <normalised>","l":["x <normalised>",true,null],"n":2026}|}
+    (Canon.to_string out);
+  let n, same = Mask.canon [] doc in
+  Alcotest.(check (pair int bool))
+    "no patterns" (0, true)
+    (n, Canon.equal doc same)
+
 let () =
   Alcotest.run "redact"
     [
@@ -268,6 +288,7 @@ let () =
         [
           Alcotest.test_case "provider patterns compile" `Quick
             test_provider_patterns_compile;
+          Alcotest.test_case "mask" `Quick test_mask;
           Alcotest.test_case "two keys" `Quick test_two_keys;
           Alcotest.test_case "same key" `Quick test_same_key_same_placeholder;
           Alcotest.test_case "known" `Quick test_known;

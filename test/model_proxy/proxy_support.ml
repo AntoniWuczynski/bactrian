@@ -193,7 +193,18 @@ let run_id_of token = "run-" ^ String.sub token 0 4
 let open_cassette ctx run_id =
   store_ok (Store.open_cassette ~sw:ctx.sw ctx.store (header run_id))
 
-let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps) ctx ~token
+let compile source =
+  match Regex.compile source with
+  | Ok re -> re
+  | Error e -> Alcotest.failf "pattern %S: %s" source e
+
+let redaction source =
+  match Redact.pattern source with
+  | Ok p -> p
+  | Error _ -> Alcotest.failf "pattern %S" source
+
+let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
+    ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default) ctx ~token
     ~upstream =
   let run_id = run_id_of token in
   {
@@ -209,6 +220,9 @@ let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps) ctx ~token
     keys = real_keys;
     upstream = (fun _ -> Uri.of_string upstream);
     connector = Upstream.plain;
+    normalise = List.map compile normalise;
+    redact = List.map redaction redact;
+    pricing;
     run_started = Eio.Time.now (Eio.Stdenv.clock ctx.env);
   }
 
