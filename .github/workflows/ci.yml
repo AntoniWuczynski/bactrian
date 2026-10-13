@@ -29,6 +29,7 @@ jobs:
       - run: opam install . --deps-only --with-test --locked
       - run: opam exec -- dune build
       - run: opam exec -- dune test
+      - run: opam exec -- dune build @acceptance
   lint-fmt:
     runs-on: ubuntu-latest
     steps:

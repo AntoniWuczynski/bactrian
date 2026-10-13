@@ -10,18 +10,11 @@ let prompt_variable = "AGENT_SYSTEM_PROMPT"
 let first_turn =
   "What is the weather in Paris right now? Use the get_weather tool."
 
-(* The repository root: dune runs tests in a copy of the tree under _build. *)
+(* The repository root: dune sets DUNE_SOURCEROOT in every action. *)
 let repo_root =
-  let cwd = Sys.getcwd () in
-  let marker = "/_build/" in
-  let n = String.length marker in
-  let rec find i =
-    if i + n > String.length cwd then
-      Alcotest.failf "not running under _build: %s" cwd
-    else if String.equal (String.sub cwd i n) marker then String.sub cwd 0 i
-    else find (i + 1)
-  in
-  find 0
+  match Sys.getenv_opt "DUNE_SOURCEROOT" with
+  | Some root -> root
+  | None -> Alcotest.failf "DUNE_SOURCEROOT is not set (run through dune)"
 
 let in_repo path = Filename.concat repo_root path
 

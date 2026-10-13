@@ -3,16 +3,8 @@
 ; make dune rerun the test when their sources change. dist/agent.js is built by
 ; `pnpm --dir examples/agents/typescript build`.
 
-(test
+(executable
  (name test_acceptance)
- (package bactrian)
- (deps
-  (source_tree ../fixtures/protocols/openai_chat)
-  ../../examples/agents/typescript/src/agent.ts
-  ../../examples/agents/typescript/dist/agent.js
-  ../../examples/agents/python/agent.py
-  ../../examples/agents/python/pyproject.toml
-  ../../examples/agents/python/uv.lock)
  (libraries
   bactrian.core
   bactrian.runtime
@@ -25,3 +17,19 @@
   alcotest)
  (flags
   (:standard -w -70)))
+
+; Not part of `dune test`: it needs node, uv and the built TypeScript agent.
+; Run it with `dune build @acceptance`. dune sets DUNE_SOURCEROOT to the
+; repository root in every action, whatever the build directory.
+
+(rule
+ (alias acceptance)
+ (deps
+  (source_tree ../fixtures/protocols/openai_chat)
+  ../../examples/agents/typescript/src/agent.ts
+  ../../examples/agents/typescript/dist/agent.js
+  ../../examples/agents/python/agent.py
+  ../../examples/agents/python/pyproject.toml
+  ../../examples/agents/python/uv.lock)
+ (action
+  (run %{exe:test_acceptance.exe})))
