@@ -565,6 +565,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     | Command argv ->
         Agent_clock.decide
           ~hidden:(Sandbox.preload_hidden config.sandbox)
+          ~stripped:(Sandbox.strips_preload config.sandbox)
           ~linux:(Agent_clock.linux ()) ~faketime:config.faketime
           ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
           ~env:agent_process_env ~cwd:(absolute config.cwd) ~agent:argv ~sim_now

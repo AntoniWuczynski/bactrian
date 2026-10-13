@@ -3,6 +3,7 @@ type reason =
   | Faketime_off
   | Library_not_found
   | Library_hidden
+  | Setuid_sandbox
   | Invalid_sim_now
   | Static_binary
   | Go_binary
@@ -16,6 +17,7 @@ let reason_name = function
   | Faketime_off -> "faketime-off"
   | Library_not_found -> "library-not-found"
   | Library_hidden -> "library-hidden"
+  | Setuid_sandbox -> "setuid-sandbox"
   | Invalid_sim_now -> "invalid-sim-now"
   | Static_binary -> "static-binary"
   | Go_binary -> "go-binary"

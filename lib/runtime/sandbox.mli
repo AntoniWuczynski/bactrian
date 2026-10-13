@@ -86,6 +86,12 @@ type run = {
           even under [/tmp], [/dev/shm] or [/run]. *)
 }
 
+val strips_preload : t -> bool
+(** Whether the sandbox drops the agent's [LD_PRELOAD]: on Linux when [bwrap] is
+    setuid, because the dynamic loader then runs it in secure mode and removes
+    [LD_PRELOAD] (and [TMPDIR], among others) from the environment it passes on.
+    The clock is then contract-only ({!Agent_clock.decide}). *)
+
 val own_port : t -> bool
 (** Whether each run needs a loopback port of the model proxy that serves it
     alone ({!Model_proxy.listen_tcp}), given as {!type-run}'s [port]: on macOS,

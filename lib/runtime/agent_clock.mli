@@ -50,6 +50,7 @@ val library : t -> string option
 val decide :
   ?candidates:string list ->
   ?hidden:(string -> bool) ->
+  ?stripped:bool ->
   linux:bool ->
   faketime:bool ->
   library_override:string option ->
@@ -61,9 +62,10 @@ val decide :
   t
 (** For a command agent, whose argv is [agent]: the first reason that applies,
     in this order: not Linux, [faketime] off, no library, [hidden] says the
-    sandbox would hide the library (default: never), [sim_now] not RFC 3339,
-    then the agent's executable. [env] is the agent's environment, whose [PATH]
-    finds the executable. *)
+    sandbox would hide the library (default: never), [stripped] says the sandbox
+    drops [LD_PRELOAD] (default: no), [sim_now] not RFC 3339, then the agent's
+    executable. [env] is the agent's environment, whose [PATH] finds the
+    executable. *)
 
 val inject : t -> (string * string) list -> (string * string) list
 (** [inject t env] is [env] with the variables that start the clock at [sim_now]

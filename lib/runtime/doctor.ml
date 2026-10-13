@@ -175,8 +175,8 @@ let any_sim_now = "2000-01-01T00:00:00Z"
 let reason_status : Clock_label.reason -> status = function
   | Macos -> Pass
   | Faketime_off | Http_mode -> Skip
-  | Library_not_found | Library_hidden | Invalid_sim_now | Static_binary
-  | Go_binary | Unreadable_executable ->
+  | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
+  | Static_binary | Go_binary | Unreadable_executable ->
       Warn
 
 let reason_text : Clock_label.reason -> string = function
@@ -186,6 +186,7 @@ let reason_text : Clock_label.reason -> string = function
       "libfaketime is not found (install it, or set "
       ^ Agent_clock.override_variable ^ ")"
   | Library_hidden -> "the sandbox hides libfaketime from the agent"
+  | Setuid_sandbox -> "a setuid bwrap drops LD_PRELOAD before the agent starts"
   | Invalid_sim_now -> "SIM_NOW is not an RFC 3339 time"
   | Static_binary -> "a statically linked agent ignores LD_PRELOAD"
   | Go_binary -> "Go programs read the clock without the C library"

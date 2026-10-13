@@ -588,6 +588,13 @@ let start ~sw t run agent =
               Relay_log
                 { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } ))
 
+let strips_preload = function
+  | Sandboxed { host = { engine = Bubblewrap path; _ }; _ } -> (
+      match Unix.stat path with
+      | st -> st.st_perm land 0o4000 <> 0
+      | exception Unix.Unix_error _ -> false)
+  | Sandboxed { host = { engine = Seatbelt; _ }; _ } | Unsandboxed _ -> false
+
 let own_port = function
   | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> true
   | Sandboxed { host = { engine = Bubblewrap _; _ }; _ } | Unsandboxed _ ->

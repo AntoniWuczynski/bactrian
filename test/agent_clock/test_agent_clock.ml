@@ -161,6 +161,11 @@ let test_decide () =
        ~linux:true ~faketime:true ~library_override:None
        ~env:[ ("PATH", dir) ]
        ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
+  check "a sandbox that drops the preload" "contract-only setuid-sandbox"
+    (Agent_clock.decide ~candidates:[ lib ] ~stripped:true ~linux:true
+       ~faketime:true ~library_override:None
+       ~env:[ ("PATH", dir) ]
+       ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
   check "sim_now that is not a time" "contract-only invalid-sim-now"
     (decide ~sim_now:"tomorrow" "dyn");
   check "sim_now before 1970" "contract-only invalid-sim-now"
@@ -192,6 +197,7 @@ let test_labels () =
       "faketime-off";
       "library-not-found";
       "library-hidden";
+      "setuid-sandbox";
       "invalid-sim-now";
       "static-binary";
       "go-binary";
@@ -204,6 +210,7 @@ let test_labels () =
          Faketime_off;
          Library_not_found;
          Library_hidden;
+         Setuid_sandbox;
          Invalid_sim_now;
          Static_binary;
          Go_binary;
