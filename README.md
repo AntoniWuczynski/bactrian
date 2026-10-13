@@ -148,13 +148,20 @@ Known limits. HTTP replies are buffered, so an event stream answering a POST rea
 
 ## Sandbox
 
-Every agent runs inside an operating-system sandbox when the host supports one. Inside it the agent can connect only to bactrian's own listeners, can write only to its run's state directory, its temporary directory and the paths you allow, and cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`. Anything that tries another way out fails at the operating-system level. On macOS this is `sandbox-exec` with a profile written for each run. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket.
+Every agent runs inside an operating-system sandbox when the host supports one. Inside it the agent:
 
-The mode is `auto` (the default), `strict` or `off`, set in the experiment or with `--sandbox` on `record`, `replay` and `run` (which overrides the experiment):
+- can connect only to bactrian's own listeners, so a direct HTTPS request, a raw TCP connection, a WebSocket and a DNS lookup all fail, whatever proxy variables the agent ignores
+- can write only to its run's state directory, its temporary directory and the paths you allow
+- cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`
+- holds a placeholder API key (`bactrian-<token>`) and never the real one, which only bactrian's proxy adds on the way upstream
+
+On macOS this is `sandbox-exec` with a profile written for each run. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket. MCP servers are part of the world, not of the agent, so they run outside the sandbox.
+
+The mode is `auto` (the default), `strict` or `off`, set in the experiment or with `--sandbox` on `record`, `replay` and `run` (which overrides the experiment). `allow_write` adds writable paths and `deny_read` adds unreadable ones, both relative to the experiment file:
 
 ```yaml
 sandbox: auto
-# or, with more paths, relative to the experiment file:
+# or, with more paths:
 sandbox: { mode: strict, allow_write: [out], deny_read: [secrets] }
 ```
 
@@ -164,7 +171,12 @@ On Linux, bubblewrap 0.5 or later must be installed (`sudo apt install bubblewra
 
 The agent's environment is the same with or without the sandbox. `HOME` is its state directory, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `npm_config_cache` point inside it, `TMPDIR` is the run's temporary directory (removed when the run ends) and `PYTHONDONTWRITEBYTECODE=1` keeps Python from writing `__pycache__` beside its modules. The agent must be started with pipes, which bactrian does, because the sandbox refuses the terminal. Start a uv project with `uv run --no-sync` after `uv sync`, because a plain `uv run` locks the project's virtual environment, which is a write outside the run.
 
-What the sandbox refused goes into the run's trace as `sandbox_violation` events and into `meta.json` under `sandbox_violations`. On macOS these are the sandbox's own entries in the system log, such as `network-outbound remote:*:443`. bactrian reads them after the agent exits, which takes a second or two, and says so if it cannot (`collected: false` with the reason). Repeats of one denial by one process can be folded into a single entry. On Linux the only violations reported are connections the forwarder could not pass on. A denied write or read there shows up as the agent's own error.
+What the sandbox refused goes into the run's trace as `sandbox_violation` events and into `meta.json` under `sandbox_violations`. The two platforms differ:
+
+- On macOS these are the sandbox's own entries in the system log, such as `network-outbound remote:*:443`, `file-write-create` or `file-read-data`. A DNS lookup shows as a `network-outbound` entry on `mDNSResponder`. bactrian reads them after the agent exits, which takes a second or two, and says so if it cannot (`collected: false` with the reason). Repeats of one denial by one process can be folded into a single entry.
+- On Linux the operating system logs nothing, so the only violations reported are connections the forwarder could not pass on. A denied connection, write or read shows up as the agent's own error (`ENETUNREACH`, `EROFS`, or a missing file for a denied directory).
+
+Known limit on macOS: Seatbelt does not govern the `sysctl` that returns another process's arguments and environment, so an agent can read the launch-time environment of any other process of yours that is not an Apple binary, bactrian included. If bactrian was started with a provider key exported, a hostile agent can read that key, though it can only pass it on through bactrian. Start bactrian without provider keys in its environment when you do not trust the agent. Linux is not affected, because the agent cannot see other processes.
 
 ## Comparing variants
 
