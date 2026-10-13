@@ -151,7 +151,7 @@ type ctx = {
   dir : Eio.Fs.dir_ty Eio.Path.t;
 }
 
-let with_ctx name f () =
+let with_ctx ?max_body name f () =
   Eio_main.run @@ fun env ->
   let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-proxy-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
@@ -161,8 +161,10 @@ let with_ctx name f () =
   Eio.Switch.run @@ fun sw ->
   let proxy =
     match
-      P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      P.start ?max_body ~sw ~net:(Eio.Stdenv.net env)
+        ~clock:(Eio.Stdenv.clock env)
         ~process_mgr:(Eio.Stdenv.process_mgr env)
+        ()
     with
     | Ok p -> p
     | Error e -> Alcotest.fail e

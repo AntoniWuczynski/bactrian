@@ -302,7 +302,7 @@ let test_bactrian () =
   let mgr = Eio.Stdenv.process_mgr env and clock = Eio.Stdenv.clock env in
   Eio.Switch.run @@ fun sw ->
   let proxy =
-    match P.start ~sw ~net:(Eio.Stdenv.net env) ~clock ~process_mgr:mgr with
+    match P.start ~sw ~net:(Eio.Stdenv.net env) ~clock ~process_mgr:mgr () with
     | Ok p -> p
     | Error e -> Alcotest.fail e
   in
@@ -390,7 +390,7 @@ let test_children () =
   let mgr = Eio.Stdenv.process_mgr env and clock = Eio.Stdenv.clock env in
   Eio.Switch.run @@ fun sw ->
   let proxy =
-    match P.start ~sw ~net:(Eio.Stdenv.net env) ~clock ~process_mgr:mgr with
+    match P.start ~sw ~net:(Eio.Stdenv.net env) ~clock ~process_mgr:mgr () with
     | Ok p -> p
     | Error e -> Alcotest.fail e
   in

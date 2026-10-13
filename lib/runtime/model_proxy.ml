@@ -121,6 +121,7 @@ type t = {
     on_chunk:(dt_ms:int -> string -> unit) ->
     (unit, Upstream.error) result;
   mcp_env : Mcp_proxy.env;
+  max_body : int;
 }
 
 (* Runs are keyed by a digest of their token, so lookups never compare the
@@ -749,13 +750,13 @@ let unattributed_response t ~status ~type_ message =
 (* The placeholder key may arrive in the provider's key header and, for Gemini,
    also in the [key] query parameter. Each one present must be right, and at
    least one must be present. *)
-let max_body = 64 * 1024 * 1024
+let default_max_body = 64 * 1024 * 1024
 
 type body = Body of string | Too_large
 
 (* The body is read before any check, so a refused request leaves a keep-alive
    connection ready for the next one. *)
-let read_body body =
+let read_body ~max_body body =
   match
     Eio.Buf_read.take_all (Eio.Buf_read.of_flow ~max_size:max_body body)
   with
@@ -771,10 +772,10 @@ let handle ?only t ((conn_sw, _), _) request body : response =
     | Some own when not (String.equal (token_key own) (token_key token)) -> None
     | Some _ | None -> Runs.find_opt t.runs (token_key token)
   in
-  match (read_body body, route (Uri.path uri)) with
+  match (read_body ~max_body:t.max_body body, route (Uri.path uri)) with
   | Too_large, _ ->
       unattributed_response t ~status:413 ~type_:"bactrian_payload_too_large"
-        "the request body is over 64 MiB"
+        (Printf.sprintf "the request body is over %d bytes" t.max_body)
   | Body _, None ->
       unattributed_response t ~status:404 ~type_:"bactrian_not_found"
         "expected /r/<token>/<provider>/<path>"
@@ -843,7 +844,7 @@ let serve ?only ~sw t sock =
   Eio.Fiber.fork_daemon ~sw (fun () ->
       Cohttp_eio.Server.run sock server ~on_error:(on_error t))
 
-let start ~sw ~net ~clock ~process_mgr =
+let start ?(max_body = default_max_body) ~sw ~net ~clock ~process_mgr () =
   match
     Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true net
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
@@ -873,6 +874,7 @@ let start ~sw ~net ~clock ~process_mgr =
                   call;
                   answer_timeout = upstream_timeout;
                 };
+              max_body;
             }
           in
           serve ~sw t sock;

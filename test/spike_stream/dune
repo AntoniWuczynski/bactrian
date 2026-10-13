@@ -1,6 +1,0 @@
-(test
- (name spike_stream)
- (package bactrian)
- (libraries eio_main cohttp-eio uri)
- (flags
-  (:standard -w -70)))

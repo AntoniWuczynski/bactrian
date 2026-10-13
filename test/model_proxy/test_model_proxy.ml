@@ -202,9 +202,11 @@ let late_finish =
     "nothing recorded" 0
     (List.length (recording ctx run).exchanges)
 
+(* The limit is lowered to 64 KiB, so the proxy reaches it at once and the
+   test does not race a client timeout against 64 MiB of copying. *)
 let body_limit =
-  Alcotest.test_case "a request body over 64 MiB is refused" `Slow
-  @@ with_ctx "limit"
+  Alcotest.test_case "a request body over the limit is refused" `Quick
+  @@ with_ctx ~max_body:(64 * 1024) "limit"
   @@ fun ctx ->
   let f = fixture "openai_chat" "luna_nonstream" in
   let up = fake ctx (F.Fixtures fixtures_root) in
@@ -212,12 +214,10 @@ let body_limit =
   P.register ctx.proxy run;
   let r =
     send_fixture ctx ~token:token_a
-      ~body_of:(fun b -> b ^ String.make ((64 * 1024 * 1024) + 1) ' ')
+      ~body_of:(fun b -> b ^ String.make ((64 * 1024) + 1) ' ')
       f
   in
-  Alcotest.(check bool)
-    "refused with 413 or a dropped connection" true
-    (r.status = 413 || r.status = 0);
+  Alcotest.(check int) "refused with 413" 413 r.status;
   Alcotest.(check int) "counted" 1 (P.unattributed ctx.proxy);
   Alcotest.(check int) "nothing forwarded" 0 (List.length (F.requests up))
 

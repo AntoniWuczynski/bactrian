@@ -691,7 +691,8 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         Result.map_error
           (fun m -> Environment m)
           (P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-             ~process_mgr:(Eio.Stdenv.process_mgr env))
+             ~process_mgr:(Eio.Stdenv.process_mgr env)
+             ())
       in
       announce experiment_id;
       List.iter warn (Experiment.unenforced experiment);

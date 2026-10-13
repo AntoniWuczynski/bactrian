@@ -49,6 +49,7 @@ let with_ctx name f () =
     match
       P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
         ~process_mgr:(Eio.Stdenv.process_mgr env)
+        ()
     with
     | Ok p -> p
     | Error e -> Alcotest.fail e

@@ -134,6 +134,7 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                   P.start ~sw ~net:(Eio.Stdenv.net env)
                     ~clock:(Eio.Stdenv.clock env)
                     ~process_mgr:(Eio.Stdenv.process_mgr env)
+                    ()
                 in
                 Ok (sandbox, proxy)
               with

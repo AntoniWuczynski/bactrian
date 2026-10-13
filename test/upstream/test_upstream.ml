@@ -42,26 +42,18 @@ type outcome = {
   result : (unit, Upstream.error) result;
   head : Upstream.head option;
   chunks : (int * string) list; (* dt_ms, data *)
-  arrivals : float list;
 }
 
 let run_call ?(timeout = 5.0) ~env ~sw request =
   let clock = Eio.Stdenv.clock env in
-  let head = ref None and chunks = ref [] and arrivals = ref [] in
+  let head = ref None and chunks = ref [] in
   let result =
     Upstream.call ~sw ~net:(Eio.Stdenv.net env) ~clock ~timeout Upstream.plain
       request
       ~on_head:(fun h -> head := Some h)
-      ~on_chunk:(fun ~dt_ms s ->
-        arrivals := Eio.Time.now clock :: !arrivals;
-        chunks := (dt_ms, s) :: !chunks)
+      ~on_chunk:(fun ~dt_ms s -> chunks := (dt_ms, s) :: !chunks)
   in
-  {
-    result;
-    head = !head;
-    chunks = List.rev !chunks;
-    arrivals = List.rev !arrivals;
-  }
+  { result; head = !head; chunks = List.rev !chunks }
 
 let body o = String.concat "" (List.map snd o.chunks)
 
@@ -251,25 +243,50 @@ let sse_upstream ~env ~sw ~events ~gap ~finish =
         ~headers:(Http.Header.of_list [ ("content-type", "text/event-stream") ])
         ~body:(source_of_stream q) ())
 
-let gaps times =
-  let rec go = function a :: (b :: _ as r) -> (b -. a) :: go r | _ -> [] in
-  go times
-
+(* In lockstep: the upstream writes an event only once the caller has had the
+   previous one, and the caller's clock is a mock that moves 125 ms between
+   events. So every event arrives on its own, which shows the body is not
+   buffered (otherwise the test would never finish), and [dt_ms] is exact. *)
 let test_streamed env sw =
   let events =
     List.init 5 (fun i -> Printf.sprintf "data: event-%d\n\n" (i + 1))
   in
-  let port = sse_upstream ~env ~sw ~events ~gap:0.1 ~finish:true in
-  let o = run_call ~env ~sw (get (url port "/")) in
-  Alcotest.(check (result unit error_testable)) "ok" (Ok ()) o.result;
-  Alcotest.(check string) "bytes" (String.concat "" events) (body o);
-  Alcotest.(check int) "five chunks" 5 (List.length o.chunks);
-  Alcotest.(check bool)
-    "arrivals >= 60 ms apart (not buffered)" true
-    (List.for_all (fun g -> g >= 0.06) (gaps o.arrivals));
-  Alcotest.(check bool)
-    "dt_ms tracks the gap" true
-    (List.for_all (fun (dt, _) -> dt >= 60 && dt < 1000) (List.tl o.chunks))
+  let clock = Eio_mock.Clock.make () in
+  let had = Eio.Stream.create 1 in
+  let port =
+    serve ~sw (Eio.Stdenv.net env) ~callback:(fun _ _ _ ->
+        let q = Eio.Stream.create max_int in
+        Eio.Fiber.fork ~sw (fun () ->
+            List.iteri
+              (fun i e ->
+                if i > 0 then (
+                  Eio.Stream.take had;
+                  Eio_mock.Clock.set_time clock (0.125 *. Float.of_int i));
+                Eio.Stream.add q (Data e))
+              events;
+            Eio.Stream.add q End);
+        Cohttp_eio.Server.respond ~status:`OK
+          ~headers:
+            (Http.Header.of_list [ ("content-type", "text/event-stream") ])
+          ~body:(source_of_stream q) ())
+  in
+  let chunks = ref [] in
+  let result =
+    Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 30. (fun () ->
+        Upstream.call ~sw ~net:(Eio.Stdenv.net env) ~clock ~timeout:60.
+          Upstream.plain
+          (get (url port "/"))
+          ~on_head:ignore
+          ~on_chunk:(fun ~dt_ms s ->
+            chunks := (dt_ms, s) :: !chunks;
+            Eio.Stream.add had ()))
+  in
+  let chunks = List.rev !chunks in
+  Alcotest.(check (result unit error_testable)) "ok" (Ok ()) result;
+  Alcotest.(check (list string))
+    "one chunk per event" events (List.map snd chunks);
+  Alcotest.(check (list int))
+    "dt_ms is the clock's step" [ 0; 125; 125; 125; 125 ] (List.map fst chunks)
 
 let test_large_event env sw =
   let ev = "data: " ^ String.make (200 * 1024) 'x' ^ "\n\n" in

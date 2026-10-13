@@ -177,6 +177,7 @@ let with_world ?(deny_read = []) ?(rounds = 1) name f =
     match
       P.start ~sw ~net ~clock:(Eio.Stdenv.clock env)
         ~process_mgr:(Eio.Stdenv.process_mgr env)
+        ()
     with
     | Ok p -> p
     | Error e -> Alcotest.fail e

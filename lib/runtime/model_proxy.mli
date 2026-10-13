@@ -109,13 +109,16 @@ type findings = {
 type t
 
 val start :
+  ?max_body:int ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   process_mgr:_ Eio_unix.Process.mgr ->
+  unit ->
   (t, string) result
 (** Binds 127.0.0.1 on an OS-chosen port. The listener runs until [sw] ends.
-    [process_mgr] starts the runs' stdio MCP servers, which [sw] also bounds. *)
+    [process_mgr] starts the runs' stdio MCP servers, which [sw] also bounds. A
+    request body over [max_body] bytes (64 MiB) is refused with 413. *)
 
 val port : t -> int
 
