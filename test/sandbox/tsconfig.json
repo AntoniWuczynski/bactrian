@@ -1,0 +1,9 @@
+{
+  "extends": "../../examples/agents/typescript/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "typeRoots": ["../../examples/agents/typescript/node_modules/@types"]
+  },
+  "include": ["escape.mts"]
+}
