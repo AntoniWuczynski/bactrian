@@ -1,0 +1,15 @@
+(test
+ (name test_model_proxy)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  fake_upstream
+  eio_main
+  unix
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))
