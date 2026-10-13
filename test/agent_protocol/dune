@@ -1,0 +1,6 @@
+(test
+ (name test_agent_protocol)
+ (package bactrian)
+ (libraries bactrian.core yojson alcotest qcheck-core qcheck-alcotest)
+ (flags
+  (:standard -w -70)))
