@@ -150,19 +150,33 @@ let env_files =
    run's own state and temporary directories are made readable again after it. *)
 type deny = { path : string; keep_own_run : bool }
 
-let denies i =
+(* A built-in path may be a symbolic link (a dotfile manager's [~/.aws], a
+   [.env] shared between projects), and both platforms act on the resolved
+   path, so the target is denied. Seatbelt also gets the link's own path, which
+   costs nothing. bubblewrap does not: a mount on a link to an absolute path
+   would be resolved outside the sandbox's root. *)
+let denies ?(resolve = Fun.id) i =
   let plain path = { path; keep_own_run = false } in
-  List.map
-    (fun p -> plain (Filename.concat i.home p))
-    (home_credentials i.platform)
-  @ List.map (fun p -> plain (Filename.concat i.project_root p)) env_files
-  @ [
-      plain (Filename.concat i.bactrian_dir "ca");
-      { path = Filename.concat i.bactrian_dir "runs"; keep_own_run = true };
-    ]
+  let with_target d =
+    let real = resolve d.path in
+    if String.equal real d.path then [ d ]
+    else
+      match i.platform with
+      | Macos -> [ d; { d with path = real } ]
+      | Linux -> [ { d with path = real } ]
+  in
+  List.concat_map with_target
+    (List.map
+       (fun p -> plain (Filename.concat i.home p))
+       (home_credentials i.platform)
+    @ List.map (fun p -> plain (Filename.concat i.project_root p)) env_files
+    @ [
+        plain (Filename.concat i.bactrian_dir "ca");
+        { path = Filename.concat i.bactrian_dir "runs"; keep_own_run = true };
+      ])
   @ List.map plain i.deny_read
 
-let deny_list i = List.map (fun d -> d.path) (denies i)
+let deny_list ?resolve i = List.map (fun d -> d.path) (denies ?resolve i)
 
 (* ---- macOS ---- *)
 
@@ -172,8 +186,8 @@ let numbered prefix items =
 let param name = Printf.sprintf "(param \"%s\")" name
 let subpath name = Printf.sprintf "(subpath %s)" (param name)
 
-let seatbelt_of i =
-  let deny = numbered "DENY" (denies i) in
+let seatbelt_of ~resolve i =
+  let deny = numbered "DENY" (denies ~resolve i) in
   let writes = numbered "WRITE" i.allow_write in
   let ports = numbered "PORT" (List.map (fun l -> l.port) i.listeners) in
   let sockets =
@@ -273,7 +287,7 @@ let is_under ~dir path =
 
 let mount_path = function Rw p | Ro p -> p
 
-let bwrap_of ~exists i =
+let bwrap_of ~exists ~resolve i =
   let writable =
     Rw i.state_dir :: Rw i.temp_dir
     :: List.filter_map
@@ -319,13 +333,13 @@ let bwrap_of ~exists i =
   @ mount_args (Ro i.bactrian_exe)
   @ List.concat_map (fun p -> mount_args (Ro p)) (Option.to_list i.preload)
   @ List.concat_map mount_args binds
-  @ List.concat_map mask (denies i)
-  @ List.concat_map read_only (denies i)
+  @ List.concat_map mask (denies ~resolve i)
+  @ List.concat_map read_only (denies ~resolve i)
   @ [ "--"; i.bactrian_exe; "__sandbox-init" ]
   @ pairs @ ("--" :: i.agent)
 
-let generate ~exists i =
+let generate ?(resolve = Fun.id) ~exists i =
   let* () = validate i in
   match i.platform with
-  | Macos -> Ok (Seatbelt (seatbelt_of i))
-  | Linux -> Ok (Bwrap (bwrap_of ~exists i))
+  | Macos -> Ok (Seatbelt (seatbelt_of ~resolve i))
+  | Linux -> Ok (Bwrap (bwrap_of ~exists ~resolve i))

@@ -60,13 +60,20 @@ type error =
 
 val describe_error : error -> string
 
-val deny_list : input -> string list
+val deny_list : ?resolve:(string -> string) -> input -> string list
 (** The paths the agent may not read, in the order they are applied: the default
     list of design §5.3 expanded against [home], [project_root] and
     [bactrian_dir] (credential directories and files under [home], the project's
     [.env] files, [.bactrian/ca] and [.bactrian/runs]), then [deny_read]. The
     run's own state and temporary directories stay readable even when they sit
     under [.bactrian/runs], except for paths in [deny_read].
+
+    [resolve] (default: the identity) gives a default path with its symbolic
+    links resolved. Where that differs, the resolved path is denied, because
+    both sandboxes act on the file a path leads to. On macOS the link's own path
+    stays in the list as well. On Linux it is left out, since a mount on a link
+    to an absolute path would land outside the sandbox's root. [deny_read] is
+    taken as given, already resolved.
 
     Only the [.env] files at the project root are listed, not ones in
     subdirectories, because neither Seatbelt parameters nor bubblewrap mounts
@@ -88,8 +95,13 @@ type output =
       (** The whole command line, starting with [bwrap] (found on [PATH] by the
           caller). *)
 
-val generate : exists:(string -> kind) -> input -> (output, error) result
-(** The sandbox command for [input.platform].
+val generate :
+  ?resolve:(string -> string) ->
+  exists:(string -> kind) ->
+  input ->
+  (output, error) result
+(** The sandbox command for [input.platform], with the {!deny_list} that
+    [resolve] gives.
 
     macOS: the profile starts from [(deny default)] and allows only what Node
     and Python agents were found to need, with reads of everything except

@@ -52,7 +52,7 @@ Python writes `__pycache__` next to a module that has no cached bytecode, the pr
 
 Only the `.env` files at the project root are denied, from a fixed list of names, because Seatbelt parameters are literal paths and a pure generator cannot expand a pattern. A `.env` in a subdirectory is readable. The same holds on Linux, where the masks are mounts.
 
-Seatbelt matches resolved paths, so every path given to `Sandbox_policy` must have its symbolic links resolved (`/tmp` is `/private/tmp`, `/var` is `/private/var`).
+Seatbelt matches resolved paths, so every path given to `Sandbox_policy` must have its symbolic links resolved (`/tmp` is `/private/tmp`, `/var` is `/private/var`). That includes the paths of the default deny-list: with `~/.aws` a link to another directory, a rule naming `~/.aws` matches nothing and the files stay readable. `Sandbox_policy` therefore denies the resolved target of each default path as well as the path itself.
 
 The profile allows reads of everything not on the deny-list, as section 5.3 requires. What an agent can read, it can send only to bactrian's listeners, which is why the egress policy defaults to `block`.
 

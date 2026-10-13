@@ -192,6 +192,94 @@ let test_escapes_fail =
       (* Linux reports only relay failures, and these attempts make none. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
+(* ~/.aws and the project's .env as symbolic links (a dotfile manager, a .env
+   shared between projects): the sandbox denies what they lead to, read through
+   the link or through the target. On Linux a masked file reads as empty. *)
+let reader_agent =
+  {|
+import json, os, sys
+names = os.environ["READ_NAMES"].split(",")
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return "denied"
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        result = {n: read(os.environ[n]) for n in names}
+        sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
+                                     "content": json.dumps(result)}) + "\n")
+        sys.stdout.flush()
+    elif m["type"] == "end":
+        break
+|}
+
+let test_linked_credentials =
+  sandboxed "sandbox-linked" @@ fun ctx ->
+  let dir = Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn ctx.dir) in
+  let under = Filename.concat dir in
+  let write path text =
+    Out_channel.with_open_bin path (fun oc -> output_string oc text)
+  in
+  List.iter (fun d -> Unix.mkdir (under d) 0o700) [ "home"; "creds"; "shared" ];
+  write (under "creds/key") "aws-s3cret";
+  write (under "shared/app.env") "env-s3cret";
+  (* An absolute link and a relative one. *)
+  Unix.symlink (under "creds") (under "home/.aws");
+  Unix.symlink "shared/app.env" (under ".env");
+  let previous = Sys.getenv_opt "HOME" in
+  Unix.putenv "HOME" (under "home");
+  let sandbox =
+    Fun.protect
+      ~finally:(fun () ->
+        Unix.putenv "HOME" (Option.value previous ~default:""))
+      (fun () -> strict ctx)
+  in
+  let paths =
+    [
+      ("AWS_LINK", under "home/.aws/key");
+      ("AWS_TARGET", under "creds/key");
+      ("ENV_LINK", under ".env");
+      ("ENV_TARGET", under "shared/app.env");
+    ]
+  in
+  let r =
+    ok
+      (execute ctx
+         {
+           (config ~agent:[ "python3"; "-I"; "-c"; reader_agent ] ()) with
+           sandbox;
+           variant_env =
+             ("READ_NAMES", String.concat "," (List.map fst paths)) :: paths;
+         })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  let reply =
+    List.find_map
+      (fun l ->
+        let j = Yojson.Safe.from_string l in
+        match Yojson.Safe.Util.(to_string (member "type" j)) with
+        | "reply" -> Some Yojson.Safe.Util.(to_string (member "content" j))
+        | _ -> None)
+      (lines (file r "trace.jsonl"))
+  in
+  match reply with
+  | None -> Alcotest.fail "no reply"
+  | Some reply ->
+      print_endline reply;
+      List.iter
+        (fun (name, _) ->
+          Alcotest.(check bool)
+            (name ^ " is not readable")
+            false
+            (contains
+               Yojson.Safe.Util.(
+                 to_string (member name (Yojson.Safe.from_string reply)))
+               "s3cret"))
+        paths
+
 (* The preload reaches the agent through bubblewrap and the forwarder, and
    faking the forwarder's clock harms nothing (design §5 step 2). *)
 let test_clock =
@@ -514,6 +602,8 @@ let () =
             test_record_and_replay;
           Alcotest.test_case "escapes fail and are reported" `Slow
             test_escapes_fail;
+          Alcotest.test_case "linked credential paths are denied" `Slow
+            test_linked_credentials;
           Alcotest.test_case "SIGINT ends a sandboxed replay" `Slow
             test_interrupt;
           Alcotest.test_case "the clock reaches the sandboxed agent" `Slow

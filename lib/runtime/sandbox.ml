@@ -131,7 +131,7 @@ let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
   let input =
     input_of host ~state_dir ~temp_dir ~listeners ~tag ~preload agent
   in
-  match Policy.generate ~exists:kind input with
+  match Policy.generate ~resolve:resolved ~exists:kind input with
   | Error e -> Error (Policy.describe_error e)
   | Ok (Seatbelt s) -> Ok s.argv
   | Ok (Bwrap argv) -> (
@@ -498,7 +498,7 @@ let preload_hidden t library =
         (fun denied ->
           String.equal denied library
           || String.starts_with ~prefix:(denied ^ "/") library)
-        (Policy.deny_list input)
+        (Policy.deny_list ~resolve:resolved input)
 
 let log_timeout = 30.
 

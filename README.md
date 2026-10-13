@@ -171,7 +171,7 @@ Every agent runs inside an operating-system sandbox when the host supports one. 
 
 - can connect only to bactrian's own listeners, so a direct HTTPS request, a raw TCP connection, a WebSocket and a DNS lookup all fail, whatever proxy variables the agent ignores
 - can write only to its run's state directory, its temporary directory and the paths you allow
-- cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`
+- cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`, and, where one of these is a symbolic link, the file or directory it leads to
 - holds a placeholder API key (`bactrian-<token>`) and never the real one, which only bactrian's proxy adds on the way upstream
 
 On macOS this is `sandbox-exec` with a profile written for each run. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket. MCP servers are part of the world, not of the agent, so they run outside the sandbox.

@@ -202,6 +202,44 @@ let test_keychains_macos_only () =
   Alcotest.(check bool) "macos" true (has base);
   Alcotest.(check bool) "linux" false (has linux)
 
+(* ~/.aws and the project's .env are symbolic links: their targets are denied,
+   and on macOS the links too. *)
+let linked = function
+  | "/home/u/.aws" -> "/data/aws"
+  | "/work/proj/.env" -> "/work/shared/.env"
+  | p -> p
+
+let test_linked_defaults () =
+  let mac = P.deny_list ~resolve:linked base
+  and lin = P.deny_list ~resolve:linked linux in
+  List.iter
+    (fun (what, path, list, expected) ->
+      Alcotest.(check bool) what expected (List.mem path list))
+    [
+      ("macos: the .aws target", "/data/aws", mac, true);
+      ("macos: the .aws link", "/home/u/.aws", mac, true);
+      ("macos: the .env target", "/work/shared/.env", mac, true);
+      ("macos: the .env link", "/work/proj/.env", mac, true);
+      ("linux: the .aws target", "/data/aws", lin, true);
+      ("linux: not the .aws link", "/home/u/.aws", lin, false);
+      ("linux: the .env target", "/work/shared/.env", lin, true);
+      ("linux: not the .env link", "/work/proj/.env", lin, false);
+    ];
+  let s =
+    match P.generate ~resolve:linked ~exists:(fun _ -> `Absent) base with
+    | Ok (Seatbelt s) -> s
+    | Ok (Bwrap _) | Error _ -> Alcotest.fail "expected a Seatbelt output"
+  in
+  Alcotest.(check bool)
+    "the target reaches the profile" true
+    (List.exists (fun (_, v) -> String.equal v "/data/aws") s.params);
+  Alcotest.(check bool)
+    "bwrap masks the target" true
+    (List.mem "/work/shared/.env"
+       (match P.generate ~resolve:linked ~exists:(fun _ -> `File) linux with
+       | Ok (Bwrap argv) -> argv
+       | Ok (Seatbelt _) | Error _ -> Alcotest.fail "expected bwrap"))
+
 let test_deny_read_wins_in_state () =
   let i = { base with deny_read = [ run_dir ^ "/state/secret" ] } in
   let lines = String.split_on_char '\n' (seatbelt i).profile in
@@ -544,6 +582,8 @@ let () =
             test_preload_bound;
           Alcotest.test_case "keychains on macOS only" `Quick
             test_keychains_macos_only;
+          Alcotest.test_case "linked defaults deny their targets" `Quick
+            test_linked_defaults;
           Alcotest.test_case "deny_read wins inside the state dir" `Quick
             test_deny_read_wins_in_state;
           Alcotest.test_case "no listeners, no network" `Quick test_no_listeners;
