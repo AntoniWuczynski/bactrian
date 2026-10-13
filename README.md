@@ -8,11 +8,11 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording and the sandbox are also still to come. Until then the settings that ask for them (`sandbox`, `egress` and `clock`) are read but not enforced. `sandbox: strict` stops with exit status 69 because there is no sandbox to be strict about, and every other unenforced setting is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording and the simulated clock are also still to come. Until then the settings that ask for them (`egress` and `clock`) are read but not enforced. Each is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 ## Recording and replaying an agent
 
-An agent talks to bactrian over a small JSON Lines protocol on stdin and stdout: it receives `start`, one `turn` per user message and `end`, and answers each turn with a `reply`. bactrian points the agent's model SDK at its own proxy through the usual base-URL variables (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) and gives it placeholder API keys. The real keys are never placed in the agent's environment and are added to requests on their way upstream. Until the sandbox arrives the agent runs as the same user as bactrian, so this keeps keys out of the agent's environment but does not stop a hostile agent from finding them by other means. [`examples/agents/`](examples/agents/) has a TypeScript agent (build it with `pnpm install --dir examples/agents/typescript` and `pnpm --dir examples/agents/typescript build`) and a Python agent managed by uv.
+An agent talks to bactrian over a small JSON Lines protocol on stdin and stdout: it receives `start`, one `turn` per user message and `end`, and answers each turn with a `reply`. bactrian points the agent's model SDK at its own proxy through the usual base-URL variables (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) and gives it placeholder API keys. The real keys are never placed in the agent's environment and are added to requests on their way upstream. The agent runs inside a sandbox (see [Sandbox](#sandbox)), which stops it from reaching anything but bactrian's proxy and from writing outside its run. [`examples/agents/`](examples/agents/) has a TypeScript agent (build it with `pnpm install --dir examples/agents/typescript` and `pnpm --dir examples/agents/typescript build`) and a Python agent managed by uv.
 
 Record a run (live spending needs an explicit cap per provider, in US dollars). This needs a build with HTTPS support, which does not exist yet, so for now it cannot reach a real provider:
 
@@ -24,7 +24,7 @@ Replay it without touching the network, and see where a changed agent first beha
 
 ```sh
 bactrian replay <run-id> -- node examples/agents/typescript/dist/agent.js
-bactrian replay <run-id> --mode until-divergence -- uv run --project examples/agents/python examples/agents/python/agent.py
+bactrian replay <run-id> --mode until-divergence -- uv run --no-sync --project examples/agents/python examples/agents/python/agent.py
 ```
 
 Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json`, `divergences.json`, the agent's stderr and, for each checker that wrote any, its stderr (`checker-<i>.stderr`, the last 64 KiB). A checker's stderr never reaches the terminal. `meta.json` also carries the run's cost in US dollars as the ledger attributed it, the total latency and token count of its model calls, and the `normalise` and `redact` patterns it was recorded under. A replay applies those patterns, whatever the command line says, so requests that a pattern changed still match. `divergences.json` lists each replay divergence with its kind, the nearest recorded exchange, the similarity and the paths that differ. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
@@ -144,7 +144,27 @@ bactrian gives each request on a stdio server its own id, so that requests from 
 
 For an HTTP server, the agent's path goes below the declared URL's path and its query after the declared query, and a path with a `.` or `..` segment is refused with status 400.
 
-Known limits. HTTP replies are buffered, so an event stream answering a POST reaches the agent whole. GET and DELETE answer 405, which means no server-to-client stream and no session termination. A legacy stdio server's own requests (sampling, roots, elicitation) cannot reach the agent through the shim, so bactrian answers each with a JSON-RPC error `-32601` and the server does not wait for an answer that never comes. The servers run as the same user as bactrian until the sandbox arrives.
+Known limits. HTTP replies are buffered, so an event stream answering a POST reaches the agent whole. GET and DELETE answer 405, which means no server-to-client stream and no session termination. A legacy stdio server's own requests (sampling, roots, elicitation) cannot reach the agent through the shim, so bactrian answers each with a JSON-RPC error `-32601` and the server does not wait for an answer that never comes. The servers are part of the world the agent acts on, not of the agent, so they run outside its sandbox, as the same user as bactrian.
+
+## Sandbox
+
+Every agent runs inside an operating-system sandbox when the host supports one. Inside it the agent can connect only to bactrian's own listeners, can write only to its run's state directory, its temporary directory and the paths you allow, and cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`. Anything that tries another way out fails at the operating-system level. On macOS this is `sandbox-exec` with a profile written for each run. On Linux it is bubblewrap with no network at all. bactrian's proxy also listens on a Unix socket that is mounted into the sandbox, and a small forwarder inside it (`bactrian __sandbox-init`) passes the agent's loopback connections on to that socket.
+
+The mode is `auto` (the default), `strict` or `off`, set in the experiment or with `--sandbox` on `record`, `replay` and `run` (which overrides the experiment):
+
+```yaml
+sandbox: auto
+# or, with more paths, relative to the experiment file:
+sandbox: { mode: strict, allow_write: [out], deny_read: [secrets] }
+```
+
+Before the first run, bactrian checks the sandbox once by running a probe inside it: a connection to `1.1.1.1:443` has to fail without sending anything, a connection to a listener of bactrian's has to succeed, and a write outside the state directory has to fail. When the sandbox does not work, `auto` warns with the cause and the fix and runs the agents unsandboxed, and `strict` stops with exit status 69. `off` skips the sandbox and the probe. Each run's `meta.json` records `sandbox: {mode, applied, reason}`, and the terminal output, `compare` and `report` flag every run that was not sandboxed.
+
+On Linux, bubblewrap 0.5 or later must be installed (`sudo apt install bubblewrap`), and unprivileged user namespaces must be allowed. Ubuntu 23.10 and later block them for bubblewrap through AppArmor. Fix it once, either with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` or with an AppArmor profile that grants bubblewrap `userns`. The warning prints both. bactrian never runs `sudo` itself.
+
+The agent's environment is the same with or without the sandbox. `HOME` is its state directory, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `npm_config_cache` point inside it, `TMPDIR` is the run's temporary directory (removed when the run ends) and `PYTHONDONTWRITEBYTECODE=1` keeps Python from writing `__pycache__` beside its modules. The agent must be started with pipes, which bactrian does, because the sandbox refuses the terminal. Start a uv project with `uv run --no-sync` after `uv sync`, because a plain `uv run` locks the project's virtual environment, which is a write outside the run.
+
+What the sandbox refused goes into the run's trace as `sandbox_violation` events and into `meta.json` under `sandbox_violations`. On macOS these are the sandbox's own entries in the system log, such as `network-outbound remote:*:443`. bactrian reads them after the agent exits, which takes a second or two, and says so if it cannot (`collected: false` with the reason). Repeats of one denial by one process can be folded into a single entry. On Linux the only violations reported are connections the forwarder could not pass on. A denied write or read there shows up as the agent's own error.
 
 ## Comparing variants
 
