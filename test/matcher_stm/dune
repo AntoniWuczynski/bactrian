@@ -1,0 +1,11 @@
+(test
+ (name test_matcher_stm)
+ (package bactrian)
+ (libraries
+  bactrian.core
+  qcheck-core
+  qcheck-core.runner
+  qcheck-stm.stm
+  qcheck-stm.sequential)
+ (flags
+  (:standard -w -70)))
