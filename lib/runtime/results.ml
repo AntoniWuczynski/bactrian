@@ -112,8 +112,24 @@ let sandbox_of_yojson : Yojson.Safe.t -> (sandbox, string) result = function
     ->
       Result.map (fun l -> Label l) (label_of_yojson j)
 
+(* The clock label (design §5 step 2). Runs from before the clock was enforced
+   have the string "contract_only" instead. *)
+module Clock_meta = struct
+  type label = { mode : string; reason : string option [@default None] }
+  [@@deriving of_yojson]
+
+  type t = Before_enforcement | Label of label
+
+  let of_yojson : Yojson.Safe.t -> (t, string) result = function
+    | `String _ -> Ok Before_enforcement
+    | (`Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _ | `Assoc _) as
+      j ->
+        Result.map (fun l -> Label l) (label_of_yojson j)
+end
+
 (* What a run wrote about itself: cost from the ledger's attribution, the
-   latency and token totals of its model calls, and its sandbox label. A run
+   latency and token totals of its model calls, and its sandbox and clock
+   labels. A run
    without a meta.json (it crashed before writing one) has none of them.
    meta.json holds much more (run ID, outcome, patterns, unenforced settings),
    so this decoder reads only these fields of it and lets the others pass. *)
@@ -122,6 +138,7 @@ type meta = {
   latency_ms : float option; [@default None]
   tokens : int option; [@default None]
   sandbox : sandbox option; [@default None]
+  clock : Clock_meta.t option; [@default None]
 }
 [@@deriving of_yojson { strict = false }]
 
@@ -133,11 +150,25 @@ let unsandboxed (m : meta) =
   | Some (Label { applied = false; reason; mode }) ->
       Some (Option.value reason ~default:("sandbox: " ^ mode))
 
+let clock_unenforced (m : meta) =
+  match m.clock with
+  | None | Some (Label { mode = "enforced"; _ }) -> None
+  | Some Before_enforcement ->
+      Some "recorded before bactrian enforced the clock"
+  | Some (Label { mode; reason }) -> Some (Option.value reason ~default:mode)
+
 let read_meta dir =
   match read_opt dir "meta.json" with
   | Error e -> Error e
   | Ok None ->
-      Ok { cost_usd = None; latency_ms = None; tokens = None; sandbox = None }
+      Ok
+        {
+          cost_usd = None;
+          latency_ms = None;
+          tokens = None;
+          sandbox = None;
+          clock = None;
+        }
   | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("meta.json", m)
@@ -196,6 +227,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
       latency_ms = None;
       tokens = None;
       unsandboxed = None;
+      clock_unenforced = None;
     }
   in
   match run_id with
@@ -217,6 +249,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
           latency_ms = meta.latency_ms;
           tokens = meta.tokens;
           unsandboxed = unsandboxed meta;
+          clock_unenforced = clock_unenforced meta;
         }
 
 (* Loading *)
