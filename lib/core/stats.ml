@@ -105,37 +105,95 @@ let check_confidence fn confidence =
 
 let clamp01 x = Float.min 1. (Float.max 0. x)
 
-(* statsmodels proportion_confint(method="wilson"); Wilson 1927, JASA 22. *)
-let wilson ~successes ~trials ~confidence =
-  if trials <= 0 || successes < 0 || successes > trials then
-    invalid_arg "Stats.wilson: need 0 <= successes <= trials and trials > 0";
-  check_confidence "Stats.wilson" confidence;
+(* Wilson score interval at a real-valued sample size [n], so the stratified
+   form can use an effective n. [at_zero] and [at_one] mark p = 0 and p = 1,
+   where the bound is exactly 0 or 1; rounding would leave it a few ulps
+   inside and exclude the point estimate. statsmodels
+   proportion_confint(method="wilson"); Wilson 1927, JASA 22. *)
+let wilson_at ~p ~n ~at_zero ~at_one ~confidence : interval =
   let z = -.normal_quantile ((1. -. confidence) /. 2.) in
-  let n = float_of_int trials in
-  let p = float_of_int successes /. n in
   let z2 = z *. z in
   let denom = 1. +. (z2 /. n) in
   let center = (p +. (z2 /. (2. *. n))) /. denom in
   let dist =
     z *. sqrt ((p *. (1. -. p) /. n) +. (z2 /. (4. *. n *. n))) /. denom
   in
-  (* At s = 0 and s = n the bound is exactly 0 or 1; rounding would leave it
-     a few ulps inside and exclude the point estimate. *)
   {
-    lower = (if successes = 0 then 0. else clamp01 (center -. dist));
-    upper = (if successes = trials then 1. else clamp01 (center +. dist));
+    lower = (if at_zero then 0. else clamp01 (center -. dist));
+    upper = (if at_one then 1. else clamp01 (center +. dist));
   }
 
-let newcombe_diff ~s1 ~n1 ~s2 ~n2 ~confidence =
-  let w1 = wilson ~successes:s1 ~trials:n1 ~confidence in
-  let w2 = wilson ~successes:s2 ~trials:n2 ~confidence in
-  let p1 = float_of_int s1 /. float_of_int n1 in
-  let p2 = float_of_int s2 /. float_of_int n2 in
+let check_counts fn ~successes ~trials =
+  if trials <= 0 || successes < 0 || successes > trials then
+    invalid_arg (fn ^ ": need 0 <= successes <= trials and trials > 0")
+
+let wilson ~successes ~trials ~confidence =
+  check_counts "Stats.wilson" ~successes ~trials;
+  check_confidence "Stats.wilson" confidence;
+  wilson_at
+    ~p:(float_of_int successes /. float_of_int trials)
+    ~n:(float_of_int trials) ~at_zero:(successes = 0)
+    ~at_one:(successes = trials) ~confidence
+
+(* Newcombe's hybrid rule (method 10) for p2 - p1 from each arm's estimate
+   and interval. *)
+let hybrid ~p1 ~(w1 : interval) ~p2 ~(w2 : interval) =
   let d = p2 -. p1 in
   {
     lower = d -. Float.hypot (p2 -. w2.lower) (w1.upper -. p1);
     upper = d +. Float.hypot (w2.upper -. p2) (p1 -. w1.lower);
   }
+
+let newcombe_diff ~s1 ~n1 ~s2 ~n2 ~confidence =
+  let w1 = wilson ~successes:s1 ~trials:n1 ~confidence in
+  let w2 = wilson ~successes:s2 ~trials:n2 ~confidence in
+  hybrid
+    ~p1:(float_of_int s1 /. float_of_int n1)
+    ~w1
+    ~p2:(float_of_int s2 /. float_of_int n2)
+    ~w2
+
+(* Yan and Su stratified Wilson interval of one arm, with its estimate. With
+   equal trials in every scenario n_eff is exactly K n; otherwise the general
+   formula, whose floating-point value need not equal K n even when it
+   should. *)
+let stratified_wilson arm ~confidence =
+  let fn = "Stats.stratified_newcombe_diff" in
+  List.iter (fun (successes, trials) -> check_counts fn ~successes ~trials) arm;
+  let k = float_of_int (List.length arm) in
+  let p =
+    List.fold_left
+      (fun acc (s, n) -> acc +. (float_of_int s /. float_of_int n))
+      0. arm
+    /. k
+  in
+  let n_eff =
+    match arm with
+    | (_, n) :: rest when List.for_all (fun (_, m) -> m = n) rest ->
+        k *. float_of_int n
+    | _ :: _ | [] ->
+        1.
+        /. List.fold_left
+             (fun acc (_, n) -> acc +. (1. /. (k *. k *. float_of_int n)))
+             0. arm
+  in
+  ( p,
+    wilson_at ~p ~n:n_eff
+      ~at_zero:(List.for_all (fun (s, _) -> s = 0) arm)
+      ~at_one:(List.for_all (fun (s, n) -> s = n) arm)
+      ~confidence )
+
+let stratified_newcombe_diff ~baseline ~candidate ~confidence =
+  let fn = "Stats.stratified_newcombe_diff" in
+  check_confidence fn confidence;
+  (match baseline with
+  | [] -> invalid_arg (fn ^ ": no scenarios")
+  | _ :: _ -> ());
+  if List.compare_lengths baseline candidate <> 0 then
+    invalid_arg (fn ^ ": arms have different numbers of scenarios");
+  let p1, w1 = stratified_wilson baseline ~confidence in
+  let p2, w2 = stratified_wilson candidate ~confidence in
+  hybrid ~p1 ~w1 ~p2 ~w2
 
 let pass_hat_k ~successes ~trials ~k =
   if successes < 0 || successes > trials || k < 1 || k > trials then

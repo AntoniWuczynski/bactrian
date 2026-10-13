@@ -21,6 +21,41 @@ val newcombe_diff :
 
     Raises [Invalid_argument] on the same conditions as {!wilson}, per arm. *)
 
+val stratified_newcombe_diff :
+  baseline:(int * int) list ->
+  candidate:(int * int) list ->
+  confidence:float ->
+  interval
+(** Stratified Newcombe interval for the difference, candidate minus baseline,
+    of the equal-weighted mean pass rate over K scenarios. Each list holds
+    [(successes, trials)] per scenario, the same scenarios in the same order.
+
+    Per arm, the stratified Wilson interval of Yan and Su (Yan X, Su XG, 2010,
+    "Stratified Wilson and Newcombe confidence intervals for multiple binomial
+    proportions", Statistics in Biopharmaceutical Research 2(3):329-335) with
+    equal weights [w_k = 1/K]:
+    - [p = (1/K) Σ_k s_k / n_k]
+    - [n_eff = 1 / Σ_k (w_k² / n_k) = K² / Σ_k (1 / n_k)] ([K n] when every
+      [n_k = n])
+    - the Wilson score interval at [(p, n_eff)]: with
+      [z = -. normal_quantile ((1 -. confidence) /. 2.)],
+      [(p + z²/(2 n_eff) ± z sqrt (p (1 - p) / n_eff + z²/(4 n_eff²))) / (1 +
+       z²/n_eff)], exactly [0.] when every [s_k = 0] and [1.] when every
+      [s_k = n_k].
+
+    The two arms are then combined with Newcombe's hybrid rule as in
+    {!newcombe_diff}: with [(l1, u1)], [(l2, u2)] the arm intervals and
+    [d = p2 - p1], lower [= d - sqrt ((p2 - l2)² + (u1 - p1)²)], upper
+    [= d + sqrt ((u2 - p2)² + (p1 - l1)²)].
+
+    With one scenario this is exactly {!newcombe_diff}. Swapping the arms
+    negates the interval exactly. It never has zero width, so unanimous arms
+    (every run passing) do not look certain: 3/3 against 3/3 gives ±0.56 at
+    0.95.
+
+    Raises [Invalid_argument] if the lists are empty or differ in length, or on
+    the conditions of {!wilson} for any scenario. *)
+
 val pass_hat_k : successes:int -> trials:int -> k:int -> float
 (** Unbiased estimator C(c,k)/C(n,k) of the probability that k independent
     attempts all succeed. Computed as the product of [(c - i) / (n - i)] for

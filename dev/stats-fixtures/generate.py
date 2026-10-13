@@ -11,6 +11,8 @@
 
 import json
 import math
+from decimal import Decimal, localcontext
+from fractions import Fraction
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -45,6 +47,18 @@ PASS_K_CASES: Final = [
     (10, 7, 2), (10, 7, 7), (10, 7, 8), (10, 10, 10), (20, 13, 5), (50, 31, 10), (100, 60, 20),
 ]  # fmt: skip
 BONFERRONI_CASES: Final = [(0.95, 1), (0.95, 3), (0.95, 12), (0.9, 2), (0.99, 5), (0.8, 4)]
+# (baseline, candidate), each a list of (successes, trials) per scenario, in the same scenario order.
+STRATIFIED_CASES: Final = [
+    ([(3, 3)], [(3, 3)]), ([(5, 10)], [(3, 10)]), ([(0, 4)], [(4, 4)]), ([(3, 7)], [(5, 9)]),
+    ([(3, 3), (3, 3)], [(3, 3), (2, 3)]),
+    ([(5, 5), (5, 5), (5, 5)], [(4, 5), (4, 5), (4, 5)]),
+    ([(2, 4), (7, 9), (0, 6)], [(3, 5), (9, 9), (1, 7)]),
+    ([(0, 3), (0, 5)], [(0, 3), (0, 5)]),
+    ([(3, 3)] * 10, [(3, 3)] * 10),
+    ([(10, 10)] * 10, [(10, 10)] * 10),
+    ([(20, 20), (19, 20), (16, 20), (10, 20), (4, 20)], [(19, 20), (18, 20), (15, 20), (9, 20), (3, 20)]),
+]  # fmt: skip
+STRATIFIED_CONFIDENCES: Final = [0.9, 0.95, 1 - 0.05 / 3]
 
 
 class _ProportionConfint(Protocol):
@@ -78,6 +92,43 @@ def _norm_ppf(p: float) -> float:
 def _quantile(values: list[float], q: float) -> float:
     arr: NDArray[np.float64] = np.array(values, dtype=np.float64)
     return float(np.quantile(arr, q, method="linear"))
+
+
+def _to_decimal(x: Fraction) -> Decimal:
+    return Decimal(x.numerator) / Decimal(x.denominator)
+
+
+def _stratified_wilson(arm: list[tuple[int, int]], z: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    """Yan and Su stratified Wilson interval for the equal-weighted mean of the per-scenario rates.
+
+    Written independently of the OCaml code: the point estimate and effective sample size are exact
+    fractions, and the bounds are the two roots of (p_hat - p)^2 n_eff = z^2 p (1 - p), solved with the
+    quadratic formula in 60-digit decimal arithmetic.
+    """
+    k = len(arm)
+    p_hat = sum((Fraction(s, n) for s, n in arm), Fraction(0)) / k
+    n_eff = 1 / sum((Fraction(1, k * k * n) for _, n in arm), Fraction(0))
+    p, n = _to_decimal(p_hat), _to_decimal(n_eff)
+    z2 = z * z
+    a = n + z2
+    b = -(2 * n * p + z2)
+    c = n * p * p
+    root = (b * b - 4 * a * c).sqrt()
+    return p, (-b - root) / (2 * a), (-b + root) / (2 * a)
+
+
+def _stratified_newcombe(
+    baseline: list[tuple[int, int]], candidate: list[tuple[int, int]], confidence: float
+) -> tuple[float, float]:
+    with localcontext() as ctx:
+        ctx.prec = 60
+        z = Decimal(-_norm_ppf((1 - confidence) / 2))
+        pa, la, ua = _stratified_wilson(baseline, z)
+        pb, lb, ub = _stratified_wilson(candidate, z)
+        d = pb - pa
+        lower = d - ((pb - lb) ** 2 + (ua - pa) ** 2).sqrt()
+        upper = d + ((ub - pb) ** 2 + (pa - la) ** 2).sqrt()
+        return float(lower), float(upper)
 
 
 def _write(name: str, convention: str, entries: list[dict[str, object]]) -> None:
@@ -120,6 +171,37 @@ def main() -> None:
         "bonferroni.json",
         "level = 1 - (1 - confidence) / family",
         [{"confidence": c, "family": m, "level": 1 - (1 - c) / m} for c, m in BONFERRONI_CASES],
+    )
+
+    stratified: list[dict[str, object]] = []
+    for base, cand in STRATIFIED_CASES:
+        for c in sorted(STRATIFIED_CONFIDENCES):
+            lo, hi = _stratified_newcombe(base, cand, c)
+            if len(base) == 1:
+                # With one scenario the construction is Newcombe's method 10, so statsmodels checks the reference.
+                (s1, n1), (s2, n2) = base[0], cand[0]
+                sm_lo, sm_hi = _newcombe_p2_minus_p1(s1, n1, s2, n2, c)
+                assert abs(lo - sm_lo) < 1e-12 and abs(hi - sm_hi) < 1e-12, (base, cand, c)
+            stratified.append(
+                {
+                    "baseline": [list(x) for x in base],
+                    "candidate": [list(x) for x in cand],
+                    "confidence": c,
+                    "lower": lo,
+                    "upper": hi,
+                }
+            )
+    _write(
+        "stratified_newcombe.json",
+        "Stratified Newcombe interval for the candidate minus baseline difference of equal-weighted mean pass rates. "
+        "Per arm, the Yan and Su (2010) stratified Wilson interval: p = (1/K) sum s_k/n_k, n_eff = 1 / sum 1/(K^2 n_k), "
+        "Wilson score interval at (p, n_eff); the arms are combined with Newcombe's hybrid rule (method 10). "
+        "statsmodels has no stratified Wilson interval, so these values come from an independent Python implementation "
+        "in generate.py: p and n_eff as exact fractions, the bounds as the roots of (p - x)^2 n_eff = z^2 x (1 - x) in "
+        "60-digit decimal arithmetic, with z = scipy.stats.norm.ppf. Entries with one scenario are also checked against "
+        "statsmodels confint_proportions_2indep(method='newcomb') to 1e-12. Each arm lists (successes, trials) per scenario, "
+        "in the same scenario order.",
+        stratified,
     )
 
 

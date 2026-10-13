@@ -42,6 +42,22 @@ let newcombe e =
     { lower = num e "lower"; upper = num e "upper" }
     (Stats.newcombe_diff ~s1 ~n1 ~s2 ~n2 ~confidence:c)
 
+let pairs j k =
+  J.member k j |> J.to_list
+  |> List.map (fun x ->
+      match J.to_list x with
+      | [ s; n ] -> (J.to_int s, J.to_int n)
+      | _ -> Alcotest.fail "expected [successes, trials]")
+
+let stratified e =
+  let baseline = pairs e "baseline" and candidate = pairs e "candidate" in
+  let c = num e "confidence" in
+  check_interval
+    (Printf.sprintf "stratified newcombe %d scenarios @%g"
+       (List.length baseline) c)
+    { lower = num e "lower"; upper = num e "upper" }
+    (Stats.stratified_newcombe_diff ~baseline ~candidate ~confidence:c)
+
 let normal e =
   let p = num e "p" in
   check_close
@@ -129,6 +145,101 @@ let newcombe_swap =
       close i.lower (-.j.upper) && close i.upper (-.j.lower) && i.lower <= d
       && d <= i.upper)
 
+(* One to six scenarios, each arm 1 to 30 runs per scenario. *)
+let gen_strata =
+  QCheck.Gen.(
+    let arm k =
+      list_size (return k)
+        (let* n = int_range 1 30 in
+         let* s = int_range 0 n in
+         return (s, n))
+    in
+    let* k = int_range 1 6 in
+    let* b = arm k in
+    let* c = arm k in
+    let* conf = float_range 0.5 0.999 in
+    return (b, c, conf))
+
+let arb_strata =
+  QCheck.make
+    ~print:
+      QCheck.Print.(triple (list (pair int int)) (list (pair int int)) float)
+    gen_strata
+
+let mean_rate arm =
+  List.fold_left
+    (fun acc (s, n) -> acc +. (float_of_int s /. float_of_int n))
+    0. arm
+  /. float_of_int (List.length arm)
+
+let stratified_one_scenario =
+  QCheck.Test.make ~name:"stratified newcombe = newcombe with one scenario"
+    ~count:1000
+    QCheck.(
+      quad (int_range 1 300) (int_range 1 300) (pair nat_small nat_small)
+        (float_range 0.5 0.999))
+    (fun (n1, n2, (a, b), c) ->
+      let s1 = a mod (n1 + 1) and s2 = b mod (n2 + 1) in
+      let i = Stats.newcombe_diff ~s1 ~n1 ~s2 ~n2 ~confidence:c in
+      let j =
+        Stats.stratified_newcombe_diff
+          ~baseline:[ (s1, n1) ]
+          ~candidate:[ (s2, n2) ]
+          ~confidence:c
+      in
+      Float.equal i.lower j.lower && Float.equal i.upper j.upper)
+
+let stratified_swap =
+  QCheck.Test.make ~name:"stratified newcombe negates exactly under swap"
+    ~count:1000 arb_strata (fun (baseline, candidate, confidence) ->
+      let i = Stats.stratified_newcombe_diff ~baseline ~candidate ~confidence in
+      let j =
+        Stats.stratified_newcombe_diff ~baseline:candidate ~candidate:baseline
+          ~confidence
+      in
+      Float.equal i.lower (-.j.upper) && Float.equal i.upper (-.j.lower))
+
+let stratified_never_zero_width =
+  QCheck.Test.make
+    ~name:"stratified newcombe contains its estimate, never zero width"
+    ~count:1000 arb_strata (fun (baseline, candidate, confidence) ->
+      let i = Stats.stratified_newcombe_diff ~baseline ~candidate ~confidence in
+      let d = mean_rate candidate -. mean_rate baseline in
+      i.lower < i.upper && i.lower <= d && d <= i.upper && -1. <= i.lower
+      && i.upper <= 1.)
+
+let test_stratified_unanimous () =
+  (* Review §3.1: every run passing in both arms must not look certain. *)
+  let all_pass k n = List.init k (fun _ -> (n, n)) in
+  List.iter
+    (fun (k, n, half_width) ->
+      let i =
+        Stats.stratified_newcombe_diff ~baseline:(all_pass k n)
+          ~candidate:(all_pass k n) ~confidence:0.95
+      in
+      check_close (Printf.sprintf "K=%d n=%d upper" k n) half_width i.upper;
+      check_close (Printf.sprintf "K=%d n=%d lower" k n) (-.half_width) i.lower)
+    [
+      (1, 3, 0.5614970317550455);
+      (10, 3, 0.11351339317396876);
+      (10, 10, 0.03699349820698568);
+    ]
+
+let test_stratified_invalid () =
+  let raises name f =
+    match f () with
+    | (_ : Stats.interval) ->
+        Alcotest.failf "%s: expected Invalid_argument" name
+    | exception Invalid_argument _ -> ()
+  in
+  let sn baseline candidate =
+    Stats.stratified_newcombe_diff ~baseline ~candidate ~confidence:0.95
+  in
+  raises "no scenarios" (fun () -> sn [] []);
+  raises "different lengths" (fun () -> sn [ (1, 2) ] [ (1, 2); (1, 2) ]);
+  raises "zero trials" (fun () -> sn [ (0, 0) ] [ (1, 2) ]);
+  raises "successes above trials" (fun () -> sn [ (1, 2) ] [ (3, 2) ])
+
 let () =
   Alcotest.run "stats"
     [
@@ -136,6 +247,8 @@ let () =
         [
           fixture_test "wilson" "wilson.json" wilson;
           fixture_test "newcombe" "newcombe.json" newcombe;
+          fixture_test "stratified newcombe" "stratified_newcombe.json"
+            stratified;
           fixture_test "normal_quantile" "normal_quantile.json" normal;
           fixture_test "quantile" "quantile.json" quantile;
           fixture_test "pass_hat_k" "pass_k.json" pass_k;
@@ -149,9 +262,19 @@ let () =
           Alcotest.test_case "quantile infinite" `Quick test_quantile_infinite;
           Alcotest.test_case "pass^k large" `Quick test_pass_k_large;
           Alcotest.test_case "invalid arguments" `Quick test_invalid;
+          Alcotest.test_case "stratified unanimous arms" `Quick
+            test_stratified_unanimous;
+          Alcotest.test_case "stratified invalid arguments" `Quick
+            test_stratified_invalid;
         ] );
       ( "properties",
         List.map
           (fun t -> QCheck_alcotest.to_alcotest t)
-          [ wilson_contains_estimate; newcombe_swap ] );
+          [
+            wilson_contains_estimate;
+            newcombe_swap;
+            stratified_one_scenario;
+            stratified_swap;
+            stratified_never_zero_width;
+          ] );
     ]
