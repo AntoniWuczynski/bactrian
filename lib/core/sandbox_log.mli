@@ -3,8 +3,11 @@
 
 type violation = { kind : string; detail : string }
 (** [kind] is the denied operation ([network-outbound], [file-write-create],
-    [file-read-data], ...) or [relay_failed]. [detail] names the target and, on
-    macOS, the process. *)
+    [file-read-data], ...), [relay_failed], or [unparsed] for a tagged message
+    in which no known Seatbelt operation follows ["(PID) deny(N) "] (its
+    [detail] is then the whole message). [detail] names the target and, on
+    macOS, the process. The process name and the target are the agent's to
+    choose, so the split is a best reading of text that can be ambiguous. *)
 
 val tag : string -> string
 (** [tag id] is ["bactrian-sandbox:" ^ id], with every character of [id] outside
@@ -25,7 +28,7 @@ val of_seatbelt_message : tag:string -> string -> violation option
 (** One unified-log message, such as
     ["Sandbox: node(812) deny(1) network-outbound remote:*:443\n<tag>"], or the
     same after ["2 duplicate reports for "]. [None] for a message that does not
-    end with a newline and [tag], or is not a denial. *)
+    end with a newline and [tag], or has no ["Sandbox: "]. *)
 
 val of_seatbelt_ndjson : tag:string -> string -> violation option
 (** One line of [log show --style ndjson]: its [eventMessage], through

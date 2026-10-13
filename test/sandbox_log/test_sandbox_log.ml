@@ -51,7 +51,15 @@ let test_messages () =
   Alcotest.check violation "untagged" None
     (parse "Sandbox: cat(3) deny(1) file-read-data /x");
   Alcotest.check violation "not a denial" None
-    (parse (message "something else"))
+    (parse (message "something else"));
+  Alcotest.check violation "a process named to look like a denial"
+    (Some
+       { kind = "network-outbound"; detail = "remote:*:443 by a deny(1) x(77)" })
+    (parse
+       (message "Sandbox: a deny(1) x(77) deny(1) network-outbound remote:*:443"));
+  Alcotest.check violation "an unknown operation"
+    (Some { kind = "unparsed"; detail = "x(7) deny(1) made-up thing" })
+    (parse (message "Sandbox: x(7) deny(1) made-up thing"))
 
 let test_ndjson () =
   let line m = Yojson.Safe.to_string (`Assoc [ ("eventMessage", `String m) ]) in

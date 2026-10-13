@@ -29,28 +29,108 @@ let after ~sub s =
       String.sub s start (String.length s - start))
     (find_sub ~sub s)
 
-(* "NAME(PID) deny(N) OPERATION TARGET": the process name may hold spaces and
-   parentheses, so the split is at " deny(". *)
-let denial body =
-  match find_sub ~sub:" deny(" body with
+(* Seatbelt's operation names: whole families by prefix, and the few that
+   stand alone. *)
+let operation_families =
+  [
+    "file-";
+    "network-";
+    "mach-";
+    "process-";
+    "ipc-";
+    "iokit-";
+    "sysctl-";
+    "system-";
+    "socket-";
+    "nvram-";
+    "user-preference-";
+    "device-";
+    "hid-";
+    "darwin-notification-";
+    "distributed-notification-";
+  ]
+
+let single_operations =
+  [
+    "signal";
+    "job-creation";
+    "pseudo-tty";
+    "lsopen";
+    "appleevent-send";
+    "dynamic-code-generation";
+    "authorization-right-obtain";
+    "load-unsigned-code";
+    "boot-arg-set";
+    "generic-issue-extension";
+  ]
+
+let known_operation op =
+  String.for_all (function 'a' .. 'z' | '-' -> true | _ -> false) op
+  && (List.mem op single_operations
+     || List.exists
+          (fun prefix ->
+            String.starts_with ~prefix op
+            && String.length op > String.length prefix)
+          operation_families)
+
+let digits s =
+  (not (String.equal s ""))
+  && String.for_all (function '0' .. '9' -> true | _ -> false) s
+
+(* Whether [process] ends with "(PID)". *)
+let ends_with_pid process =
+  String.ends_with ~suffix:")" process
+  &&
+  match String.rindex_opt process '(' with
+  | None -> false
+  | Some i ->
+      digits (String.sub process (i + 1) (String.length process - i - 2))
+
+(* [rest] after " deny(": "N) OPERATION TARGET" or "N) OPERATION". *)
+let operation rest =
+  match String.index_opt rest ')' with
   | None -> None
-  | Some i -> (
-      let process = String.sub body 0 i in
-      let rest = String.sub body (i + 1) (String.length body - i - 1) in
-      match String.index_opt rest ' ' with
-      | None -> None
-      | Some j -> (
-          let rest = String.sub rest (j + 1) (String.length rest - j - 1) in
-          match String.index_opt rest ' ' with
-          | None -> Some { kind = rest; detail = "by " ^ process }
+  | Some j when not (digits (String.sub rest 0 j)) -> None
+  | Some j ->
+      let after = String.sub rest (j + 1) (String.length rest - j - 1) in
+      if not (String.starts_with ~prefix:" " after) then None
+      else
+        let after = String.sub after 1 (String.length after - 1) in
+        let op, target =
+          match String.index_opt after ' ' with
+          | None -> (after, None)
           | Some k ->
-              Some
-                {
-                  kind = String.sub rest 0 k;
-                  detail =
-                    String.sub rest (k + 1) (String.length rest - k - 1)
-                    ^ " by " ^ process;
-                }))
+              ( String.sub after 0 k,
+                Some (String.sub after (k + 1) (String.length after - k - 1)) )
+        in
+        if known_operation op then Some (op, target) else None
+
+(* "NAME(PID) deny(N) OPERATION TARGET": the process name and the target are
+   the agent's to choose, so they can hold " deny(" too. The first place where
+   "(PID) deny(N) " is followed by a known operation is taken, and a message
+   with none is kept whole as [unparsed]. *)
+let denial body =
+  let marker = " deny(" in
+  let rec scan from =
+    match
+      find_sub ~sub:marker (String.sub body from (String.length body - from))
+    with
+    | None -> { kind = "unparsed"; detail = body }
+    | Some i -> (
+        let i = from + i in
+        let process = String.sub body 0 i in
+        let start = i + String.length marker in
+        match
+          if ends_with_pid process then
+            operation (String.sub body start (String.length body - start))
+          else None
+        with
+        | Some (kind, Some target) ->
+            { kind; detail = target ^ " by " ^ process }
+        | Some (kind, None) -> { kind; detail = "by " ^ process }
+        | None -> scan (i + 1))
+  in
+  scan 0
 
 let of_seatbelt_message ~tag message =
   let suffix = "\n" ^ tag in
@@ -59,7 +139,7 @@ let of_seatbelt_message ~tag message =
     let message =
       String.sub message 0 (String.length message - String.length suffix)
     in
-    Option.bind (after ~sub:"Sandbox: " message) denial
+    Option.map denial (after ~sub:"Sandbox: " message)
 
 let of_seatbelt_ndjson ~tag line =
   match Yojson.Safe.from_string line with

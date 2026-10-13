@@ -53,9 +53,17 @@ let unsandboxed_line (l : Sandbox.label) =
     (Sandbox.mode_name l.mode)
     (match l.reason with Some r -> ", " ^ r | None -> "")
 
+(* Every line of a run's text holds agent-chosen text (reasons, denied paths,
+   errors), so each is escaped whole. *)
 let render_text (r : Run.result) =
   let b = Buffer.create 256 in
-  let line fmt = Printf.bprintf b (fmt ^^ "\n") in
+  let line fmt =
+    Printf.ksprintf
+      (fun text ->
+        Buffer.add_string b (Bactrian_core.Printable.escape text);
+        Buffer.add_char b '\n')
+      fmt
+  in
   line "run %s: %s%s" r.run_id
     (Run.outcome_kind r.outcome)
     (match Run.outcome_reason r.outcome with
@@ -134,7 +142,7 @@ let render_summary_text ?sandbox ~colour (s : Executor.summary) =
       line "%3d  %s  %s  #%d  %s%s%s" p.index p.scenario p.variant p.repeat
         (paint ~colour (kind_colour kind) kind)
         (match status_reason status with
-        | Some r -> " (" ^ r ^ ")"
+        | Some r -> " (" ^ Bactrian_core.Printable.escape r ^ ")"
         | None -> "")
         (match run_id with Some id -> "  " ^ id | None -> ""))
     s.runs;
