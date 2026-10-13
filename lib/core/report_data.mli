@@ -122,6 +122,7 @@ type summary = {
 }
 (** Over the variant's finished runs in the scenarios both arms finished (not
     the [dropped] ones), the runs the verdicts are about. *)
+
 type signature_count = { signature : string list; count : int }
 
 type behaviour = {
