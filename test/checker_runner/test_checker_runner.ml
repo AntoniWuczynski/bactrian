@@ -67,6 +67,16 @@ extra = sorted(set(os.environ) - allowed)
 ok = "OPENAI_API_KEY" not in os.environ and not extra and os.environ.get("BACTRIAN_RUN_ID") == "run-42"
 print(json.dumps({"pass": ok, "message": ",".join(extra)}))|}
     );
+    ( "background.py",
+      {|import subprocess
+print('{"pass": true}', flush=True)
+subprocess.Popen(["sleep", "30"])|}
+    );
+    ( "noisy.py",
+      {|import sys
+sys.stderr.write("first line\n" + "x" * 200000 + "\nTraceback: it broke\n")
+sys.exit(2)|}
+    );
     ( "no_read.py",
       {|import time
 print('{"pass": true}', flush=True)
@@ -86,13 +96,16 @@ let with_dir fn =
       Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir))
     (fun () -> fn env dir)
 
-let run ?(timeout = 10.) ?(trace = entries) env dir script extra =
+let run_with_stderr ?(timeout = 10.) ?(trace = entries) env dir script extra =
   R.run
     ~process_mgr:(Eio.Stdenv.process_mgr env)
     ~clock:(Eio.Stdenv.clock env) ~timeout
     ~argv:([ "python3"; "-I"; Filename.concat dir script ] @ extra)
     ~cwd:Eio.Path.(Eio.Stdenv.fs env / dir)
     trace
+
+let run ?timeout ?trace env dir script extra =
+  fst (run_with_stderr ?timeout ?trace env dir script extra)
 
 let check_verdict expected r =
   match r with
@@ -164,7 +177,7 @@ let test_missing_command () =
       ~cwd:Eio.Path.(Eio.Stdenv.fs env / dir)
       entries
   in
-  match r with
+  match fst r with
   | R.Checker_error _ -> ()
   | R.Verdict _ -> Alcotest.fail "expected an error"
 
@@ -182,6 +195,28 @@ let test_checker_ignores_stdin () =
     { pass = true; score = None; message = None }
     (run ~trace:(entries @ big) env dir "no_read.py" [])
 
+(* The leader printed its verdict and exited, but left a child holding
+   stdout open. The group is killed when the leader exits, so the verdict
+   arrives at once rather than when the child ends. *)
+let test_background_child () =
+  with_dir @@ fun env dir ->
+  let started = Unix.gettimeofday () in
+  check_verdict
+    { pass = true; score = None; message = None }
+    (run ~timeout:20. env dir "background.py" []);
+  Alcotest.(check bool)
+    "did not wait for the child" true
+    (Unix.gettimeofday () -. started < 10.)
+
+let test_stderr_captured () =
+  with_dir @@ fun env dir ->
+  let r, stderr = run_with_stderr env dir "noisy.py" [] in
+  check_error "status 2 (stderr: Traceback: it broke)" r;
+  Alcotest.(check int) "bounded to 64 KiB" (64 * 1024) (String.length stderr);
+  Alcotest.(check bool)
+    "keeps the end" true
+    (String.ends_with ~suffix:"Traceback: it broke\n" stderr)
+
 let () =
   Alcotest.run "checker_runner"
     [
@@ -195,6 +230,10 @@ let () =
           Alcotest.test_case "too much output" `Quick test_too_much;
           Alcotest.test_case "scrubbed environment" `Quick test_env;
           Alcotest.test_case "missing command" `Quick test_missing_command;
+          Alcotest.test_case "background child holding stdout" `Quick
+            test_background_child;
+          Alcotest.test_case "stderr captured and bounded" `Quick
+            test_stderr_captured;
           Alcotest.test_case "checker ignoring stdin" `Quick
             test_checker_ignores_stdin;
         ] );

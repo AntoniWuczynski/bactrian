@@ -4,8 +4,9 @@
     object on stdout (at most 1 MiB). It runs in its own process group with a
     scrubbed environment (spec §5.2): only [BACTRIAN_RUN_ID] (taken from the
     trace's run start, omitted if there is none), and [PATH], [HOME], [LANG] and
-    [TZ] when bactrian itself has them. When [run] returns, the whole process
-    group has been killed, whatever the outcome. *)
+    [TZ] when bactrian itself has them. The group is killed as soon as its
+    leader exits, so a background child holding stdout open cannot hold up the
+    read, and in any case by the time [run] returns. *)
 
 type result =
   | Verdict of Bactrian_core.Checker_protocol.verdict
@@ -20,4 +21,7 @@ val run :
   argv:string list ->
   cwd:Eio.Fs.dir_ty Eio.Path.t ->
   Bactrian_core.Trace.entry list ->
-  result
+  result * string
+(** The result and the checker's stderr: its last 64 KiB, never shown on
+    bactrian's own terminal. A [Checker_error] ends with the last line of stderr
+    that has text, when there is one. *)

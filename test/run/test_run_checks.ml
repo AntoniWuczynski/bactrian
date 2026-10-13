@@ -23,7 +23,14 @@ let verdict_names (r : Run.result) =
 (* A checker that cannot give a verdict is a fault outside the agent. *)
 let test_checker_error_is_errored =
   with_ctx "checker-error" @@ fun ctx ->
-  let broken = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ] in
+  let broken =
+    [
+      "python3";
+      "-I";
+      "-c";
+      "import sys; sys.stderr.write('no such table\\n'); sys.exit(3)";
+    ]
+  in
   let r =
     ok
       (execute ctx { (config ()) with checks = checks ~checkers:[ broken ] () })
@@ -33,7 +40,17 @@ let test_checker_error_is_errored =
     "reason names the checker" true
     (String.starts_with ~prefix:"checker: "
        (Option.value ~default:"" (Run.outcome_reason r.outcome)));
-  Alcotest.check strs "verdicts.json" [ "checker_failed" ] (verdict_names r)
+  Alcotest.check strs "verdicts.json" [ "checker_failed" ] (verdict_names r);
+  (* Its stderr is kept with the run, and the reason points there. *)
+  Alcotest.(check string)
+    "stderr kept" "no such table\n"
+    (read (file r "checker-0.stderr"));
+  Alcotest.(check bool)
+    "reason quotes and names it" true
+    (Re.execp
+       (Re.compile
+          (Re.str "(stderr: no such table), full stderr in checker-0.stderr"))
+       (Option.value ~default:"" (Run.outcome_reason r.outcome)))
 
 let test_checker_fail_is_failed =
   with_ctx "checker-fail" @@ fun ctx ->

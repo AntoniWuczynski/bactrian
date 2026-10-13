@@ -634,7 +634,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       match (outcome, config.checks) with
       | (Passed | Failed _ | Diverged), Some c ->
           let items =
-            Checks.evaluate
+            Checks.evaluate ~stderr_dir:run_dir
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               ~table:config.pricing ~clock ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
