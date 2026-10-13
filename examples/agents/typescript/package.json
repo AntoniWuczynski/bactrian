@@ -1,0 +1,17 @@
+{
+  "name": "bactrian-toy-agent-typescript",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/agent.js"
+  },
+  "dependencies": {
+    "openai": "7.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2"
+  }
+}

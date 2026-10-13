@@ -1,0 +1,14 @@
+(test
+ (name test_fake_upstream)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols))
+ (libraries
+  fake_upstream
+  bactrian.core
+  eio_main
+  cohttp-eio
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))

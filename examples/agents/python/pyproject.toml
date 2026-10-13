@@ -1,0 +1,21 @@
+[project]
+name = "bactrian-toy-agent-python"
+version = "0.0.0"
+description = "Toy bactrian agent speaking the command-mode wire contract"
+requires-python = ">=3.12"
+dependencies = ["openai==3.24.0", "pydantic>=2"]
+
+[dependency-groups]
+dev = ["mypy==2.4.0", "pyright==1.1.414"]
+
+[tool.uv]
+package = false
+exclude-newer = "7 days"
+
+[tool.mypy]
+strict = true
+files = ["agent.py"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+include = ["agent.py"]

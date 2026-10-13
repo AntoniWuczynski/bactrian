@@ -1,0 +1,3 @@
+(library
+ (name fake_upstream)
+ (libraries bactrian.core eio cohttp-eio http uri))
