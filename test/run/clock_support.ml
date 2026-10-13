@@ -33,8 +33,11 @@ def send(m):
 for line in sys.stdin:
     m = json.loads(line)
     if m["type"] == "turn":
+        started = time.monotonic()
+        time.sleep(0.2)
         send({"v": 1, "type": "reply", "turn": m["turn"], "content": json.dumps(
-            {"now": time.time(), "preload": os.environ.get("LD_PRELOAD", "")})})
+            {"now": time.time(), "slept": time.monotonic() - started,
+             "preload": os.environ.get("LD_PRELOAD", "")})})
     elif m["type"] == "end":
         break
 |}
@@ -45,8 +48,11 @@ const rl = require("readline").createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const m = JSON.parse(line);
   if (m.type === "turn") {
-    const content = JSON.stringify({ now: Date.now() / 1000, preload: process.env.LD_PRELOAD || "" });
-    process.stdout.write(JSON.stringify({ v: 1, type: "reply", turn: m.turn, content }) + "\n");
+    const started = Date.now();
+    setTimeout(() => {
+      const content = JSON.stringify({ now: Date.now() / 1000, slept: (Date.now() - started) / 1000, preload: process.env.LD_PRELOAD || "" });
+      process.stdout.write(JSON.stringify({ v: 1, type: "reply", turn: m.turn, content }) + "\n");
+    }, 200);
   } else if (m.type === "end") {
     rl.close();
   }
