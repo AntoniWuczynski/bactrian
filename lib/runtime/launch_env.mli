@@ -41,3 +41,11 @@ val restore : unit -> (unit, string) result
     closes it, sets every variable with [Unix.putenv] and sets {!marker} to the
     empty string. [Ok ()] with nothing to do when {!marker} is unset or empty.
 *)
+
+val close_inherited_on_exec : unit -> unit
+(** Marks every open descriptor above 2 close-on-exec. bactrian's own
+    descriptors already are, but one it inherited from whatever started it (a
+    shell's [exec 5<file], a CI runner, a supervisor) is not, and would reach
+    every child, through [bwrap] into the sandbox: an inherited directory
+    descriptor leads out of any mount namespace. Called once at start, after
+    {!restore}, so a child gets only the descriptors it is given explicitly. *)

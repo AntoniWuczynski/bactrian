@@ -635,7 +635,9 @@ let sandbox_init_cmd =
               | Some _ | None -> None)
         in
         (* Reopened through /dev/fd with close-on-exec, because OCaml cannot
-           name an inherited descriptor by its number. *)
+           name an inherited descriptor by its number. The inherited one was
+           marked close-on-exec at start, and the agent gets /dev/null in its
+           place as well. *)
         let log =
           Option.bind fd_number (fun n ->
               match
@@ -709,10 +711,11 @@ let cmd =
       sandbox_probe_cmd;
     ]
 
-(* The image {!Launch_env.scrub} started takes its environment back first. *)
+(* The image {!Launch_env.scrub} started takes its environment back first, and
+   nothing it inherited reaches a child it starts. *)
 let () =
   match Launch_env.restore () with
-  | Ok () -> ()
+  | Ok () -> Launch_env.close_inherited_on_exec ()
   | Error m ->
       prerr_endline ("bactrian: " ^ m);
       exit Output.exit_internal

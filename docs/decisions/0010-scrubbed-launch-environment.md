@@ -32,7 +32,7 @@ The restore puts the keys back into bactrian's live environment, so a child that
 | Sandbox probe (`bactrian __sandbox-probe`) | `PATH`, and `HOME` and `TMPDIR` in the probe's directory |
 | `bwrap --version`, the end-marker `sandbox-exec` and `touch`, `log show` | `PATH` only |
 
-A provider key reaches a child only when the experiment names it for that child, in a variant's variables, an MCP server's `env` or `--env`.
+A provider key reaches a child only when the experiment names it for that child, in a variant's variables, an MCP server's `env` or `--env`. Descriptors follow the same rule: after the restore, bactrian marks every open descriptor above 2 close-on-exec, so one it inherited (a shell's `exec 5<file`, a CI runner's) reaches no child, and each child gets only the descriptors it is given.
 
 ## Consequences
 

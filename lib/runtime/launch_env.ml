@@ -117,3 +117,20 @@ let restore () =
       | Some _ | None ->
           Error
             (Printf.sprintf "%s=%S is not an inherited descriptor" marker raw))
+
+(* /dev/fd lists the descriptors open in the reading process (on Linux through
+   /proc/self/fd). The one the listing itself opens is closed again by the time
+   it is marked, which fails with EBADF and is skipped. *)
+let close_inherited_on_exec () =
+  match Sys.readdir "/dev/fd" with
+  | exception Sys_error _ -> ()
+  | names ->
+      Array.iter
+        (fun name ->
+          match int_of_string_opt name with
+          | Some n when n > 2 -> (
+              match Unix.set_close_on_exec (fd_of_int n) with
+              | () -> ()
+              | exception Unix.Unix_error _ -> ())
+          | Some _ | None -> ())
+        names
