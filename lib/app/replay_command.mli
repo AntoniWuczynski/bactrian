@@ -6,6 +6,12 @@ type mode =
   | Until_divergence  (** Go live at the first request it lacks. *)
   | Fuzzy  (** Serve the nearest recorded exchange above the threshold. *)
 
+val modes : (string * mode) list
+(** The names of the modes: [strict], [until-divergence] and [fuzzy]. *)
+
+val timings : (string * Bactrian_runtime.Model_proxy.timing) list
+(** The names of the stream timings: [fast] and [recorded]. *)
+
 type request = {
   common : Single_run.common;
   from : string;  (** Run ID or run directory to replay. *)

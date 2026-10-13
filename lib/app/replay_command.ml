@@ -4,6 +4,13 @@ let ( let* ) = Result.bind
 
 type mode = Strict | Until_divergence | Fuzzy
 
+let modes =
+  [
+    ("strict", Strict); ("until-divergence", Until_divergence); ("fuzzy", Fuzzy);
+  ]
+
+let timings = [ ("fast", Model_proxy.Fast); ("recorded", Model_proxy.Recorded) ]
+
 type request = {
   common : Single_run.common;
   from : string;

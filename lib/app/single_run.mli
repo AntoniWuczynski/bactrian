@@ -20,6 +20,12 @@ type common = {
 }
 (** The arguments [record] and [replay] share. *)
 
+val defaults : common
+(** What a run gets for an argument it is not given: no agent, the current
+    directory, scenario [adhoc], variant [default], [""] for the time, [UTC], no
+    passthrough variable, timeouts of 120 seconds per turn and 600 in total, and
+    sandbox mode [auto]. *)
+
 val positive_timeouts : common -> (unit, string) result
 (** [Error] unless both timeouts are finite and positive. *)
 

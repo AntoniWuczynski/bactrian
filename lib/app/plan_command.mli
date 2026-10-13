@@ -29,6 +29,27 @@ type request = {
   seed : int;
 }
 
+val populations : (string * [ `Suite | `Scenarios ]) list
+(** The names of the populations: [suite] and [scenarios]. *)
+
+val default_power : float
+(** 0.8. *)
+
+val default_confidence : float
+(** 0.95. *)
+
+val default_max_repeats : int
+(** 200. *)
+
+val default_simulations : int
+(** 500. *)
+
+val default_seed : int
+(** 0. *)
+
+val default_gate_metrics : int
+(** 1. *)
+
 type t = { assumption : Plan_sim.assumption; answer : Plan_sim.answer }
 
 val run : env:Eio_unix.Stdenv.base -> request -> (t, Command_error.t) result

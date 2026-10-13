@@ -35,7 +35,7 @@ let cmd =
   let population =
     Arg.(
       value
-      & opt (enum [ ("suite", `Suite); ("scenarios", `Scenarios) ]) `Suite
+      & opt (enum Plan_command.populations) `Suite
       & info [ "population" ] ~docv:"POP"
           ~doc:"The estimand, $(b,suite) or $(b,scenarios).")
   in
@@ -50,32 +50,40 @@ let cmd =
   in
   let power =
     Arg.(
-      value & opt float 0.8
+      value
+      & opt float Plan_command.default_power
       & info [ "power" ] ~docv:"P"
           ~doc:"The probability of the correct verdict to reach.")
   in
   let confidence =
     Arg.(
-      value & opt float 0.95
+      value
+      & opt float Plan_command.default_confidence
       & info [ "confidence" ] ~docv:"C" ~doc:"The confidence level.")
   in
   let max_repeats =
     Arg.(
-      value & opt int 200
+      value
+      & opt int Plan_command.default_max_repeats
       & info [ "max-repeats" ] ~docv:"N" ~doc:"The largest repeat count to try.")
   in
   let simulations =
     Arg.(
-      value & opt int 500
+      value
+      & opt int Plan_command.default_simulations
       & info [ "simulations" ] ~docv:"N"
           ~doc:"Simulated experiments per repeat count.")
   in
   let seed =
-    Arg.(value & opt int 0 & info [ "seed" ] ~docv:"N" ~doc:"The random seed.")
+    Arg.(
+      value
+      & opt int Plan_command.default_seed
+      & info [ "seed" ] ~docv:"N" ~doc:"The random seed.")
   in
   let gate_metrics =
     Arg.(
-      value & opt int 1
+      value
+      & opt int Plan_command.default_gate_metrics
       & info [ "gate-metrics" ] ~docv:"N"
           ~doc:
             "The number of metrics in the experiment's gate. The pass rate is \

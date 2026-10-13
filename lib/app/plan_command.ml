@@ -20,6 +20,14 @@ type request = {
   seed : int;
 }
 
+let populations = [ ("suite", `Suite); ("scenarios", `Scenarios) ]
+let default_power = 0.8
+let default_confidence = 0.95
+let default_max_repeats = 200
+let default_simulations = 500
+let default_seed = 0
+let default_gate_metrics = 1
+
 type t = { assumption : Plan_sim.assumption; answer : Plan_sim.answer }
 
 module Smap = Map.Make (String)

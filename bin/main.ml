@@ -64,18 +64,21 @@ let check_command json scenarios =
 
 let scenario =
   Arg.(
-    value & opt string "adhoc"
+    value
+    & opt string Single_run.defaults.scenario
     & info [ "scenario" ] ~docv:"NAME"
         ~doc:"Scenario name recorded with the run.")
 
 let variant =
   Arg.(
-    value & opt string "default"
+    value
+    & opt string Single_run.defaults.variant
     & info [ "variant" ] ~docv:"NAME" ~doc:"Variant name recorded with the run.")
 
 let cwd =
   Arg.(
-    value & opt string "."
+    value
+    & opt string Single_run.defaults.cwd
     & info [ "cwd" ] ~docv:"DIR" ~doc:"Working directory of the agent.")
 
 let env_passthrough =
@@ -89,12 +92,14 @@ let env_passthrough =
 
 let timezone =
   Arg.(
-    value & opt string "UTC"
+    value
+    & opt string Single_run.defaults.timezone
     & info [ "timezone" ] ~docv:"TZ" ~doc:"Value of TZ for the agent.")
 
 let sim_now =
   Arg.(
-    value & opt string ""
+    value
+    & opt string Single_run.defaults.sim_now
     & info [ "sim-now" ] ~docv:"RFC3339"
         ~doc:
           "Simulated time given to the agent. Defaults to now, or in a replay \
@@ -102,13 +107,15 @@ let sim_now =
 
 let turn_timeout =
   Arg.(
-    value & opt float 120.
+    value
+    & opt float Single_run.defaults.turn_timeout
     & info [ "turn-timeout" ] ~docv:"SECONDS"
         ~doc:"Longest wait for one agent message.")
 
 let total_timeout =
   Arg.(
-    value & opt float 600.
+    value
+    & opt float Single_run.defaults.total_timeout
     & info [ "total-timeout" ] ~docv:"SECONDS"
         ~doc:"Longest the whole run may take.")
 
@@ -121,7 +128,7 @@ let sandbox_doc =
 let sandbox_mode =
   Arg.(
     value
-    & opt (enum Sandbox.modes) `Auto
+    & opt (enum Sandbox.modes) Single_run.defaults.sandbox
     & info [ "sandbox" ] ~docv:"MODE" ~doc:(sandbox_doc ^ " Default $(b,auto)."))
 
 let sandbox_override =
@@ -245,14 +252,7 @@ let replay_cmd =
   let mode =
     Arg.(
       value
-      & opt
-          (enum
-             [
-               ("strict", Replay_command.Strict);
-               ("until-divergence", Until_divergence);
-               ("fuzzy", Fuzzy);
-             ])
-          Replay_command.Strict
+      & opt (enum Replay_command.modes) Replay_command.Strict
       & info [ "mode" ] ~docv:"MODE"
           ~doc:
             "$(b,strict) refuses any request the recording lacks, \
@@ -275,7 +275,7 @@ let replay_cmd =
   let timing =
     Arg.(
       value
-      & opt (enum [ ("fast", P.Fast); ("recorded", P.Recorded) ]) P.Fast
+      & opt (enum Replay_command.timings) P.Fast
       & info [ "timing" ] ~docv:"TIMING"
           ~doc:"Serve streams $(b,fast), or with their $(b,recorded) pacing.")
   in

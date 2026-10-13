@@ -16,6 +16,20 @@ type common = {
   sandbox : Sandbox.mode;
 }
 
+let defaults =
+  {
+    agent = [];
+    cwd = ".";
+    scenario = "adhoc";
+    variant = "default";
+    sim_now = "";
+    timezone = "UTC";
+    env_passthrough = [];
+    turn_timeout = 120.;
+    total_timeout = 600.;
+    sandbox = `Auto;
+  }
+
 let positive name v =
   if Float.is_finite v && v > 0. then Ok ()
   else Error (Printf.sprintf "%s must be a positive number of seconds" name)
