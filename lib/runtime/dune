@@ -5,6 +5,8 @@
   bactrian.core
   eio
   eio.unix
+  unix
+  yojson
   cohttp-eio
   uri
   mirage-crypto-rng

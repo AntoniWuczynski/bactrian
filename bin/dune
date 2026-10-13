@@ -2,4 +2,10 @@
  (name main)
  (public_name bactrian)
  (package bactrian)
- (libraries bactrian.core cmdliner))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  cmdliner
+  eio_main
+  mirage-crypto-rng.unix
+  yojson))

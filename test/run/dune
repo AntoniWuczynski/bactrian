@@ -1,0 +1,23 @@
+(test
+ (name test_run)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols)
+  %{bin:bactrian})
+ (action
+  (setenv
+   BACTRIAN_BIN
+   %{bin:bactrian}
+   (run %{test})))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  fake_upstream
+  eio_main
+  mirage-crypto-rng.unix
+  unix
+  uri
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))

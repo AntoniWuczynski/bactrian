@@ -1,0 +1,8 @@
+(test
+ (name test_trace_builder)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols))
+ (libraries bactrian.core alcotest)
+ (flags
+  (:standard -w -70)))
