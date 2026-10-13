@@ -1,0 +1,6 @@
+(test
+ (name test_sandbox_log)
+ (package bactrian)
+ (libraries bactrian.core yojson alcotest)
+ (flags
+  (:standard -w -70)))
