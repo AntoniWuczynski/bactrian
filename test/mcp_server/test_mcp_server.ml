@@ -68,9 +68,8 @@ let replies text =
       match Mcp_msg.decode line with
       | Ok (Response { id; _ }) -> `Result (number id)
       | Ok (Error_response { id = Some id; code; _ }) -> `Error (number id, code)
-      | Ok (Request _ | Notification _ | Error_response { id = None; _ })
-      | Error _ ->
-          fail ())
+      | Ok (Error_response { id = None; code; _ }) -> `Error (0, code)
+      | Ok (Request _ | Notification _) | Error _ -> fail ())
 
 let reply_t =
   Alcotest.testable
@@ -116,8 +115,8 @@ let test_transport_eof () =
        (fun l -> String.starts_with ~prefix:{|{"error":{"code":-32700|} l)
        lines);
   Alcotest.(check (list reply_t))
-    "the cancelled calls get no reply, a duplicate id an error"
-    [ `Error (3, -32600); `Result 1; `Result 2; `Result 4 ]
+    "the cancelled calls get no reply, a duplicate id an error without it"
+    [ `Error (0, -32600); `Result 1; `Result 2; `Result 4 ]
     (List.sort compare
     @@ replies
          (String.concat "\n"
@@ -125,6 +124,24 @@ let test_transport_eof () =
                (fun l ->
                  not (String.starts_with ~prefix:{|{"error":{"code":-32700|} l))
                lines)))
+
+(* A line past the limit is answered and skipped, and the session goes on. *)
+let test_transport_long_line () =
+  Eio_main.run @@ fun _env ->
+  let input =
+    Eio.Flow.string_source
+      (String.make ((16 * 1024 * 1024) + 10) 'x'
+      ^ "\n" ^ call_line 1 "echo" ^ "\n")
+  in
+  let out = Buffer.create 256 in
+  ignore
+    (Mcp_server.serve ~server ~call:echo_or_hang ~stop:(Interrupt.trigger ())
+       ~log:ignore ~input ~output:(Eio.Flow.buffer_sink out)
+      : Mcp_server.ended);
+  Alcotest.(check (list reply_t))
+    "an error without an id, then the next request's reply"
+    [ `Error (0, -32600); `Result 1 ]
+    (replies (Buffer.contents out))
 
 let test_transport_stop () =
   Eio_main.run @@ fun _env ->
@@ -856,6 +873,7 @@ let () =
         [
           Alcotest.test_case "until the end of input" `Quick test_transport_eof;
           Alcotest.test_case "until stopped" `Quick test_transport_stop;
+          Alcotest.test_case "a line too long" `Quick test_transport_long_line;
         ] );
       ( "jobs",
         [

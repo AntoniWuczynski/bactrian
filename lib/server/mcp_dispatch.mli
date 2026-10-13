@@ -1,10 +1,10 @@
 (** The protocol side of the MCP server, without IO: which era a connection
     speaks, the answers to [server/discover], [initialize], [ping] and
     [tools/list], the checks on [tools/call], and the error for everything else
-    (decision record 0011). The first request that names an era fixes it for the
-    connection: [initialize] selects the legacy revisions (2025-11-25 and
-    earlier), a [_meta] with [io.modelcontextprotocol/protocolVersion] selects
-    2026-07-28. *)
+    (decision record 0011). The first request that names an era and is accepted
+    (it succeeds, or gets [-32022]) fixes it for the connection: [initialize]
+    selects the legacy revisions (2025-11-25 and earlier), a [_meta] with
+    [io.modelcontextprotocol/protocolVersion] selects 2026-07-28. *)
 
 open Bactrian_core
 

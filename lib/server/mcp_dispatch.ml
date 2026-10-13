@@ -55,17 +55,26 @@ let cacheable fields =
 
 let complete fields = ("resultType", Canon.string "complete") :: fields
 
+(* Every result of this era names the server in its _meta, as the overview
+   page asks of each response. *)
+let identified s result =
+  Canon.set_member "_meta"
+    (obj [ ("io.modelcontextprotocol/serverInfo", server_info s) ])
+    result
+
+(* [supportedVersions] are what a client may put in [_meta] for its next
+   requests, so only 2026-07-28: the legacy revisions are reached through
+   [initialize]. *)
 let discover s =
-  obj
-    (complete
-       (cacheable
-          [
-            ("supportedVersions", strings [ modern_version ]);
-            capabilities;
-            instructions s;
-            ( "_meta",
-              obj [ ("io.modelcontextprotocol/serverInfo", server_info s) ] );
-          ]))
+  identified s
+    (obj
+       (complete
+          (cacheable
+             [
+               ("supportedVersions", strings [ modern_version ]);
+               capabilities;
+               instructions s;
+             ])))
 
 let initialize t id params =
   match Option.bind params (Canon.str_member "protocolVersion") with
@@ -85,23 +94,28 @@ let initialize t id params =
              instructions t.server;
            ])
 
-let tools_list t id params =
+let tools_list t ~modern id params =
   match Option.bind params (Canon.member "cursor") with
   | Some _ -> invalid_params id "Invalid cursor: tools/list has a single page"
-  | None -> (
+  | None ->
       let tools = ("tools", Canon.list (List.map snd t.server.tools)) in
-      match t.era with
-      | Modern -> reply id (obj (complete (cacheable [ tools ])))
-      | Legacy _ | Undecided -> reply id (obj [ tools ]))
+      if modern then
+        reply id (identified t.server (obj (complete (cacheable [ tools ]))))
+      else reply id (obj [ tools ])
 
+(* Arguments that are not an object fail the CallToolRequest schema, which
+   the tools page makes a protocol error. *)
 let tools_call t id params =
+  let arguments = Option.bind params (Canon.member "arguments") in
   match Option.bind params (Canon.str_member "name") with
   | None -> invalid_params id "tools/call needs a tool name"
   | Some name when not (List.mem_assoc name t.server.tools) ->
       invalid_params id ("Unknown tool: " ^ name)
-  | Some name ->
-      Call
-        { id; name; arguments = Option.bind params (Canon.member "arguments") }
+  | Some _
+    when Option.is_some arguments
+         && Option.is_none (Option.bind arguments Canon.to_fields_opt) ->
+      invalid_params id "tools/call arguments must be an object"
+  | Some name -> Call { id; name; arguments }
 
 let modern_methods = [ "server/discover"; "tools/list"; "tools/call" ]
 
@@ -115,7 +129,7 @@ let modern t id method_ params =
         ~data:
           (obj
              [
-               ("supported", strings [ modern_version ]);
+               ("supported", strings (modern_version :: legacy_versions));
                ("requested", Canon.string v);
              ])
   | Some None -> invalid_params id (version_key ^ " in _meta must be a string")
@@ -129,14 +143,14 @@ let modern t id method_ params =
       else
         match method_ with
         | "server/discover" -> reply id (discover t.server)
-        | "tools/list" -> tools_list t id params
+        | "tools/list" -> tools_list t ~modern:true id params
         | _ -> tools_call t id params)
 
 let legacy t id method_ params =
   match method_ with
   | "initialize" -> error id (-32600) "Invalid Request: already initialized"
   | "ping" -> reply id Canon.empty_object
-  | "tools/list" -> tools_list t id params
+  | "tools/list" -> tools_list t ~modern:false id params
   | "tools/call" -> tools_call t id params
   | _ -> method_not_found id method_
 
@@ -144,8 +158,18 @@ let undecided t msg id method_ params =
   match (Mcp_msg.era_of_request msg, method_) with
   | Some Legacy, _ -> initialize t id params
   | Some Modern, _ ->
-      t.era <- Modern;
-      modern t id method_ params
+      (* Only a request that succeeds, or the version error that a dual-era
+         client recognises as modern, fixes the era. After any other error
+         such a client takes the server for a legacy one and opens with
+         initialize, which must then still work. *)
+      let action = modern t id method_ params in
+      (match action with
+      | Reply (Response _) | Call _ -> t.era <- Modern
+      | Reply (Error_response { code; _ }) when code = -32022 -> t.era <- Modern
+      | Reply (Error_response _ | Request _ | Notification _)
+      | Cancel _ | Ignore ->
+          ());
+      action
   | None, "ping" -> reply id Canon.empty_object
   | None, _ ->
       error id (-32600)
@@ -179,7 +203,9 @@ let receive t (msg : Mcp_msg.message) =
 let tool_reply t id result =
   let result =
     match t.era with
-    | Modern -> Canon.set_member "resultType" (Canon.string "complete") result
+    | Modern ->
+        identified t.server
+          (Canon.set_member "resultType" (Canon.string "complete") result)
     | Legacy _ | Undecided -> result
   in
   Mcp_msg.Response { id; result }

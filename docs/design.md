@@ -102,7 +102,7 @@ The MCP server (decision record 0011), kept apart from the command library so th
 
 | Module | Responsibility |
 |---|---|
-| `Mcp_dispatch` | Pure. The protocol era of a connection, fixed by its first request (`initialize` for 2025-11-25 and earlier, `_meta` with a protocol version for 2026-07-28), the answers to `server/discover`, `initialize`, `ping` and `tools/list`, the checks on `tools/call`, and the JSON-RPC errors. Built on `Mcp_msg`. |
+| `Mcp_dispatch` | Pure. The protocol era of a connection, fixed by the first request that names one and is accepted (`initialize` for 2025-11-25 and earlier, `_meta` with a protocol version for 2026-07-28), the answers to `server/discover`, `initialize`, `ping` and `tools/list`, the checks on `tools/call`, and the JSON-RPC errors. Built on `Mcp_msg`. |
 | `Tool_schema` | Each tool's arguments as one hand-written table: the JSON Schema 2020-12 of `tools/list` and the strict check before the typed decoders. |
 | `Mcp_tools` | The tools: argument decoding, root confinement, the call into `bactrian.app` with the working directory as the capability its files are read and written through, and the result as `structuredContent` with the same JSON in a text block. |
 | `Jobs` | The job table of `run_start`, `record_start` and `replay_start`: state, progress, result or error, and a stop trigger per job, in the server's switch. |

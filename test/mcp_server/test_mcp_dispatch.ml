@@ -80,7 +80,7 @@ let test_modern_discover () =
     (Mcp_dispatch.receive d (modern 1 "server/discover"));
   Alcotest.check era_t "era" Modern (Mcp_dispatch.era d);
   check_reply "tools in order, cacheable"
-    {|{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","tools":[{"name":"echo"},{"name":"slow"}],"ttlMs":3600000,"cacheScope":"public"}}|}
+    {|{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","tools":[{"name":"echo"},{"name":"slow"}],"ttlMs":3600000,"cacheScope":"public","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}}}|}
     (Mcp_dispatch.receive d (modern 2 "tools/list"))
 
 let test_modern_call () =
@@ -97,7 +97,7 @@ let test_modern_call () =
     arguments;
   Alcotest.check canon_t "a modern result is complete"
     (canon
-       {|{"jsonrpc":"2.0","id":3,"result":{"isError":false,"resultType":"complete"}}|})
+       {|{"jsonrpc":"2.0","id":3,"result":{"isError":false,"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}}}|})
     (canon
        (Mcp_msg.encode
           (Mcp_dispatch.tool_reply d id (canon {|{"isError":false}|}))))
@@ -105,13 +105,14 @@ let test_modern_call () =
 let test_unsupported_version () =
   let d = Mcp_dispatch.create server in
   check_reply "UnsupportedProtocolVersionError"
-    {|{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28"],"requested":"2099-01-01"}}}|}
+    {|{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],"requested":"2099-01-01"}}}|}
     (Mcp_dispatch.receive d (modern ~version:{|"2099-01-01"|} 1 "tools/list"));
   Alcotest.check era_t "still modern" Modern (Mcp_dispatch.era d)
 
 let test_modern_errors () =
   let d = Mcp_dispatch.create server in
   let receive = Mcp_dispatch.receive d in
+  ignore (reply (receive (modern 0 "server/discover")) : Canon.t);
   check_code "no capabilities" (-32602)
     (receive
        (request 1 "tools/list"
@@ -129,8 +130,28 @@ let test_modern_errors () =
   check_code "unknown tool" (-32602)
     (receive (modern 7 "tools/call" ~extra:{|,"name":"nope"|}));
   check_code "no tool name" (-32602) (receive (modern 8 "tools/call"));
+  check_code "arguments that are not an object" (-32602)
+    (receive (modern 10 "tools/call" ~extra:{|,"name":"echo","arguments":[]|}));
   check_code "a cursor never given" (-32602)
     (receive (modern 9 "tools/list" ~extra:{|,"cursor":"x"|}))
+
+(* A modern request that fails as malformed does not fix the era: a dual-era
+   client then falls back to initialize, which must still work. *)
+let test_era_not_fixed_by_an_error () =
+  let d = Mcp_dispatch.create server in
+  let receive = Mcp_dispatch.receive d in
+  check_code "no capabilities" (-32602)
+    (receive
+       (request 1 "server/discover"
+          ~params:
+            {|{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}|}));
+  Alcotest.check era_t "still undecided" Undecided (Mcp_dispatch.era d);
+  ignore
+    (reply
+       (receive
+          (request 2 "initialize" ~params:{|{"protocolVersion":"2025-11-25"}|}))
+      : Canon.t);
+  Alcotest.check era_t "legacy" (Legacy "2025-11-25") (Mcp_dispatch.era d)
 
 let test_legacy () =
   let d = Mcp_dispatch.create server in
@@ -270,6 +291,8 @@ let () =
           Alcotest.test_case "unsupported version" `Quick
             test_unsupported_version;
           Alcotest.test_case "errors" `Quick test_modern_errors;
+          Alcotest.test_case "an error fixes no era" `Quick
+            test_era_not_fixed_by_an_error;
         ] );
       ( "legacy",
         [

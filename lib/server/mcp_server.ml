@@ -29,13 +29,15 @@ let serve ~server ~call ~stop ~log ~input ~output =
   Eio.Switch.run @@ fun sw ->
   let start id name arguments =
     let k = key id in
+    (* The error carries no id: with the id, the client would take it for the
+       reply to its first request with that id. *)
     if Hashtbl.mem in_flight k then
       send
         (Error_response
            {
-             id = Some id;
+             id = None;
              code = -32600;
-             message = "Invalid Request: this id is already in flight";
+             message = "Invalid Request: an id that is already in flight";
              data = None;
            })
     else
@@ -62,8 +64,21 @@ let serve ~server ~call ~stop ~log ~input ~output =
     match Eio.Buf_read.line reader with
     | exception End_of_file -> ()
     | exception Eio.Buf_read.Buffer_limit_exceeded ->
+        (* Its id cannot be read, so the error has none. The rest of the line
+           is skipped, and the session and its jobs go on. *)
         log
-          (Printf.sprintf "a message is longer than %d bytes: closing" max_line)
+          (Printf.sprintf "a message is longer than %d bytes: skipped" max_line);
+        send
+          (Error_response
+             {
+               id = None;
+               code = -32600;
+               message =
+                 Printf.sprintf "Invalid Request: longer than %d bytes" max_line;
+               data = None;
+             });
+        Eio.Buf_read.skip_while (fun c -> c <> '\n') reader;
+        loop ()
     | line when String.equal (String.trim line) "" -> loop ()
     | line ->
         (match Mcp_msg.decode line with

@@ -21,8 +21,9 @@ val serve :
   ended
 (** Answers the messages on [input] with [call] for the tools until the end of
     input or until [stop] fires, then cancels the calls still in flight (they
-    get no reply) and returns once they have unwound. [log] gets a line for
-    standard error when a message is too long to read. *)
+    get no reply) and returns once they have unwound. A message longer than 16
+    MiB is answered with an error and skipped. [log] gets a line for standard
+    error when that happens. *)
 
 val server : Policy.t -> Mcp_dispatch.server
 (** bactrian's name, version, tools and instructions, which state the policy. *)
