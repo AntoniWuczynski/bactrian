@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording and the simulated clock are also still to come. Until then the settings that ask for them (`egress` and `clock`) are read but not enforced. Each is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 ## Recording and replaying an agent
 
@@ -165,6 +165,14 @@ On Linux, bubblewrap 0.5 or later must be installed (`sudo apt install bubblewra
 The agent's environment is the same with or without the sandbox. `HOME` is its state directory, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `npm_config_cache` point inside it, `TMPDIR` is the run's temporary directory (removed when the run ends) and `PYTHONDONTWRITEBYTECODE=1` keeps Python from writing `__pycache__` beside its modules. The agent must be started with pipes, which bactrian does, because the sandbox refuses the terminal. Start a uv project with `uv run --no-sync` after `uv sync`, because a plain `uv run` locks the project's virtual environment, which is a write outside the run.
 
 What the sandbox refused goes into the run's trace as `sandbox_violation` events and into `meta.json` under `sandbox_violations`. On macOS these are the sandbox's own entries in the system log, such as `network-outbound remote:*:443`. bactrian reads them after the agent exits, which takes a second or two, and says so if it cannot (`collected: false` with the reason). Repeats of one denial by one process can be folded into a single entry. On Linux the only violations reported are connections the forwarder could not pass on. A denied write or read there shows up as the agent's own error.
+
+## Clock
+
+Every agent gets `SIM_NOW` (the scenario's `now`, an RFC 3339 time, or the current time) and `TZ` (the scenario's `timezone`, or `UTC`) in its environment. That is the contract, and an agent that follows it behaves the same on every run. On Linux, bactrian also makes the agent's own system clock agree. It preloads `libfaketime` (`sudo apt install libfaketime`, or point `BACTRIAN_LIBFAKETIME` at `libfaketimeMT.so.1`) so that the wall clock starts at `SIM_NOW` and then runs at normal speed. Elapsed-time clocks are left real. Set `clock: { faketime: off }` in the experiment to turn this off.
+
+macOS runs are always contract-only. System Integrity Protection removes the variables that preloading depends on from the environment of the system's programs, so bactrian does not try.
+
+Each run says which it was. `meta.json` has `clock: {mode, reason}`, where `mode` is `enforced` or `contract_only`, and the trace header repeats the mode. A report, `compare` and the `--json` output of `record` and `replay` flag the runs that were contract-only with the reason: `macos`, `faketime-off`, `library-not-found`, `invalid-sim-now`, `static-binary`, `go-binary` or `unreadable-executable`. `enforced` means the library was injected and the agent's program (the command's first word, or the interpreter of a `#!` script) is a dynamically linked, non-Go ELF file. It does not prove the agent read the faked clock. Go programs and statically linked ones ignore the preload. So can runtimes that read the clock without the C library or cache it at start. The reasoning is in [`docs/decisions/0009-agent-clock.md`](docs/decisions/0009-agent-clock.md).
 
 ## Comparing variants
 

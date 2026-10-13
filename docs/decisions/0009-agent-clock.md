@@ -1,0 +1,46 @@
+# 0009: The agent's clock
+
+Date: 2026-10-13
+
+## Context
+
+Every agent gets `SIM_NOW` and `TZ` in its environment (section 5, step 2). That is a contract: an agent that reads the system clock instead still sees real time, and a replay of it then differs from its recording for a reason bactrian cannot see. `libfaketime` can enforce the contract on Linux by preloading a library that moves `clock_gettime` and its relatives. This record says when bactrian does that, how it computes the time it hands over, and how it labels a run so that nobody assumes more than happened.
+
+## Decision
+
+**Linux only.** bactrian injects `libfaketimeMT.so.1` (the multi-thread build, which is safe to preload into Node and Python) when the experiment says `clock: {faketime: auto}` (the default), a library is found, and `SIM_NOW` is an RFC 3339 time. The library is `BACTRIAN_LIBFAKETIME` if that is set and exists (a setting that names a missing file is not replaced by a search), else the first of `/usr/lib/x86_64-linux-gnu/faketime`, `/usr/lib/aarch64-linux-gnu/faketime`, `/usr/lib/faketime` and `/usr/local/lib/faketime`. On Ubuntu and Debian it comes from `apt install libfaketime`.
+
+**macOS gets no injection in v1.** System Integrity Protection removes `DYLD_*` variables from the environment of platform binaries, and hardened-runtime binaries ignore `DYLD_INSERT_LIBRARIES` unless they carry an entitlement. Whether an agent is affected depends on which `node` or `python3` is first on `PATH`, so the effect would differ between machines. Every macOS run is `contract-only` with reason `macos`.
+
+**The variables.**
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `LD_PRELOAD` | the library, then whatever the agent's environment already has | An existing value (from `env_passthrough` or a variant's `env`) is kept after the library. If the library is already in it, the value is left alone, so it is neither dropped nor repeated. |
+| `FAKETIME` | `@<Unix time of SIM_NOW>` | The `@` form starts the clock at that time and lets it run, so durations the agent measures are real. |
+| `FAKETIME_FMT` | `%s` | See below. |
+| `FAKETIME_DONT_RESET` | `1` | A process the agent starts continues the clock instead of starting again at `SIM_NOW`. |
+| `FAKETIME_DONT_FAKE_MONOTONIC` | `1` | See below. |
+
+A `FAKETIME` or `FAKETIME_FMT` that the agent's environment already carries is replaced.
+
+**Which time zone `@` is read in.** The libfaketime README gives the absolute and start-at forms as `YYYY-MM-DD hh:mm:ss` (sections 4b and 4c) and does not name a zone. The source does: `parse_ft_string` in `src/libfaketime.c` reads the `@` form with `strptime` and turns the result into a time with `mktime`, which interprets it in the local time zone of the process, that is the agent's `TZ`. Version 0.9.10 and the current 0.9.13 have the same code. Converting `SIM_NOW` into wall-clock text for an arbitrary IANA zone would need a time zone database inside bactrian, and a wrong guess shifts the agent's clock by hours without any error. The README's `FAKETIME_FMT` section documents `FAKETIME_FMT=%s` with a Unix time, which names an instant and has no zone: glibc's `strptime` expands `%s` with `localtime_r` and libfaketime's `mktime` inverts that in the same `TZ`, so the instant comes back exactly, including across a daylight saving change. bactrian therefore passes `@<seconds since 1970>` with `FAKETIME_FMT=%s`. The Linux test runs a Python and a Node agent with `TZ=America/New_York` and requires their clocks within 5 seconds of `SIM_NOW`.
+
+**Monotonic time stays real.** With `FAKETIME_DONT_FAKE_MONOTONIC=1`, `CLOCK_MONOTONIC` is not moved. Timers, timeouts and retry back-offs in the agent's runtime (libuv, asyncio) use it, and the README says a JVM usually hangs without it ("Java-/JVM-based applications"). Only reads of the wall clock move, which is what `SIM_NOW` promises. The cost is that an agent comparing the two clocks sees them disagree.
+
+**The sandbox.** The preload is part of the environment of the whole process tree that bactrian starts, so in a Linux sandbox it reaches `bwrap`, the `__sandbox-init` forwarder and then the agent. Applying it to the agent alone would mean wrapping the agent in `env`, which loads the library, creates libfaketime's shared memory and then replaces itself without running the library's clean-up, so every unsandboxed run would leave a stale object in `/dev/shm`. The forwarder is harmless under a faked clock: it relays bytes and waits for its child, it writes no timestamps (its violation log lines have none), and the clock keeps running at its normal speed, so every interval it measures is unchanged. `bwrap` ignores the preload, or the dynamic loader does if `bwrap` is setuid. libfaketime shares its start time between processes through POSIX shared memory named in `FAKETIME_SHARED`. The sandbox has its own `/dev/shm` and IPC namespace, so the forwarder does not find the object `bwrap` made and creates its own (libfaketime treats a missing one as stale), and the agent and its children share that. Reads are allowed broadly in the sandbox, so the library is readable there. A `BACTRIAN_LIBFAKETIME` under `/tmp`, `/dev/shm` or `/run` would be hidden by the sandbox's tmpfs mounts and the agent would silently keep real time, so keep it elsewhere. The sandboxed Linux test covers the path through `bwrap`.
+
+**The label.** `meta.json` has `clock: {mode, reason?}`, as the sandbox has `sandbox: {mode, applied, reason?}`. `mode` is `enforced` or `contract_only`, and the trace header and the cassette header record the same two values. The reason lives only in `meta.json`. A run is `enforced` only when the library was injected and the agent's executable can take it. bactrian finds that executable the way the system would: `argv[0]` looked up in the agent's `PATH` (or taken as a path relative to the agent's working directory), and, if the file starts with `#!`, the interpreter it names, one level deep, with `#!/usr/bin/env NAME` resolved through `PATH`. It reads the start of that file with `Elf_probe`, a pure reader for the fields that matter:
+
+- a program header of type `PT_INTERP` means the dynamic loader starts it (`PT_DYNAMIC` alone is a static-PIE executable, which has no loader and ignores `LD_PRELOAD`);
+- a `PT_NOTE` holding a note named `Go` of type 4 (the Go build ID, `.note.go.buildid`) means a Go program, which reads the clock through the vDSO and its own system calls, whatever its linking.
+
+The reasons, in the order they are checked: `macos`, `faketime-off`, `library-not-found`, `invalid-sim-now` (not an RFC 3339 time at or after 1970), `static-binary`, `go-binary`, and `unreadable-executable` (not found, not executable, not a little-endian ELF file, a script that names another script, or program headers beyond the first 256 KiB). Reports, `compare` and `run --json` carry the label. A report names the runs whose clock was contract-only, and adds that a difference between arms may come from the clock when only some runs were.
+
+## Consequences
+
+`enforced` is a claim about how the agent was started, not a proof about what it did. A program the agent launches inherits the preload and may be static or Go. A runtime that caches the clock at start, reads it from the vDSO or loads the C library by itself later (the README names Go, Python, .NET, Boost.Asio, jemalloc and the JVMs) can still show real time. The Linux test checks Python and Node, the two runtimes the example agents use.
+
+Replays of a recording made on macOS run enforced on Linux and the other way round. The clock label is never compared when a replay is matched against its recording, so this changes no verdict, but `SIM_NOW` is now what a Linux agent reads, which is what a replay wants.
+
+Enforcement on macOS, and for Go and statically linked programs, would need a different mechanism (a recording of the clock calls, or running in a Linux virtual machine). It is not in v1.
