@@ -7,7 +7,8 @@
     gap), so the cap cannot be exceeded.
 
     The ledger is an append-only JSONL file, written as events:
-    - ["event":"reserve"] with ["reserved_usd"] when a reservation is made,
+    - ["event":"reserve"] with ["reserved_usd"] and the ["owner"] (the run that
+      asked) when a reservation is made,
     - ["event":"settle"] or ["event":"gap"] with ["usd"] when it ends.
 
     On {!create} the file is replayed: a line without an ["event"] (the format
@@ -40,14 +41,16 @@ val create : path:Eio.Fs.dir_ty Eio.Path.t -> caps:(string * float) list -> t
 
 val reserve :
   t ->
+  owner:string ->
   provider:string ->
   model:string ->
   usd:float ->
   (reservation, refusal) result
-(** Charges [usd] against the provider's cap, or refuses with [Cap_reached]
-    (also for a negative or non-finite [usd]). Raises [Eio.Io] if the event
-    cannot be written, in which case nothing is charged and the ledger is
-    disabled (later calls raise [Eio.Mutex.Poisoned]). *)
+(** Charges [usd] against the provider's cap and attributes it to [owner] (a run
+    ID), whose share {!spent_by} reports, or refuses with [Cap_reached] (also
+    for a negative or non-finite [usd]). Raises [Eio.Io] if the event cannot be
+    written, in which case nothing is charged and the ledger is disabled (later
+    calls raise [Eio.Mutex.Poisoned]). *)
 
 val settle : t -> reservation -> actual:float option -> unit
 (** Replaces the reservation by [actual]. [None] (or a negative or non-finite
@@ -57,3 +60,10 @@ val settle : t -> reservation -> actual:float option -> unit
 
 val spent : t -> provider:string -> float
 (** Settled spend plus outstanding reservations. *)
+
+val spent_by : t -> owner:string -> float
+(** Spend attributed to [owner] across every provider: what its reservations
+    settled at, plus the full reservation of each usage gap, plus reservations
+    still outstanding. It is exactly this owner's share of {!spent}, whatever
+    other owners do concurrently. Reloading the file restores it, and spend
+    written before owners existed has the owner [""]. *)

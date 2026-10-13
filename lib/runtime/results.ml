@@ -11,14 +11,12 @@ type error =
   | No_such_experiment of string
   | Bad_manifest of string
   | Bad_run of { run_id : string; file : string; reason : string }
-  | Bad_pricing of string
 
 let pp_error ppf = function
   | No_such_experiment id -> Format.fprintf ppf "no experiment %S" id
   | Bad_manifest m -> Format.fprintf ppf "%s" m
   | Bad_run { run_id; file; reason } ->
       Format.fprintf ppf "run %s: %s: %s" run_id file reason
-  | Bad_pricing m -> Format.fprintf ppf "price file: %s" m
 
 let ( let* ) = Result.bind
 
@@ -85,43 +83,45 @@ let read_trace dir =
            (Ok [])
       |> Result.map List.rev
 
-(* The ledger spend in meta.json: a fallback for a run whose calls cannot be
-   priced from the trace. *)
-let read_spend dir =
+(* What a run wrote about itself: cost from the ledger's attribution, and the
+   latency and token totals of its model calls. A run without a meta.json (it
+   crashed before writing one) has none of them. *)
+type meta = {
+  cost_usd : float option; [@default None]
+  latency_ms : float option; [@default None]
+  tokens : int option; [@default None]
+}
+[@@deriving of_yojson { strict = false }]
+
+let read_meta dir =
   match read_opt Eio.Path.(dir / "meta.json") with
-  | None -> None
+  | None -> Ok { cost_usd = None; latency_ms = None; tokens = None }
   | Some text -> (
       match Yojson.Safe.from_string text with
-      | exception Yojson.Json_error _ -> None
-      | `Assoc fields -> (
-          match List.assoc_opt "spend_usd" fields with
-          | Some (`Assoc l) ->
-              let total =
-                List.fold_left
-                  (fun acc (_, v) ->
-                    match v with
-                    | `Float f -> acc +. f
-                    | `Int n -> acc +. float_of_int n
-                    | `Null | `Bool _ | `Intlit _ | `String _ | `List _
-                    | `Assoc _ ->
-                        acc)
-                  0. l
-              in
-              if total > 0. then Some total else None
-          | Some _ | None -> None)
-      | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _ ->
-          None)
+      | exception Yojson.Json_error m -> Error ("meta.json", m)
+      | json -> (
+          match meta_of_yojson json with
+          | Ok m -> Ok m
+          | Error m -> Error ("meta.json", m)))
 
-let date_of trace =
-  List.find_map
-    (fun (e : Trace.entry) ->
-      match e.event with
-      | Run_start { sim_now; _ } when String.length sim_now >= 10 ->
-          Some (String.sub sim_now 0 10)
-      | Run_start _ | Turn_start _ | Model_call _ | Tool_call _ | Tool_result _
-      | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
-          None)
-    trace
+let read_divergences dir : (D.divergence list, string * string) result =
+  match read_opt Eio.Path.(dir / "divergences.json") with
+  | None -> Ok []
+  | Some text -> (
+      match Yojson.Safe.from_string text with
+      | exception Yojson.Json_error m -> Error ("divergences.json", m)
+      | json -> (
+          match Divergences.of_file_json json with
+          | Error m -> Error ("divergences.json", m)
+          | Ok ds ->
+              Ok
+                (List.map
+                   (fun (d : Divergences.t) ->
+                     {
+                       D.description = Divergences.describe d;
+                       changes = d.changes;
+                     })
+                   ds)))
 
 let status_of : Executor.status -> D.status * string option = function
   | Pending -> (Pending, None)
@@ -135,7 +135,7 @@ let status_of : Executor.status -> D.status * string option = function
       | Errored _ -> (Errored, reason)
       | Not_run _ -> (Not_run, reason))
 
-let load_run ~table ~root ((p : Executor.planned), status, run_id) =
+let load_run ~root ((p : Executor.planned), status, run_id) =
   let status, reason = status_of status in
   let base : D.run =
     {
@@ -156,31 +156,23 @@ let load_run ~table ~root ((p : Executor.planned), status, run_id) =
   in
   match run_id with
   | None -> Ok base
-  | Some id -> (
+  | Some id ->
       let dir = Eio.Path.(root / "runs" / id) in
       let bad (file, reason) = Bad_run { run_id = id; file; reason } in
       let* checks = Result.map_error bad (read_checks dir) in
       let* trace = Result.map_error bad (read_trace dir) in
-      let cost =
-        match (trace, date_of trace) with
-        | [], _ | _, None -> None
-        | _ :: _, Some date -> (
-            match Checks.cost ~table ~date trace with
-            | Some c -> Some c
-            | None -> read_spend dir)
-      in
-      match trace with
-      | [] -> Ok { base with checks }
-      | _ :: _ ->
-          Ok
-            {
-              base with
-              checks;
-              trace;
-              cost;
-              latency_ms = D.latency_ms trace;
-              tokens = D.tokens trace;
-            })
+      let* meta = Result.map_error bad (read_meta dir) in
+      let* divergences = Result.map_error bad (read_divergences dir) in
+      Ok
+        {
+          base with
+          checks;
+          trace;
+          divergences;
+          cost = meta.cost_usd;
+          latency_ms = meta.latency_ms;
+          tokens = meta.tokens;
+        }
 
 (* Loading *)
 
@@ -191,16 +183,6 @@ let valid_id id =
 
 let load_experiment ~fs file =
   Result.to_option (Config_loader.load_experiment Eio.Path.(fs / file))
-
-let load_table ~fs ~experiment_file (experiment : Experiment.t option) =
-  match Option.bind experiment (fun (e : Experiment.t) -> e.pricing) with
-  | None -> Ok Pricing.default
-  | Some rel -> (
-      let path = Filename.concat (Filename.dirname experiment_file) rel in
-      match Config_loader.load_pricing Eio.Path.(fs / path) with
-      | Ok table -> Ok table
-      | Error (e :: _) -> Error (Bad_pricing (path ^ ": " ^ e.message))
-      | Error [] -> Error (Bad_pricing path))
 
 let load ~fs ~root ~experiment_id =
   if not (valid_id experiment_id) then Error (No_such_experiment experiment_id)
@@ -215,14 +197,11 @@ let load ~fs ~root ~experiment_id =
       | Error (Some m) -> Error (Bad_manifest m)
     in
     let experiment = load_experiment ~fs manifest.experiment_file in
-    let* table =
-      load_table ~fs ~experiment_file:manifest.experiment_file experiment
-    in
     let* runs =
       List.fold_left
         (fun acc r ->
           let* l = acc in
-          let* run = load_run ~table ~root r in
+          let* run = load_run ~root r in
           Ok (run :: l))
         (Ok []) manifest.summary.runs
     in
@@ -310,7 +289,11 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
     | Some c ->
         let* gate, report_metrics = thresholds c in
         Ok (c.population, c.confidence, gate, report_metrics)
-    | None -> Ok (`Suite, 0.95, [ (Compare.Pass_rate, 0.) ], [])
+    | None ->
+        Error
+          "gate metric pass_rate has no threshold: declare \
+           compare.thresholds.pass_rate in the experiment file (the file the \
+           manifest records is gone or has no compare section)"
   in
   Ok
     {

@@ -1,6 +1,7 @@
 (* Prints the fixture's JSON or HTML report, or writes the fixture experiment
    as the executor would have left it (a manifest, and a run directory per
-   started run) under DIR/.bactrian, for the command-line tests. *)
+   started run, with its meta.json and divergences.json) under DIR/.bactrian, or
+   the experiment file it names, for the command-line tests. *)
 
 open Bactrian_core
 module R = Report_data
@@ -57,6 +58,64 @@ let verdicts (r : R.run) : Yojson.Safe.t =
       ("items", `List (List.map item r.checks));
     ]
 
+let number f = function Some v -> f v | None -> `Null
+
+(* What the executor's run writes: the totals Results reads back. *)
+let meta (r : R.run) : Yojson.Safe.t =
+  `Assoc
+    [
+      ("cost_usd", number (fun c -> `Float c) r.cost);
+      ("latency_ms", number (fun l -> `Float l) r.latency_ms);
+      ("tokens", number (fun n -> `Int n) r.tokens);
+    ]
+
+let divergences (r : R.run) : Yojson.Safe.t =
+  `Assoc
+    [
+      ("version", `Int 1);
+      ( "divergences",
+        `List
+          (List.map
+             (fun (d : R.divergence) ->
+               `Assoc
+                 [
+                   ("kind", `String "missing_request");
+                   ("seq", `Int 4);
+                   ("similarity", `Float 0.8);
+                   ( "changes",
+                     `List
+                       (List.map
+                          (fun (c : Diff.change) ->
+                            `Assoc
+                              [
+                                ("path", `String c.path);
+                                ( "change",
+                                  `String
+                                    (match c.kind with
+                                    | Changed -> "changed"
+                                    | Added -> "added"
+                                    | Removed -> "removed") );
+                              ])
+                          d.changes) );
+                 ])
+             r.divergences) );
+    ]
+
+(* The experiment file the manifest names, with the compare section that
+   gives the gate its thresholds. *)
+let experiment_file dir =
+  write
+    (Filename.concat dir "demo.yaml")
+    "version: 1\n\
+     name: demo\n\
+     agent: { protocol: command, command: [agent] }\n\
+     scenarios: [scenarios/*.yaml]\n\
+     variants: { a: {}, b: {} }\n\
+     seed: 7\n\
+     compare:\n\
+    \  baseline: a\n\
+    \  thresholds: { pass_rate: 0 }\n"
+
 (* [b-fails]: every run of variant b fails. [clean]: nothing is missing. *)
 let transform mode (r : R.run) : R.run =
   match mode with
@@ -80,8 +139,15 @@ let store dir mode =
             ("version", `Int 1);
             ("experiment_id", `String experiment_id);
             ("experiment", `String "demo");
-            ("experiment_file", `String "gone.yaml");
+            ("experiment_file", `String "demo.yaml");
             ("seed", `Int 7);
+            ( "fingerprint",
+              `Assoc
+                [
+                  ("experiment", `String "x");
+                  ("agent", `String "x");
+                  ("scenarios", `List []);
+                ] );
             ("runs", `List (List.map manifest_run runs));
           ]));
   List.iter
@@ -95,7 +161,11 @@ let store dir mode =
                (List.map (fun e -> Trace.to_line e ^ "\n") r.trace));
           write
             (Filename.concat d "verdicts.json")
-            (Yojson.Safe.to_string (verdicts r))
+            (Yojson.Safe.to_string (verdicts r));
+          write (Filename.concat d "meta.json") (Yojson.Safe.to_string (meta r));
+          write
+            (Filename.concat d "divergences.json")
+            (Yojson.Safe.to_string (divergences r))
       | Some _ | None -> ())
     runs
 
@@ -104,8 +174,10 @@ let () =
   | [| _; "json" |] ->
       print_endline (Yojson.Safe.pretty_to_string (R.to_json (Fixture.data ())))
   | [| _; "html" |] -> print_string (Report_html.render (Fixture.data ()))
+  | [| _; "experiment"; dir |] -> experiment_file dir
   | [| _; "store"; dir |] -> store dir "as-is"
   | [| _; "store"; dir; mode |] -> store dir mode
   | _ ->
-      prerr_endline "usage: snapshot json|html|store DIR [b-fails|clean]";
+      prerr_endline
+        "usage: snapshot json|html|store DIR [b-fails|clean]|experiment DIR";
       exit 2

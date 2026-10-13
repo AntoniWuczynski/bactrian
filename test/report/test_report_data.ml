@@ -266,6 +266,39 @@ let test_json_seed () =
     (Yojson.Safe.pretty_to_string (strip a))
     (Yojson.Safe.pretty_to_string (strip b))
 
+(* A run that failed for its own reason and also has verdicts (they are
+   written for every run that finished) keeps both messages. *)
+let test_agent_failure_keeps_its_reason () =
+  let template = List.hd Fixture.runs in
+  let run : R.run =
+    {
+      template with
+      status = Failed;
+      reason = Some "timeout: turn";
+      checks =
+        [
+          {
+            name = "assertions[0] max_steps";
+            status = Check_fail;
+            reason = Some "3 > 2";
+          };
+        ];
+    }
+  in
+  let runs = run :: List.tl Fixture.runs in
+  let settings = Fixture.settings () in
+  let result = Result.get_ok (Compare.run settings) in
+  let d =
+    R.build ~experiment_id:"x" ~experiment:"demo" ~settings ~result runs
+  in
+  let f =
+    List.find (fun (f : R.failure) -> f.run.index = template.index) d.failures
+  in
+  Alcotest.(check (list string))
+    "both"
+    [ "timeout: turn"; "assertions[0] max_steps: 3 > 2" ]
+    f.messages
+
 let () =
   Alcotest.run "report_data"
     [
@@ -283,6 +316,8 @@ let () =
         [
           Alcotest.test_case "behaviours" `Quick test_behaviours;
           Alcotest.test_case "failures" `Quick test_failures;
+          Alcotest.test_case "agent failure keeps its reason" `Quick
+            test_agent_failure_keeps_its_reason;
           Alcotest.test_case "header and rows" `Quick test_header;
           Alcotest.test_case "gate family level" `Quick test_gate_family_level;
         ] );

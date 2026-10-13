@@ -2,18 +2,20 @@ open Bactrian_core
 module Smap = Map.Make (String)
 module Imap = Map.Make (Int)
 
-type open_res = { o_provider : string; o_usd : float }
+type open_res = { o_owner : string; o_provider : string; o_usd : float }
 
 type t = {
   path : Eio.Fs.dir_ty Eio.Path.t;
   caps : float Smap.t;
   mutex : Eio.Mutex.t;
   mutable charged : float Smap.t;
+  mutable charged_by : float Smap.t;
   mutable next_id : int;
 }
 
 type reservation = {
   id : int;
+  owner : string;
   provider : string;
   model : string;
   usd : float;
@@ -51,7 +53,7 @@ let number key v =
 
 type event =
   | Legacy of { provider : string; usd : float }
-  | Reserved of { id : int; provider : string; usd : float }
+  | Reserved of { id : int; owner : string; provider : string; usd : float }
   | Ended of { id : int; usd : float }
 
 let decode_line v =
@@ -65,7 +67,8 @@ let decode_line v =
   | Some "reserve" ->
       let* id = need "missing id" (Canon.int_member "id" v) in
       let* usd = need "missing reserved_usd" (number "reserved_usd" v) in
-      Ok (Reserved { id; provider; usd })
+      let owner = Option.value ~default:"" (Canon.str_member "owner" v) in
+      Ok (Reserved { id; owner; provider; usd })
   | Some ("settle" | "gap") ->
       let* id = need "missing id" (Canon.int_member "id" v) in
       let* usd = need "missing usd" (number "usd" v) in
@@ -87,10 +90,12 @@ let replay lines =
           | Error reason -> fail reason
           | Ok (Legacy { provider; usd }) ->
               (n + 1, add legacy provider usd, reserved, ended, max_id)
-          | Ok (Reserved { id; provider; usd }) ->
+          | Ok (Reserved { id; owner; provider; usd }) ->
               ( n + 1,
                 legacy,
-                Imap.add id { o_provider = provider; o_usd = usd } reserved,
+                Imap.add id
+                  { o_owner = owner; o_provider = provider; o_usd = usd }
+                  reserved,
                 ended,
                 max id max_id )
           | Ok (Ended { id; usd }) ->
@@ -99,22 +104,28 @@ let replay lines =
   let _, legacy, reserved, ended, max_id =
     List.fold_left step (1, Smap.empty, Imap.empty, Imap.empty, -1) lines
   in
+  let final id o_usd = Option.value ~default:o_usd (Imap.find_opt id ended) in
   let charged =
     Imap.fold
-      (fun id { o_provider; o_usd } acc ->
-        add acc o_provider
-          (Option.value ~default:o_usd (Imap.find_opt id ended)))
+      (fun id { o_provider; o_usd; o_owner = _ } acc ->
+        add acc o_provider (final id o_usd))
       reserved legacy
   in
-  (charged, max_id + 1)
+  let charged_by =
+    Imap.fold
+      (fun id { o_owner; o_usd; o_provider = _ } acc ->
+        add acc o_owner (final id o_usd))
+      reserved Smap.empty
+  in
+  (charged, charged_by, max_id + 1)
 
 let create ~path ~caps =
   (match Eio.Path.split path with
   | Some (parent, _) -> Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 parent
   | None -> ());
-  let charged, next_id =
+  let charged, charged_by, next_id =
     match Eio.Path.kind ~follow:true path with
-    | `Not_found -> (Smap.empty, 0)
+    | `Not_found -> (Smap.empty, Smap.empty, 0)
     | `Regular_file | `Directory | `Symbolic_link | `Fifo | `Character_special
     | `Block_device | `Socket | `Unknown ->
         replay (String.split_on_char '\n' (Eio.Path.load path))
@@ -124,6 +135,7 @@ let create ~path ~caps =
     caps = List.fold_left (fun m (k, v) -> Smap.add k v m) Smap.empty caps;
     mutex = Eio.Mutex.create ();
     charged;
+    charged_by;
     next_id;
   }
 
@@ -137,7 +149,7 @@ let append t fields =
 (* Callers pass finite amounts only, so the [Error] case cannot happen. *)
 let money usd = Result.value (Canon.float usd) ~default:Canon.null
 
-let reserve t ~provider ~model ~usd =
+let reserve t ~owner ~provider ~model ~usd =
   Eio.Mutex.use_rw ~protect:true t.mutex @@ fun () ->
   let cap = Option.value ~default:0. (Smap.find_opt provider t.caps) in
   let spent = get_charged t.charged provider in
@@ -148,12 +160,14 @@ let reserve t ~provider ~model ~usd =
         ("event", Canon.string "reserve");
         ("id", Canon.int id);
         ("model", Canon.string model);
+        ("owner", Canon.string owner);
         ("provider", Canon.string provider);
         ("reserved_usd", money usd);
       ];
     t.next_id <- id + 1;
     t.charged <- add t.charged provider usd;
-    Ok { id; provider; model; usd; settled = false }
+    t.charged_by <- add t.charged_by owner usd;
+    Ok { id; owner; provider; model; usd; settled = false }
   end
   else Error (Cap_reached { provider; cap; spent; requested = usd })
 
@@ -174,7 +188,9 @@ let settle t r ~actual =
         ("usd", money final);
       ];
     r.settled <- true;
-    t.charged <- add t.charged r.provider (final -. r.usd)
+    t.charged <- add t.charged r.provider (final -. r.usd);
+    t.charged_by <- add t.charged_by r.owner (final -. r.usd)
   end
 
 let spent t ~provider = get_charged t.charged provider
+let spent_by t ~owner = get_charged t.charged_by owner

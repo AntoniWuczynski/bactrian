@@ -9,8 +9,8 @@ let with_tmp name f =
     ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true dir)
     (fun () -> f dir)
 
-let reserve ?(provider = "openai") l usd =
-  Ledger.reserve l ~provider ~model:"gpt-6-luna" ~usd
+let reserve ?(provider = "openai") ?(owner = "run-a") l usd =
+  Ledger.reserve l ~owner ~provider ~model:"gpt-6-luna" ~usd
 
 let granted what = function
   | Ok r -> r
@@ -129,6 +129,27 @@ let test_reload_legacy () =
   check_usd "capture-script lines count as settled" 3.945e-05
     (Ledger.spent l ~provider:"openai")
 
+let test_spent_by_owner () =
+  with_tmp "owner" @@ fun dir ->
+  let caps = [ ("openai", 1.0); ("anthropic", 1.0) ] in
+  let l = mk dir ~caps () in
+  let a = granted "a" (reserve ~owner:"run-a" l 0.3) in
+  let b = granted "b" (reserve ~owner:"run-b" l 0.2) in
+  check_usd "outstanding reservation is charged to its owner" 0.3
+    (Ledger.spent_by l ~owner:"run-a");
+  Ledger.settle l a ~actual:(Some 0.1);
+  Ledger.settle l b ~actual:None;
+  let c = granted "c" (reserve ~owner:"run-a" ~provider:"anthropic" l 0.4) in
+  Ledger.settle l c ~actual:(Some 0.05);
+  check_usd "settled plus other provider" 0.15
+    (Ledger.spent_by l ~owner:"run-a");
+  check_usd "a usage gap stays with its owner" 0.2
+    (Ledger.spent_by l ~owner:"run-b");
+  check_usd "unknown owner" 0. (Ledger.spent_by l ~owner:"run-z");
+  let l2 = mk dir ~caps () in
+  check_usd "owner survives a reload" 0.15 (Ledger.spent_by l2 ~owner:"run-a");
+  check_usd "gap survives a reload" 0.2 (Ledger.spent_by l2 ~owner:"run-b")
+
 let test_corrupt () =
   with_tmp "corrupt" @@ fun dir ->
   Eio.Path.save ~create:(`Or_truncate 0o600)
@@ -157,6 +178,7 @@ let () =
           Alcotest.test_case "reload spent totals" `Quick test_reload;
           Alcotest.test_case "reload capture-script lines" `Quick
             test_reload_legacy;
+          Alcotest.test_case "spend by owner" `Quick test_spent_by_owner;
           Alcotest.test_case "corrupt line" `Quick test_corrupt;
         ] );
     ]

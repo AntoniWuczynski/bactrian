@@ -17,12 +17,31 @@ to be named.
   $ bactrian compare $ID --baseline a --candidate c
   bactrian: no runs of variant "c" in this experiment
   [64]
+  $ bactrian compare $ID --baseline a --candidate b
+  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  [64]
+  $ bactrian compare $ID --baseline a --candidate b --json
+  {"error":"gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)","exit":64}
+  [64]
+  $ bactrian report $ID --baseline a --candidate b -o out/report.html
+  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  [64]
   $ bactrian compare nope --baseline a --candidate b
   bactrian: no experiment "nope"
   [64]
   $ bactrian compare ../x --baseline a --candidate b
   bactrian: no experiment "../x"
   [64]
+
+A gate metric without a threshold in the experiment file is refused too, and
+the message names the metric.
+
+  $ ../snapshot.exe experiment .
+  $ grep -v thresholds demo.yaml > nothr.yaml && mv nothr.yaml demo.yaml
+  $ bactrian compare $ID
+  bactrian: gate metric pass_rate has no entry in compare.thresholds
+  [64]
+  $ ../snapshot.exe experiment .
 
 The terminal table. Without --gate the exit status is 0 whatever the verdict.
 
@@ -79,6 +98,7 @@ The report is one self-contained file.
   $ grep -c '<script' out/report.html
   0
   [1]
+  $ rm demo.yaml
   $ bactrian report $ID -o out/report.html
   bactrian: --baseline is required
   [64]

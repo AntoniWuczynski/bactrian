@@ -17,9 +17,6 @@ type error =
   | No_such_experiment of string
   | Bad_manifest of string
   | Bad_run of { run_id : string; file : string; reason : string }
-  | Bad_pricing of string
-      (** The experiment's price file could not be loaded, so costs cannot be
-          computed. *)
 
 val pp_error : Format.formatter -> error -> unit
 
@@ -34,11 +31,12 @@ val load :
     errored run), has an empty trace. A malformed trace or verdicts file is an
     error.
 
-    Cost is the trace's model calls priced at the run's simulated date, with the
-    experiment's price table, and falls back to the ledger spend in [meta.json].
-    Latency is the sum of the model calls' durations and tokens are input plus
-    output, see [Report_data.latency_ms]. Divergence details are not stored per
-    run, so [divergences] is empty. *)
+    Cost, latency and tokens are read from the run's [meta.json] ([cost_usd] is
+    what the ledger attributed to the run, [latency_ms] and [tokens] are the
+    totals of its model calls, see [Report_data.latency_ms]), not recomputed.
+    They are [None] for a run without a [meta.json] or whose trace had no model
+    call. Divergences are read from [divergences.json] (empty without one). A
+    malformed [meta.json] or [divergences.json] is an error. *)
 
 val settings :
   loaded ->
@@ -53,9 +51,9 @@ val settings :
     the gate become report metrics. The seed is the experiment's, with 10,000
     resamples.
 
-    Without a [compare] section both variants must be given, the population is
-    [`Suite], confidence 0.95 and the gate is the pass rate with threshold 0
-    (any interval wholly on one side of no difference is a verdict).
+    Without a [compare] section both variants must be given, but the gate has no
+    threshold to use: a threshold is never defaulted, so this is an [Error]
+    naming the pass rate.
 
     [Error] for a missing or unknown variant, the same variant twice, an unknown
-    metric name, or a gate metric with no threshold. *)
+    metric name, or a gate metric with no threshold (named in the message). *)

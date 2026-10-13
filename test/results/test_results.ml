@@ -170,8 +170,8 @@ let test_settings =
   Alcotest.(check bool)
     "unknown variant" true
     (is_error (get ~candidate:"zzz" l));
-  (* Without the experiment file the flags are required, and the gate is the
-     pass rate at threshold 0. *)
+  (* Without the experiment file the flags are required, and so is a
+     threshold, which only the file can give. *)
   Eio.Path.unlink Eio.Path.(Eio.Stdenv.cwd ctx.env / ctx.dir / "exp.json");
   let l = load ctx in
   Alcotest.(check bool) "experiment gone" true (Option.is_none l.experiment);
@@ -179,13 +179,13 @@ let test_settings =
   Alcotest.(check bool)
     "candidate required" true
     (is_error (get ~baseline:"a" l));
+  (* No threshold is ever assumed: the pass rate is named. *)
   match get ~baseline:"a" ~candidate:"b" l with
-  | Error m -> Alcotest.fail m
-  | Ok s ->
+  | Ok _ -> Alcotest.fail "a gate without a threshold must be refused"
+  | Error m ->
       Alcotest.(check bool)
-        "defaults" true
-        (s.gate = [ (Pass_rate, 0.) ]
-        && s.population = `Suite && s.confidence = 0.95)
+        ("names the metric: " ^ m) true
+        (Re.execp (Re.compile (Re.str "pass_rate has no threshold")) m)
 
 let test_gate_without_threshold =
   with_experiment "nothreshold" @@ fun ctx ->
@@ -202,6 +202,54 @@ let test_gate_without_threshold =
         "names the metric" true
         (String.length m > 0 && String.contains m '"')
   | Ok _ -> Alcotest.fail "an unknown gate metric must be refused"
+
+(* The follow-ups of review M6: cost, latency, tokens and divergences are read
+   from what the run wrote, not recomputed. *)
+let test_reads_what_the_run_wrote =
+  with_experiment "reads" @@ fun ctx ->
+  let l = load ctx in
+  let first = List.hd l.runs in
+  let id = Option.get first.run_id in
+  let meta =
+    Yojson.Safe.from_string
+      (Eio.Path.load Eio.Path.(ctx.root / "runs" / id / "meta.json"))
+  in
+  Alcotest.(check (option (float 1e-12)))
+    "cost is the ledger's"
+    (Some Yojson.Safe.Util.(to_float (member "cost_usd" meta)))
+    first.cost;
+  Alcotest.(check (option int))
+    "tokens"
+    (Some Yojson.Safe.Util.(to_int (member "tokens" meta)))
+    first.tokens;
+  Alcotest.(check bool)
+    "no divergences in a record run" true (first.divergences = []);
+  (* Edit the files and the loader follows them. *)
+  let path name = Printf.sprintf ".bactrian/runs/%s/%s" id name in
+  write ctx (path "meta.json")
+    {|{"cost_usd": 123.5, "latency_ms": 42.0, "tokens": 7}|};
+  write ctx (path "divergences.json")
+    {|{"version": 1, "divergences": [{"kind": "missing_request", "seq": 3, "similarity": 0.8, "changes": [{"path": "messages[0].content", "change": "changed"}]}]}|};
+  let again = List.hd (load ctx).runs in
+  Alcotest.(check (option (float 0.))) "cost" (Some 123.5) again.cost;
+  Alcotest.(check (option (float 0.))) "latency" (Some 42.) again.latency_ms;
+  Alcotest.(check (option int)) "tokens" (Some 7) again.tokens;
+  (match again.divergences with
+  | [ d ] ->
+      Alcotest.(check bool)
+        "described, with the diff path" true
+        (Re.execp (Re.compile (Re.str "nearest recorded #3")) d.description
+        && List.exists
+             (fun (c : Diff.change) ->
+               String.equal c.path "messages[0].content")
+             d.changes)
+  | _ -> Alcotest.fail "one divergence expected");
+  write ctx (path "divergences.json") "{";
+  match Results.load ~fs:ctx.fs ~root:ctx.root ~experiment_id:ctx.id with
+  | Error (Results.Bad_run { file; _ }) ->
+      Alcotest.(check string) "which file" "divergences.json" file
+  | Ok _ | Error (No_such_experiment _ | Bad_manifest _) ->
+      Alcotest.fail "a malformed divergences.json is an error"
 
 let test_end_to_end =
   with_experiment "e2e" @@ fun ctx ->
@@ -247,8 +295,7 @@ let test_errors =
     "{";
   (match err "broken" with
   | Results.Bad_manifest _ -> ()
-  | No_such_experiment _ | Bad_run _ | Bad_pricing _ ->
-      Alcotest.fail "expected Bad_manifest");
+  | No_such_experiment _ | Bad_run _ -> Alcotest.fail "expected Bad_manifest");
   (* A malformed trace is an error naming the run. *)
   let l = load ctx in
   let id = Option.get (List.hd l.runs).run_id in
@@ -257,8 +304,7 @@ let test_errors =
   | Results.Bad_run { run_id; file; _ } ->
       Alcotest.(check (pair string string))
         "which" (id, "trace.jsonl") (run_id, file)
-  | No_such_experiment _ | Bad_manifest _ | Bad_pricing _ ->
-      Alcotest.fail "expected Bad_run"
+  | No_such_experiment _ | Bad_manifest _ -> Alcotest.fail "expected Bad_run"
 
 let () =
   Alcotest.run "results"
@@ -267,6 +313,8 @@ let () =
         [
           Alcotest.test_case "runs, checks and measures" `Slow test_load;
           Alcotest.test_case "errors" `Slow test_errors;
+          Alcotest.test_case "reads meta.json and divergences.json" `Slow
+            test_reads_what_the_run_wrote;
         ] );
       ( "settings",
         [

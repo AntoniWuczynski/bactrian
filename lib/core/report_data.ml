@@ -302,8 +302,23 @@ let check_message (c : check) =
 
 let failure (r : run) =
   let items = List.filter_map check_message r.checks in
-  (* The reason of a run judged by its checks only repeats them. *)
-  let reason = if List.is_empty items then Option.to_list r.reason else [] in
+  (* The reason of a run judged by its checks only repeats them, and starts with
+     the name of the first. Any other reason (an agent that timed out, say) is
+     kept even when the checks were evaluated too. *)
+  let repeats_checks reason =
+    List.exists
+      (fun (c : check) ->
+        (match c.status with
+          | Check_pass -> false
+          | Check_fail | Check_error -> true)
+        && String.starts_with ~prefix:c.name reason)
+      r.checks
+  in
+  let reason =
+    match r.reason with
+    | Some reason when not (repeats_checks reason) -> [ reason ]
+    | Some _ | None -> []
+  in
   let divs = List.map (fun d -> "divergence: " ^ d.description) r.divergences in
   { run = r; messages = reason @ items @ divs }
 
