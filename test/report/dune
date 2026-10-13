@@ -1,0 +1,46 @@
+(library
+ (name report_fixture)
+ (wrapped false)
+ (modules fixture)
+ (libraries bactrian.core)
+ (flags
+  (:standard -w -70)))
+
+(tests
+ (names test_report_data test_report_html)
+ (modules test_report_data test_report_html)
+ (package bactrian)
+ (libraries bactrian.core report_fixture yojson re alcotest)
+ (flags
+  (:standard -w -70)))
+
+(executable
+ (name snapshot)
+ (modules snapshot)
+ (libraries bactrian.core report_fixture yojson))
+
+(rule
+ (with-stdout-to
+  actual.json
+  (run ./snapshot.exe json)))
+
+(rule
+ (alias runtest)
+ (package bactrian)
+ (action
+  (diff expected.json actual.json)))
+
+(rule
+ (with-stdout-to
+  actual.html
+  (run ./snapshot.exe html)))
+
+(rule
+ (alias runtest)
+ (package bactrian)
+ (action
+  (diff expected.html actual.html)))
+
+(cram
+ (package bactrian)
+ (deps %{bin:bactrian} snapshot.exe))

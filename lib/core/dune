@@ -1,6 +1,6 @@
 (library
  (name bactrian_core)
  (public_name bactrian.core)
- (libraries yojson re)
+ (libraries yojson re tyxml)
  (preprocess
   (pps ppx_deriving_yojson)))

@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head>
+<title>bactrian report: demo</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #faf9f6;
+  --card: #ffffff;
+  --fg: #1d1c1a;
+  --muted: #5c5952;
+  --line: #dcd8cf;
+  --bad: #b3261e;
+  --good: #1a7340;
+  --warn: #85560a;
+  --info: #2a5db0;
+  --band: #e6ecf8;
+  --bad-bg: #fbe9e7;
+  --good-bg: #e4f3ea;
+  --warn-bg: #fbf0d9;
+  --info-bg: #e8eefa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15140f;
+    --card: #1e1d17;
+    --fg: #ece9e1;
+    --muted: #a7a398;
+    --line: #3a382f;
+    --bad: #ff8f85;
+    --good: #72d19b;
+    --warn: #e5b758;
+    --info: #8db5fa;
+    --band: #243049;
+    --bad-bg: #3a1f1c;
+    --good-bg: #1b3326;
+    --warn-bg: #382c12;
+    --info-bg: #1d2740;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+main { max-width: 60rem; margin: 0 auto; padding: 1.25rem 16px 4rem; }
+h1 { font-size: 1.6rem; line-height: 1.2; margin: 0 0 0.25rem; }
+h2 { font-size: 1.2rem; margin: 2.5rem 0 0.5rem; border-bottom: 1px solid var(--line); padding-bottom: 0.25rem; }
+h3 { font-size: 1rem; margin: 1.25rem 0 0.25rem; }
+p { margin: 0.5rem 0; }
+.sub { color: var(--muted); margin-top: 0; }
+.note { color: var(--muted); font-size: 0.9rem; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; }
+.scroll { overflow-x: auto; margin: 0.5rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+caption { text-align: left; color: var(--muted); padding-bottom: 0.25rem; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { border-bottom: 2px solid var(--line); white-space: nowrap; }
+td.num { text-align: right; white-space: nowrap; }
+code, pre { font: 0.85rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.5rem 0; }
+details { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.75rem; margin: 0.5rem 0; }
+details[open] { padding-bottom: 0.75rem; }
+summary { cursor: pointer; padding: 0.25rem 0; }
+.badge { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 999px; border: 1px solid currentColor; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+.regression { color: var(--bad); }
+.improvement { color: var(--good); }
+.no-change { color: var(--info); }
+.inconclusive { color: var(--warn); }
+.badge.regression { background: var(--bad-bg); }
+.badge.improvement { background: var(--good-bg); }
+.badge.no-change { background: var(--info-bg); }
+.badge.inconclusive { background: var(--warn-bg); }
+.badge.new { color: var(--warn); background: var(--warn-bg); }
+.badge.plain { color: var(--muted); }
+figure { margin: 0.5rem 0 1rem; }
+figcaption { color: var(--muted); font-size: 0.85rem; }
+svg.chart { display: block; width: 100%; max-width: 32rem; height: auto; }
+svg.chart text { font: 12px system-ui, sans-serif; fill: var(--fg); }
+svg.chart text.axis, svg.chart text.val { fill: var(--muted); }
+svg.chart .strong text.lbl { font-weight: 700; }
+svg.chart .band { fill: var(--band); }
+svg.chart .zero { stroke: var(--fg); stroke-width: 1; stroke-dasharray: 3 3; }
+svg.chart .axisline, svg.chart .tick { stroke: var(--muted); stroke-width: 1; }
+svg.chart .ci { stroke: var(--muted); stroke-width: 2; fill: none; }
+svg.chart .ci.regression { stroke: var(--bad); }
+svg.chart .ci.improvement { stroke: var(--good); }
+svg.chart .ci.no-change { stroke: var(--info); }
+svg.chart .ci.inconclusive { stroke: var(--warn); }
+svg.chart circle.pt { fill: var(--card); stroke-width: 2.5; }
+svg.chart .bar.base { fill: var(--muted); }
+svg.chart .bar.cand { fill: var(--info); }
+svg.chart .whisker { stroke: var(--fg); stroke-width: 1.5; }
+ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
+@media (max-width: 36rem) {
+  dl.facts { grid-template-columns: 1fr; gap: 0; }
+  dl.facts dd { margin-bottom: 0.5rem; }
+  h1 { font-size: 1.35rem; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>demo</h1>
+<p class="sub">Candidate b against baseline a. Experiment 20261013T090000Z-0badc0de.</p>
+<dl class="facts">
+<dt>Estimand</dt>
+<dd>Suite: performance on exactly these scenarios. Uncertainty comes from run-to-run variation only.</dd>
+<dt>Confidence</dt>
+<dd>95%</dd>
+<dt>Gate family</dt>
+<dd>pass_rate (threshold 10.0 percentage points)</dd>
+<dt>Level per gate interval</dt>
+<dd>0.9500</dd>
+<dt>Seed</dt>
+<dd>7, 500 bootstrap resamples</dd>
+<dt>Gate exit status</dt>
+<dd>3: missing data may bias the comparison</dd>
+</dl>
+</header>
+<section id="verdicts">
+<h2>Verdicts</h2>
+<div class="scroll">
+<table>
+<caption>Candidate against baseline. Pass rate is a difference in percentage points. The others are relative changes in the median.</caption>
+<thead>
+<tr>
+<th scope="col">Metric</th>
+<th scope="col">In gate</th>
+<th scope="col">Estimate</th>
+<th scope="col">Interval</th>
+<th scope="col">Level</th>
+<th scope="col">Threshold</th>
+<th scope="col">Verdict</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">Pass rate</th>
+<td>yes</td>
+<td class="num">-3.3 pp</td>
+<td class="num">-16.7 pp to +8.4 pp</td>
+<td class="num">0.9500</td>
+<td class="num">±10.0 pp</td>
+<td>
+<span class="badge inconclusive">Inconclusive, leans worse</span>
+</td>
+</tr>
+<tr>
+<th scope="row">Cost</th>
+<td>no</td>
+<td class="num">+9.1%</td>
+<td class="num">0.0% to +81.8%</td>
+<td class="num">0.9500</td>
+<td class="num">±20.0%</td>
+<td>
+<span class="badge inconclusive">Inconclusive, leans worse</span>
+</td>
+</tr>
+<tr>
+<th scope="row">Median latency</th>
+<td>no</td>
+<td class="num">+45.8%</td>
+<td class="num">+40.9% to +50.6%</td>
+<td class="num">0.9500</td>
+<td class="num">±25.0%</td>
+<td>
+<span class="badge regression">Regression</span>
+</td>
+</tr>
+</table>
+</div>
+<div class="scroll">
+<table>
+<caption>Missing data per arm</caption>
+<thead>
+<tr>
+<th scope="col">Variant</th>
+<th scope="col">Runs</th>
+<th scope="col">Errored</th>
+<th scope="col">Not run or unfinished</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">a</th>
+<td class="num">30</td>
+<td class="num">0</td>
+<td class="num">0</td>
+</tr>
+<tr>
+<th scope="row">b</th>
+<td class="num">30</td>
+<td class="num">1</td>
+<td class="num">1</td>
+</tr>
+</table>
+</div>
+</section>
+<section id="scenarios">
+<h2>Pass rate per scenario</h2>
+<p class="note">Newcombe intervals at level 0.9833 (Bonferroni across 3 scenarios). Per-scenario results never fail the gate.</p>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 214" class="chart" role="img" aria-label="Pass rate difference per scenario">
+<title>Pass rate difference per scenario</title>
+<desc>Difference in pass rate (candidate minus baseline) in percentage points, with its interval. The shaded band is plus or minus 10.0 percentage points.</desc>
+<rect class="band" x="177" y="0" width="46" height="184">
+</rect>
+<line class="zero" x1="200" y1="0" x2="200" y2="184">
+</line>
+<g class="row strong">
+<title>All scenarios: -3.3 pp, interval -16.7 pp to +8.4 pp</title>
+<text class="lbl" x="16" y="18" text-anchor="start">All scenarios</text>
+<line class="ci inconclusive" x1="161.667" y1="34" x2="219.358" y2="34">
+</line>
+<line class="ci inconclusive" x1="161.667" y1="29" x2="161.667" y2="39">
+</line>
+<line class="ci inconclusive" x1="219.358" y1="29" x2="219.358" y2="39">
+</line>
+<circle class="ci inconclusive pt" cx="192.333" cy="34" r="4">
+</circle>
+</g>
+<g class="row">
+<title>book: +20.0 pp, interval -24.5 pp to +57.4 pp</title>
+<text class="lbl" x="16" y="64" text-anchor="start">book</text>
+<line class="ci inconclusive" x1="143.538" y1="80" x2="332.093" y2="80">
+</line>
+<line class="ci inconclusive" x1="143.538" y1="75" x2="143.538" y2="85">
+</line>
+<line class="ci inconclusive" x1="332.093" y1="75" x2="332.093" y2="85">
+</line>
+<circle class="ci inconclusive pt" cx="246" cy="80" r="4">
+</circle>
+</g>
+<g class="row">
+<title>refund: -30.0 pp, interval -65.9 pp to +12.2 pp</title>
+<text class="lbl" x="16" y="110" text-anchor="start">refund</text>
+<line class="ci inconclusive" x1="48.4534" y1="126" x2="228.083" y2="126">
+</line>
+<line class="ci inconclusive" x1="48.4534" y1="121" x2="48.4534" y2="131">
+</line>
+<line class="ci inconclusive" x1="228.083" y1="121" x2="228.083" y2="131">
+</line>
+<circle class="ci inconclusive pt" cx="131" cy="126" r="4">
+</circle>
+</g>
+<g class="row">
+<title>search: 0.0 pp, interval -36.4 pp to +36.4 pp</title>
+<text class="lbl" x="16" y="156" text-anchor="start">search</text>
+<line class="ci inconclusive" x1="116.207" y1="172" x2="283.793" y2="172">
+</line>
+<line class="ci inconclusive" x1="116.207" y1="167" x2="116.207" y2="177">
+</line>
+<line class="ci inconclusive" x1="283.793" y1="167" x2="283.793" y2="177">
+</line>
+<circle class="ci inconclusive pt" cx="200" cy="172" r="4">
+</circle>
+</g>
+<line class="axisline" x1="16" y1="184" x2="384" y2="184">
+</line>
+<g>
+<line class="tick" x1="16" y1="184" x2="16" y2="188">
+</line>
+<text class="axis" x="16" y="200" text-anchor="middle">-80</text>
+</g>
+<g>
+<line class="tick" x1="108" y1="184" x2="108" y2="188">
+</line>
+<text class="axis" x="108" y="200" text-anchor="middle">-40</text>
+</g>
+<g>
+<line class="tick" x1="200" y1="184" x2="200" y2="188">
+</line>
+<text class="axis" x="200" y="200" text-anchor="middle">+0</text>
+</g>
+<g>
+<line class="tick" x1="292" y1="184" x2="292" y2="188">
+</line>
+<text class="axis" x="292" y="200" text-anchor="middle">+40</text>
+</g>
+<g>
+<line class="tick" x1="384" y1="184" x2="384" y2="188">
+</line>
+<text class="axis" x="384" y="200" text-anchor="middle">+80</text>
+</g>
+<text class="axis" x="384" y="213" text-anchor="end">percentage points</text>
+</svg>
+<figcaption>Point and interval of candidate minus baseline. The shaded band is ±10.0 percentage points, the dashed line is no difference.</figcaption>
+</figure>
+<div class="scroll">
+<table>
+<caption>The same results as a table</caption>
+<thead>
+<tr>
+<th scope="col">Scenario</th>
+<th scope="col">Baseline</th>
+<th scope="col">Candidate</th>
+<th scope="col">Difference</th>
+<th scope="col">Interval</th>
+<th scope="col">Verdict</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">book</th>
+<td class="num">8/10 (80%)</td>
+<td class="num">8/8 (100%)</td>
+<td class="num">+20.0 pp</td>
+<td class="num">-24.5 pp to +57.4 pp</td>
+<td>
+<span class="badge inconclusive">Inconclusive, leans better</span>
+</td>
+</tr>
+<tr>
+<th scope="row">refund</th>
+<td class="num">10/10 (100%)</td>
+<td class="num">7/10 (70%)</td>
+<td class="num">-30.0 pp</td>
+<td class="num">-65.9 pp to +12.2 pp</td>
+<td>
+<span class="badge inconclusive">Inconclusive, leans worse</span>
+</td>
+</tr>
+<tr>
+<th scope="row">search</th>
+<td class="num">10/10 (100%)</td>
+<td class="num">10/10 (100%)</td>
+<td class="num">0.0 pp</td>
+<td class="num">-36.4 pp to +36.4 pp</td>
+<td>
+<span class="badge inconclusive">Inconclusive</span>
+</td>
+</tr>
+</table>
+</div>
+</section>
+<section id="cost-latency">
+<h2>Cost and latency</h2>
+<p class="note">Over finished runs. Latency is the time spent in model calls. The verdict table compares medians with bootstrap intervals.</p>
+<h3 id="cost">Cost per run</h3>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 88" class="chart" role="img" aria-label="Cost per run">
+<title>Cost per run</title>
+<desc>a (baseline) median $0.011, 90th percentile $0.012; b (candidate) median $0.012, 90th percentile $0.021</desc>
+<g class="row">
+<title>a (baseline): median $0.011, 90th percentile $0.012</title>
+<text class="lbl" x="16" y="15" text-anchor="start">a (baseline)</text>
+<rect class="bar base" x="16" y="22" width="159.061" height="12">
+</rect>
+<line class="whisker" x1="175.061" y1="28" x2="189.521" y2="28">
+</line>
+<line class="whisker" x1="189.521" y1="23" x2="189.521" y2="33">
+</line>
+<text class="val" x="195.521" y="32" text-anchor="start">$0.011</text>
+</g>
+<g class="row">
+<title>b (candidate): median $0.012, 90th percentile $0.021</title>
+<text class="lbl" x="16" y="59" text-anchor="start">b (candidate)</text>
+<rect class="bar cand" x="16" y="66" width="173.521" height="12">
+</rect>
+<line class="whisker" x1="189.521" y1="72" x2="324" y2="72">
+</line>
+<line class="whisker" x1="324" y1="67" x2="324" y2="77">
+</line>
+<text class="val" x="330" y="76" text-anchor="start">$0.012</text>
+</g>
+</svg>
+<figcaption>Bar: median. Whisker: 90th percentile.</figcaption>
+</figure>
+<div class="scroll">
+<table>
+<caption>Cost per run as a table</caption>
+<thead>
+<tr>
+<th scope="col">Variant</th>
+<th scope="col">Runs</th>
+<th scope="col">Median</th>
+<th scope="col">90th percentile</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">a (baseline)</th>
+<td class="num">30</td>
+<td class="num">$0.011</td>
+<td class="num">$0.012</td>
+</tr>
+<tr>
+<th scope="row">b (candidate)</th>
+<td class="num">28</td>
+<td class="num">$0.012</td>
+<td class="num">$0.021</td>
+</tr>
+</table>
+</div>
+<h3 id="latency">Latency per run</h3>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 88" class="chart" role="img" aria-label="Latency per run">
+<title>Latency per run</title>
+<desc>a (baseline) median 655 ms, 90th percentile 691 ms; b (candidate) median 955 ms, 90th percentile 990 ms</desc>
+<g class="row">
+<title>a (baseline): median 655 ms, 90th percentile 691 ms</title>
+<text class="lbl" x="16" y="15" text-anchor="start">a (baseline)</text>
+<rect class="bar base" x="16" y="22" width="203.778" height="12">
+</rect>
+<line class="whisker" x1="219.778" y1="28" x2="230.978" y2="28">
+</line>
+<line class="whisker" x1="230.978" y1="23" x2="230.978" y2="33">
+</line>
+<text class="val" x="236.978" y="32" text-anchor="start">655 ms</text>
+</g>
+<g class="row">
+<title>b (candidate): median 955 ms, 90th percentile 990 ms</title>
+<text class="lbl" x="16" y="59" text-anchor="start">b (candidate)</text>
+<rect class="bar cand" x="16" y="66" width="297.111" height="12">
+</rect>
+<line class="whisker" x1="313.111" y1="72" x2="324" y2="72">
+</line>
+<line class="whisker" x1="324" y1="67" x2="324" y2="77">
+</line>
+<text class="val" x="330" y="76" text-anchor="start">955 ms</text>
+</g>
+</svg>
+<figcaption>Bar: median. Whisker: 90th percentile.</figcaption>
+</figure>
+<div class="scroll">
+<table>
+<caption>Latency per run as a table</caption>
+<thead>
+<tr>
+<th scope="col">Variant</th>
+<th scope="col">Runs</th>
+<th scope="col">Median</th>
+<th scope="col">90th percentile</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">a (baseline)</th>
+<td class="num">30</td>
+<td class="num">655 ms</td>
+<td class="num">691 ms</td>
+</tr>
+<tr>
+<th scope="row">b (candidate)</th>
+<td class="num">28</td>
+<td class="num">955 ms</td>
+<td class="num">990 ms</td>
+</tr>
+</table>
+</div>
+</section>
+<section id="behaviour">
+<h2>Behaviour</h2>
+<p class="note">A trajectory signature is the sequence of tool names in a run. A new behaviour is a signature in at least 10% of the candidate's runs and none of the baseline's. Runs without a trace are left out.</p>
+<details>
+<summary>book</summary>
+<div class="scroll">
+<table>
+<caption>Tool-call sequences</caption>
+<thead>
+<tr>
+<th scope="col">Sequence</th>
+<th scope="col">Baseline</th>
+<th scope="col">Candidate</th>
+<th scope="col">
+</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">calendar</th>
+<td class="num">8 (80%)</td>
+<td class="num">8 (100%)</td>
+<td>
+</td>
+</tr>
+<tr>
+<th scope="row">calendar &gt; calendar</th>
+<td class="num">2 (20%)</td>
+<td class="num">0 (0%)</td>
+<td>
+</td>
+</tr>
+</table>
+</div>
+<div class="scroll">
+<table>
+<caption>Model calls per run (steps)</caption>
+<thead>
+<tr>
+<th scope="col">Steps</th>
+<th scope="col">Baseline runs</th>
+<th scope="col">Candidate runs</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">1</th>
+<td class="num">10</td>
+<td class="num">8</td>
+</tr>
+</table>
+</div>
+</details>
+<details open="open">
+<summary>refund: 1 new behaviour</summary>
+<div class="scroll">
+<table>
+<caption>Tool-call sequences</caption>
+<thead>
+<tr>
+<th scope="col">Sequence</th>
+<th scope="col">Baseline</th>
+<th scope="col">Candidate</th>
+<th scope="col">
+</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">lookup_order &gt; refund</th>
+<td class="num">10 (100%)</td>
+<td class="num">7 (70%)</td>
+<td>
+</td>
+</tr>
+<tr>
+<th scope="row">lookup_order &gt; refund &gt; notify</th>
+<td class="num">0 (0%)</td>
+<td class="num">3 (30%)</td>
+<td>
+<span class="badge new">new</span>
+</td>
+</tr>
+</table>
+</div>
+<div class="scroll">
+<table>
+<caption>Model calls per run (steps)</caption>
+<thead>
+<tr>
+<th scope="col">Steps</th>
+<th scope="col">Baseline runs</th>
+<th scope="col">Candidate runs</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">1</th>
+<td class="num">10</td>
+<td class="num">10</td>
+</tr>
+</table>
+</div>
+</details>
+<details>
+<summary>search</summary>
+<div class="scroll">
+<table>
+<caption>Tool-call sequences</caption>
+<thead>
+<tr>
+<th scope="col">Sequence</th>
+<th scope="col">Baseline</th>
+<th scope="col">Candidate</th>
+<th scope="col">
+</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">search</th>
+<td class="num">10 (100%)</td>
+<td class="num">10 (100%)</td>
+<td>
+</td>
+</tr>
+</table>
+</div>
+<div class="scroll">
+<table>
+<caption>Model calls per run (steps)</caption>
+<thead>
+<tr>
+<th scope="col">Steps</th>
+<th scope="col">Baseline runs</th>
+<th scope="col">Candidate runs</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">1</th>
+<td class="num">10</td>
+<td class="num">10</td>
+</tr>
+</table>
+</div>
+</details>
+</section>
+<section id="failures">
+<h2>Failures</h2>
+<p class="note">6 runs of the two variants failed, diverged or errored. Errored runs are faults inside bactrian and are excluded from pass rates.</p>
+<details>
+<summary>b, refund, repeat 3: failed</summary>
+<p class="note">Run run-005</p>
+<ul class="messages">
+<li>assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify</li>
+<li>divergence: request not in the recording</li>
+</ul>
+<h3>Divergences</h3>
+<ul>
+<li>request not in the recording<ul>
+<li>
+<code>changed messages[2].content</code>
+</li>
+<li>
+<code>added tools[1]</code>
+</li>
+</ul>
+</li>
+</ul>
+<h3>Trace</h3>
+<pre>  0      0ms run_start x s/v
+  1     10ms turn_start 1 Hello
+  2     20ms model_call 1 gpt-5-nano status=200 930ms tokens=400/10
+  3     30ms tool_call 1 lookup_order null
+  4     40ms tool_call 1 refund null
+  5     50ms tool_call 1 notify null
+  6     60ms reply 1 Done
+  7     70ms done</pre>
+</details>
+<details>
+<summary>b, refund, repeat 6: failed</summary>
+<p class="note">Run run-011</p>
+<ul class="messages">
+<li>assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify</li>
+</ul>
+<h3>Trace</h3>
+<pre>  0      0ms run_start x s/v
+  1     10ms turn_start 1 Hello
+  2     20ms model_call 1 gpt-5-nano status=200 960ms tokens=400/10
+  3     30ms tool_call 1 lookup_order null
+  4     40ms tool_call 1 refund null
+  5     50ms tool_call 1 notify null
+  6     60ms reply 1 Done
+  7     70ms done</pre>
+</details>
+<details>
+<summary>b, refund, repeat 9: failed</summary>
+<p class="note">Run run-017</p>
+<ul class="messages">
+<li>assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify</li>
+</ul>
+<h3>Trace</h3>
+<pre>  0      0ms run_start x s/v
+  1     10ms turn_start 1 Hello
+  2     20ms model_call 1 gpt-5-nano status=200 990ms tokens=400/10
+  3     30ms tool_call 1 lookup_order null
+  4     40ms tool_call 1 refund null
+  5     50ms tool_call 1 notify null
+  6     60ms reply 1 Done
+  7     70ms done</pre>
+</details>
+<details>
+<summary>a, book, repeat 4: failed</summary>
+<p class="note">Run run-046</p>
+<ul class="messages">
+<li>assertions[1] max_steps: 3 model calls, allowed 2</li>
+</ul>
+<h3>Trace</h3>
+<pre>  0      0ms run_start x s/v
+  1     10ms turn_start 1 Hello
+  2     20ms model_call 1 gpt-5-nano status=200 640ms tokens=200/10
+  3     30ms tool_call 1 calendar null
+  4     40ms tool_call 1 calendar null
+  5     50ms reply 1 Done
+  6     60ms done</pre>
+</details>
+<details>
+<summary>b, book, repeat 5: errored</summary>
+<p class="note">Run run-049</p>
+<ul class="messages">
+<li>proxy fault</li>
+</ul>
+<p class="note">This run left no trace.</p>
+</details>
+<details>
+<summary>a, book, repeat 8: failed</summary>
+<p class="note">Run run-054</p>
+<ul class="messages">
+<li>assertions[1] max_steps: 3 model calls, allowed 2</li>
+</ul>
+<h3>Trace</h3>
+<pre>  0      0ms run_start x s/v
+  1     10ms turn_start 1 Hello
+  2     20ms model_call 1 gpt-5-nano status=200 680ms tokens=200/10
+  3     30ms tool_call 1 calendar null
+  4     40ms tool_call 1 calendar null
+  5     50ms reply 1 Done
+  6     60ms done</pre>
+</details>
+</section>
+<section id="order">
+<h2>Execution order</h2>
+<p class="note">Runs are interleaved across scenarios and variants, so drift in the provider spreads over every arm.</p>
+<details>
+<summary>60 runs</summary>
+<div class="scroll">
+<table>
+<caption>Runs in the order they started</caption>
+<thead>
+<tr>
+<th scope="col">#</th>
+<th scope="col">Scenario</th>
+<th scope="col">Variant</th>
+<th scope="col">Repeat</th>
+<th scope="col">Status</th>
+<th scope="col">Run</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">0</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-000</code>
+</td>
+</tr>
+<tr>
+<th scope="row">1</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-001</code>
+</td>
+</tr>
+<tr>
+<th scope="row">2</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-002</code>
+</td>
+</tr>
+<tr>
+<th scope="row">3</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-003</code>
+</td>
+</tr>
+<tr>
+<th scope="row">4</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">3</td>
+<td>passed</td>
+<td>
+<code>run-004</code>
+</td>
+</tr>
+<tr>
+<th scope="row">5</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">3</td>
+<td>failed</td>
+<td>
+<code>run-005</code>
+</td>
+</tr>
+<tr>
+<th scope="row">6</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">4</td>
+<td>passed</td>
+<td>
+<code>run-006</code>
+</td>
+</tr>
+<tr>
+<th scope="row">7</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">4</td>
+<td>passed</td>
+<td>
+<code>run-007</code>
+</td>
+</tr>
+<tr>
+<th scope="row">8</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">5</td>
+<td>passed</td>
+<td>
+<code>run-008</code>
+</td>
+</tr>
+<tr>
+<th scope="row">9</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">5</td>
+<td>passed</td>
+<td>
+<code>run-009</code>
+</td>
+</tr>
+<tr>
+<th scope="row">10</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">6</td>
+<td>passed</td>
+<td>
+<code>run-010</code>
+</td>
+</tr>
+<tr>
+<th scope="row">11</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">6</td>
+<td>failed</td>
+<td>
+<code>run-011</code>
+</td>
+</tr>
+<tr>
+<th scope="row">12</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-012</code>
+</td>
+</tr>
+<tr>
+<th scope="row">13</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-013</code>
+</td>
+</tr>
+<tr>
+<th scope="row">14</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">8</td>
+<td>passed</td>
+<td>
+<code>run-014</code>
+</td>
+</tr>
+<tr>
+<th scope="row">15</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">8</td>
+<td>passed</td>
+<td>
+<code>run-015</code>
+</td>
+</tr>
+<tr>
+<th scope="row">16</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">9</td>
+<td>passed</td>
+<td>
+<code>run-016</code>
+</td>
+</tr>
+<tr>
+<th scope="row">17</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">9</td>
+<td>failed</td>
+<td>
+<code>run-017</code>
+</td>
+</tr>
+<tr>
+<th scope="row">18</th>
+<td>refund</td>
+<td>a</td>
+<td class="num">10</td>
+<td>passed</td>
+<td>
+<code>run-018</code>
+</td>
+</tr>
+<tr>
+<th scope="row">19</th>
+<td>refund</td>
+<td>b</td>
+<td class="num">10</td>
+<td>passed</td>
+<td>
+<code>run-019</code>
+</td>
+</tr>
+<tr>
+<th scope="row">20</th>
+<td>search</td>
+<td>a</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-020</code>
+</td>
+</tr>
+<tr>
+<th scope="row">21</th>
+<td>search</td>
+<td>b</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-021</code>
+</td>
+</tr>
+<tr>
+<th scope="row">22</th>
+<td>search</td>
+<td>a</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-022</code>
+</td>
+</tr>
+<tr>
+<th scope="row">23</th>
+<td>search</td>
+<td>b</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-023</code>
+</td>
+</tr>
+<tr>
+<th scope="row">24</th>
+<td>search</td>
+<td>a</td>
+<td class="num">3</td>
+<td>passed</td>
+<td>
+<code>run-024</code>
+</td>
+</tr>
+<tr>
+<th scope="row">25</th>
+<td>search</td>
+<td>b</td>
+<td class="num">3</td>
+<td>passed</td>
+<td>
+<code>run-025</code>
+</td>
+</tr>
+<tr>
+<th scope="row">26</th>
+<td>search</td>
+<td>a</td>
+<td class="num">4</td>
+<td>passed</td>
+<td>
+<code>run-026</code>
+</td>
+</tr>
+<tr>
+<th scope="row">27</th>
+<td>search</td>
+<td>b</td>
+<td class="num">4</td>
+<td>passed</td>
+<td>
+<code>run-027</code>
+</td>
+</tr>
+<tr>
+<th scope="row">28</th>
+<td>search</td>
+<td>a</td>
+<td class="num">5</td>
+<td>passed</td>
+<td>
+<code>run-028</code>
+</td>
+</tr>
+<tr>
+<th scope="row">29</th>
+<td>search</td>
+<td>b</td>
+<td class="num">5</td>
+<td>passed</td>
+<td>
+<code>run-029</code>
+</td>
+</tr>
+<tr>
+<th scope="row">30</th>
+<td>search</td>
+<td>a</td>
+<td class="num">6</td>
+<td>passed</td>
+<td>
+<code>run-030</code>
+</td>
+</tr>
+<tr>
+<th scope="row">31</th>
+<td>search</td>
+<td>b</td>
+<td class="num">6</td>
+<td>passed</td>
+<td>
+<code>run-031</code>
+</td>
+</tr>
+<tr>
+<th scope="row">32</th>
+<td>search</td>
+<td>a</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-032</code>
+</td>
+</tr>
+<tr>
+<th scope="row">33</th>
+<td>search</td>
+<td>b</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-033</code>
+</td>
+</tr>
+<tr>
+<th scope="row">34</th>
+<td>search</td>
+<td>a</td>
+<td class="num">8</td>
+<td>passed</td>
+<td>
+<code>run-034</code>
+</td>
+</tr>
+<tr>
+<th scope="row">35</th>
+<td>search</td>
+<td>b</td>
+<td class="num">8</td>
+<td>passed</td>
+<td>
+<code>run-035</code>
+</td>
+</tr>
+<tr>
+<th scope="row">36</th>
+<td>search</td>
+<td>a</td>
+<td class="num">9</td>
+<td>passed</td>
+<td>
+<code>run-036</code>
+</td>
+</tr>
+<tr>
+<th scope="row">37</th>
+<td>search</td>
+<td>b</td>
+<td class="num">9</td>
+<td>passed</td>
+<td>
+<code>run-037</code>
+</td>
+</tr>
+<tr>
+<th scope="row">38</th>
+<td>search</td>
+<td>a</td>
+<td class="num">10</td>
+<td>passed</td>
+<td>
+<code>run-038</code>
+</td>
+</tr>
+<tr>
+<th scope="row">39</th>
+<td>search</td>
+<td>b</td>
+<td class="num">10</td>
+<td>passed</td>
+<td>
+<code>run-039</code>
+</td>
+</tr>
+<tr>
+<th scope="row">40</th>
+<td>book</td>
+<td>a</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-040</code>
+</td>
+</tr>
+<tr>
+<th scope="row">41</th>
+<td>book</td>
+<td>b</td>
+<td class="num">1</td>
+<td>passed</td>
+<td>
+<code>run-041</code>
+</td>
+</tr>
+<tr>
+<th scope="row">42</th>
+<td>book</td>
+<td>a</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-042</code>
+</td>
+</tr>
+<tr>
+<th scope="row">43</th>
+<td>book</td>
+<td>b</td>
+<td class="num">2</td>
+<td>passed</td>
+<td>
+<code>run-043</code>
+</td>
+</tr>
+<tr>
+<th scope="row">44</th>
+<td>book</td>
+<td>a</td>
+<td class="num">3</td>
+<td>passed</td>
+<td>
+<code>run-044</code>
+</td>
+</tr>
+<tr>
+<th scope="row">45</th>
+<td>book</td>
+<td>b</td>
+<td class="num">3</td>
+<td>passed</td>
+<td>
+<code>run-045</code>
+</td>
+</tr>
+<tr>
+<th scope="row">46</th>
+<td>book</td>
+<td>a</td>
+<td class="num">4</td>
+<td>failed</td>
+<td>
+<code>run-046</code>
+</td>
+</tr>
+<tr>
+<th scope="row">47</th>
+<td>book</td>
+<td>b</td>
+<td class="num">4</td>
+<td>passed</td>
+<td>
+<code>run-047</code>
+</td>
+</tr>
+<tr>
+<th scope="row">48</th>
+<td>book</td>
+<td>a</td>
+<td class="num">5</td>
+<td>passed</td>
+<td>
+<code>run-048</code>
+</td>
+</tr>
+<tr>
+<th scope="row">49</th>
+<td>book</td>
+<td>b</td>
+<td class="num">5</td>
+<td>errored</td>
+<td>
+<code>run-049</code>
+</td>
+</tr>
+<tr>
+<th scope="row">50</th>
+<td>book</td>
+<td>a</td>
+<td class="num">6</td>
+<td>passed</td>
+<td>
+<code>run-050</code>
+</td>
+</tr>
+<tr>
+<th scope="row">51</th>
+<td>book</td>
+<td>b</td>
+<td class="num">6</td>
+<td>passed</td>
+<td>
+<code>run-051</code>
+</td>
+</tr>
+<tr>
+<th scope="row">52</th>
+<td>book</td>
+<td>a</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-052</code>
+</td>
+</tr>
+<tr>
+<th scope="row">53</th>
+<td>book</td>
+<td>b</td>
+<td class="num">7</td>
+<td>passed</td>
+<td>
+<code>run-053</code>
+</td>
+</tr>
+<tr>
+<th scope="row">54</th>
+<td>book</td>
+<td>a</td>
+<td class="num">8</td>
+<td>failed</td>
+<td>
+<code>run-054</code>
+</td>
+</tr>
+<tr>
+<th scope="row">55</th>
+<td>book</td>
+<td>b</td>
+<td class="num">8</td>
+<td>passed</td>
+<td>
+<code>run-055</code>
+</td>
+</tr>
+<tr>
+<th scope="row">56</th>
+<td>book</td>
+<td>a</td>
+<td class="num">9</td>
+<td>passed</td>
+<td>
+<code>run-056</code>
+</td>
+</tr>
+<tr>
+<th scope="row">57</th>
+<td>book</td>
+<td>b</td>
+<td class="num">9</td>
+<td>passed</td>
+<td>
+<code>run-057</code>
+</td>
+</tr>
+<tr>
+<th scope="row">58</th>
+<td>book</td>
+<td>a</td>
+<td class="num">10</td>
+<td>passed</td>
+<td>
+<code>run-058</code>
+</td>
+</tr>
+<tr>
+<th scope="row">59</th>
+<td>book</td>
+<td>b</td>
+<td class="num">10</td>
+<td>not run</td>
+<td>
+<code>run-059</code>
+</td>
+</tr>
+</table>
+</div>
+</details>
+</section>
+</main>
+</body>
+</html>

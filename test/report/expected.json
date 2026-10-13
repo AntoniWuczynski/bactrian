@@ -1,0 +1,1161 @@
+{
+  "schema_version": 1,
+  "experiment_id": "20261013T090000Z-0badc0de",
+  "experiment": "demo",
+  "baseline": "a",
+  "candidate": "b",
+  "estimand": "suite",
+  "confidence": 0.95,
+  "gate": {
+    "metrics": [ { "metric": "pass_rate", "threshold": 0.1 } ],
+    "level": 0.95
+  },
+  "seed": 7,
+  "resamples": 500,
+  "missing": [
+    { "variant": "a", "runs": 30, "errored": 0, "not_run": 0 },
+    { "variant": "b", "runs": 30, "errored": 1, "not_run": 1 }
+  ],
+  "exit": 3,
+  "metrics": [
+    {
+      "metric": "pass_rate",
+      "in_gate": true,
+      "estimate": -0.03333333333333336,
+      "interval": {
+        "lower": -0.16666666666666666,
+        "upper": 0.08416666666666635
+      },
+      "threshold": 0.1,
+      "threshold_scaled": 0.1,
+      "level": 0.95,
+      "result": { "verdict": "inconclusive", "lean": "worse" }
+    },
+    {
+      "metric": "cost",
+      "in_gate": false,
+      "estimate": 0.08701137698962924,
+      "interval": { "lower": -0.0, "upper": 0.5978370007556202 },
+      "threshold": 0.2,
+      "threshold_scaled": 0.18232155679395465,
+      "level": 0.95,
+      "relative": {
+        "estimate": 0.09090909090909034,
+        "interval": { "lower": -0.0, "upper": 0.8181818181818177 }
+      },
+      "result": { "verdict": "inconclusive", "lean": "worse" }
+    },
+    {
+      "metric": "latency_p50",
+      "in_gate": false,
+      "estimate": 0.3770761048454787,
+      "interval": {
+        "lower": 0.3429447511268302,
+        "upper": 0.40945736774289915
+      },
+      "threshold": 0.25,
+      "threshold_scaled": 0.22314355131420976,
+      "level": 0.95,
+      "relative": {
+        "estimate": 0.45801526717557306,
+        "interval": {
+          "lower": 0.40909090909090884,
+          "upper": 0.50600035897803
+        }
+      },
+      "result": { "verdict": "regression", "lean": null }
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario": "book",
+      "baseline_passes": 8,
+      "baseline_runs": 10,
+      "candidate_passes": 8,
+      "candidate_runs": 8,
+      "difference": 0.19999999999999996,
+      "interval": {
+        "lower": -0.24548723948112722,
+        "upper": 0.574316937497144
+      },
+      "result": { "verdict": "inconclusive", "lean": "better" }
+    },
+    {
+      "scenario": "refund",
+      "baseline_passes": 10,
+      "baseline_runs": 10,
+      "candidate_passes": 7,
+      "candidate_runs": 10,
+      "difference": -0.30000000000000004,
+      "interval": {
+        "lower": -0.6588984422416186,
+        "upper": 0.12210147769460539
+      },
+      "result": { "verdict": "inconclusive", "lean": "worse" }
+    },
+    {
+      "scenario": "search",
+      "baseline_passes": 10,
+      "baseline_runs": 10,
+      "candidate_passes": 10,
+      "candidate_runs": 10,
+      "difference": 0.0,
+      "interval": { "lower": -0.364318132286769, "upper": 0.364318132286769 },
+      "result": { "verdict": "inconclusive", "lean": "none" }
+    }
+  ],
+  "summaries": [
+    {
+      "variant": "a",
+      "cost_usd": { "n": 30, "median": 0.011, "p90": 0.012 },
+      "latency_ms": { "n": 30, "median": 655.0, "p90": 691.0 }
+    },
+    {
+      "variant": "b",
+      "cost_usd": { "n": 28, "median": 0.012, "p90": 0.021300000000000003 },
+      "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 }
+    }
+  ],
+  "behaviours": [
+    {
+      "scenario": "book",
+      "baseline_traced": 10,
+      "baseline_signatures": [
+        { "signature": [ "calendar" ], "count": 8 },
+        { "signature": [ "calendar", "calendar" ], "count": 2 }
+      ],
+      "candidate_traced": 8,
+      "candidate_signatures": [ { "signature": [ "calendar" ], "count": 8 } ],
+      "new_behaviours": [],
+      "baseline_steps": [ { "steps": 1, "runs": 10 } ],
+      "candidate_steps": [ { "steps": 1, "runs": 8 } ]
+    },
+    {
+      "scenario": "refund",
+      "baseline_traced": 10,
+      "baseline_signatures": [
+        { "signature": [ "lookup_order", "refund" ], "count": 10 }
+      ],
+      "candidate_traced": 10,
+      "candidate_signatures": [
+        { "signature": [ "lookup_order", "refund" ], "count": 7 },
+        { "signature": [ "lookup_order", "refund", "notify" ], "count": 3 }
+      ],
+      "new_behaviours": [ [ "lookup_order", "refund", "notify" ] ],
+      "baseline_steps": [ { "steps": 1, "runs": 10 } ],
+      "candidate_steps": [ { "steps": 1, "runs": 10 } ]
+    },
+    {
+      "scenario": "search",
+      "baseline_traced": 10,
+      "baseline_signatures": [ { "signature": [ "search" ], "count": 10 } ],
+      "candidate_traced": 10,
+      "candidate_signatures": [ { "signature": [ "search" ], "count": 10 } ],
+      "new_behaviours": [],
+      "baseline_steps": [ { "steps": 1, "runs": 10 } ],
+      "candidate_steps": [ { "steps": 1, "runs": 10 } ]
+    }
+  ],
+  "failures": [
+    {
+      "index": 5,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 3,
+      "run_id": "run-005",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "cost_usd": 0.01,
+      "latency_ms": 930.0,
+      "tokens": 410,
+      "divergences": [
+        {
+          "description": "request not in the recording",
+          "changes": [
+            { "path": "messages[2].content", "kind": "changed" },
+            { "path": "tools[1]", "kind": "added" }
+          ]
+        }
+      ],
+      "trace": [
+        {
+          "clock": "contract_only",
+          "run_id": "x",
+          "scenario": "s",
+          "seq": 0,
+          "sim_now": "2026-10-13T09:00:00Z",
+          "t_ms": 0,
+          "type": "run_start",
+          "v": 1,
+          "variant": "v"
+        },
+        {
+          "content": "Hello",
+          "seq": 1,
+          "t_ms": 10,
+          "turn": 1,
+          "type": "turn_start",
+          "v": 1
+        },
+        {
+          "duration_ms": 930,
+          "gen_ai.request.model": "gpt-5-nano",
+          "gen_ai.usage.input_tokens": 400,
+          "gen_ai.usage.output_tokens": 10,
+          "protocol": "openai_chat",
+          "seq": 2,
+          "status": 200,
+          "t_ms": 20,
+          "turn": 1,
+          "type": "model_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 0,
+          "mcp": "joined",
+          "name": "lookup_order",
+          "seq": 3,
+          "t_ms": 30,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 1,
+          "mcp": "joined",
+          "name": "refund",
+          "seq": 4,
+          "t_ms": 40,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 2,
+          "mcp": "joined",
+          "name": "notify",
+          "seq": 5,
+          "t_ms": 50,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "content": "Done",
+          "seq": 6,
+          "t_ms": 60,
+          "turn": 1,
+          "type": "reply",
+          "v": 1
+        },
+        { "seq": 7, "t_ms": 70, "type": "done", "v": 1 }
+      ],
+      "messages": [
+        "assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify",
+        "divergence: request not in the recording"
+      ]
+    },
+    {
+      "index": 11,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 6,
+      "run_id": "run-011",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "cost_usd": 0.01,
+      "latency_ms": 960.0,
+      "tokens": 410,
+      "divergences": [],
+      "trace": [
+        {
+          "clock": "contract_only",
+          "run_id": "x",
+          "scenario": "s",
+          "seq": 0,
+          "sim_now": "2026-10-13T09:00:00Z",
+          "t_ms": 0,
+          "type": "run_start",
+          "v": 1,
+          "variant": "v"
+        },
+        {
+          "content": "Hello",
+          "seq": 1,
+          "t_ms": 10,
+          "turn": 1,
+          "type": "turn_start",
+          "v": 1
+        },
+        {
+          "duration_ms": 960,
+          "gen_ai.request.model": "gpt-5-nano",
+          "gen_ai.usage.input_tokens": 400,
+          "gen_ai.usage.output_tokens": 10,
+          "protocol": "openai_chat",
+          "seq": 2,
+          "status": 200,
+          "t_ms": 20,
+          "turn": 1,
+          "type": "model_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 0,
+          "mcp": "joined",
+          "name": "lookup_order",
+          "seq": 3,
+          "t_ms": 30,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 1,
+          "mcp": "joined",
+          "name": "refund",
+          "seq": 4,
+          "t_ms": 40,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 2,
+          "mcp": "joined",
+          "name": "notify",
+          "seq": 5,
+          "t_ms": 50,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "content": "Done",
+          "seq": 6,
+          "t_ms": 60,
+          "turn": 1,
+          "type": "reply",
+          "v": 1
+        },
+        { "seq": 7, "t_ms": 70, "type": "done", "v": 1 }
+      ],
+      "messages": [
+        "assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify"
+      ]
+    },
+    {
+      "index": 17,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 9,
+      "run_id": "run-017",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "cost_usd": 0.01,
+      "latency_ms": 990.0,
+      "tokens": 410,
+      "divergences": [],
+      "trace": [
+        {
+          "clock": "contract_only",
+          "run_id": "x",
+          "scenario": "s",
+          "seq": 0,
+          "sim_now": "2026-10-13T09:00:00Z",
+          "t_ms": 0,
+          "type": "run_start",
+          "v": 1,
+          "variant": "v"
+        },
+        {
+          "content": "Hello",
+          "seq": 1,
+          "t_ms": 10,
+          "turn": 1,
+          "type": "turn_start",
+          "v": 1
+        },
+        {
+          "duration_ms": 990,
+          "gen_ai.request.model": "gpt-5-nano",
+          "gen_ai.usage.input_tokens": 400,
+          "gen_ai.usage.output_tokens": 10,
+          "protocol": "openai_chat",
+          "seq": 2,
+          "status": 200,
+          "t_ms": 20,
+          "turn": 1,
+          "type": "model_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 0,
+          "mcp": "joined",
+          "name": "lookup_order",
+          "seq": 3,
+          "t_ms": 30,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 1,
+          "mcp": "joined",
+          "name": "refund",
+          "seq": 4,
+          "t_ms": 40,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 2,
+          "mcp": "joined",
+          "name": "notify",
+          "seq": 5,
+          "t_ms": 50,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "content": "Done",
+          "seq": 6,
+          "t_ms": 60,
+          "turn": 1,
+          "type": "reply",
+          "v": 1
+        },
+        { "seq": 7, "t_ms": 70, "type": "done", "v": 1 }
+      ],
+      "messages": [
+        "assertions[0] tool_sequence: expected lookup_order then refund, saw an extra notify"
+      ]
+    },
+    {
+      "index": 46,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 4,
+      "run_id": "run-046",
+      "status": "failed",
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "cost_usd": 0.011,
+      "latency_ms": 640.0,
+      "tokens": 210,
+      "divergences": [],
+      "trace": [
+        {
+          "clock": "contract_only",
+          "run_id": "x",
+          "scenario": "s",
+          "seq": 0,
+          "sim_now": "2026-10-13T09:00:00Z",
+          "t_ms": 0,
+          "type": "run_start",
+          "v": 1,
+          "variant": "v"
+        },
+        {
+          "content": "Hello",
+          "seq": 1,
+          "t_ms": 10,
+          "turn": 1,
+          "type": "turn_start",
+          "v": 1
+        },
+        {
+          "duration_ms": 640,
+          "gen_ai.request.model": "gpt-5-nano",
+          "gen_ai.usage.input_tokens": 200,
+          "gen_ai.usage.output_tokens": 10,
+          "protocol": "openai_chat",
+          "seq": 2,
+          "status": 200,
+          "t_ms": 20,
+          "turn": 1,
+          "type": "model_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 0,
+          "mcp": "joined",
+          "name": "calendar",
+          "seq": 3,
+          "t_ms": 30,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 1,
+          "mcp": "joined",
+          "name": "calendar",
+          "seq": 4,
+          "t_ms": 40,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "content": "Done",
+          "seq": 5,
+          "t_ms": 50,
+          "turn": 1,
+          "type": "reply",
+          "v": 1
+        },
+        { "seq": 6, "t_ms": 60, "type": "done", "v": 1 }
+      ],
+      "messages": [ "assertions[1] max_steps: 3 model calls, allowed 2" ]
+    },
+    {
+      "index": 49,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 5,
+      "run_id": "run-049",
+      "status": "errored",
+      "reason": "proxy fault",
+      "cost_usd": null,
+      "latency_ms": null,
+      "tokens": null,
+      "divergences": [],
+      "trace": [],
+      "messages": [ "proxy fault" ]
+    },
+    {
+      "index": 54,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 8,
+      "run_id": "run-054",
+      "status": "failed",
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "cost_usd": 0.012,
+      "latency_ms": 680.0,
+      "tokens": 210,
+      "divergences": [],
+      "trace": [
+        {
+          "clock": "contract_only",
+          "run_id": "x",
+          "scenario": "s",
+          "seq": 0,
+          "sim_now": "2026-10-13T09:00:00Z",
+          "t_ms": 0,
+          "type": "run_start",
+          "v": 1,
+          "variant": "v"
+        },
+        {
+          "content": "Hello",
+          "seq": 1,
+          "t_ms": 10,
+          "turn": 1,
+          "type": "turn_start",
+          "v": 1
+        },
+        {
+          "duration_ms": 680,
+          "gen_ai.request.model": "gpt-5-nano",
+          "gen_ai.usage.input_tokens": 200,
+          "gen_ai.usage.output_tokens": 10,
+          "protocol": "openai_chat",
+          "seq": 2,
+          "status": 200,
+          "t_ms": 20,
+          "turn": 1,
+          "type": "model_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 0,
+          "mcp": "joined",
+          "name": "calendar",
+          "seq": 3,
+          "t_ms": 30,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "arguments": null,
+          "index": 1,
+          "mcp": "joined",
+          "name": "calendar",
+          "seq": 4,
+          "t_ms": 40,
+          "turn": 1,
+          "type": "tool_call",
+          "v": 1
+        },
+        {
+          "content": "Done",
+          "seq": 5,
+          "t_ms": 50,
+          "turn": 1,
+          "type": "reply",
+          "v": 1
+        },
+        { "seq": 6, "t_ms": 60, "type": "done", "v": 1 }
+      ],
+      "messages": [ "assertions[1] max_steps: 3 model calls, allowed 2" ]
+    }
+  ],
+  "order": [
+    {
+      "index": 0,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 1,
+      "run_id": "run-000",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 1,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 1,
+      "run_id": "run-001",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 2,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 2,
+      "run_id": "run-002",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 3,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 2,
+      "run_id": "run-003",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 4,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 3,
+      "run_id": "run-004",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 5,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 3,
+      "run_id": "run-005",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify"
+    },
+    {
+      "index": 6,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 4,
+      "run_id": "run-006",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 7,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 4,
+      "run_id": "run-007",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 8,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 5,
+      "run_id": "run-008",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 9,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 5,
+      "run_id": "run-009",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 10,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 6,
+      "run_id": "run-010",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 11,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 6,
+      "run_id": "run-011",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify"
+    },
+    {
+      "index": 12,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 7,
+      "run_id": "run-012",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 13,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 7,
+      "run_id": "run-013",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 14,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 8,
+      "run_id": "run-014",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 15,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 8,
+      "run_id": "run-015",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 16,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 9,
+      "run_id": "run-016",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 17,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 9,
+      "run_id": "run-017",
+      "status": "failed",
+      "reason": "assertions[0] tool_sequence: extra notify"
+    },
+    {
+      "index": 18,
+      "scenario": "refund",
+      "variant": "a",
+      "repeat": 10,
+      "run_id": "run-018",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 19,
+      "scenario": "refund",
+      "variant": "b",
+      "repeat": 10,
+      "run_id": "run-019",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 20,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 1,
+      "run_id": "run-020",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 21,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 1,
+      "run_id": "run-021",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 22,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 2,
+      "run_id": "run-022",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 23,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 2,
+      "run_id": "run-023",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 24,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 3,
+      "run_id": "run-024",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 25,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 3,
+      "run_id": "run-025",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 26,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 4,
+      "run_id": "run-026",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 27,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 4,
+      "run_id": "run-027",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 28,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 5,
+      "run_id": "run-028",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 29,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 5,
+      "run_id": "run-029",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 30,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 6,
+      "run_id": "run-030",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 31,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 6,
+      "run_id": "run-031",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 32,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 7,
+      "run_id": "run-032",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 33,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 7,
+      "run_id": "run-033",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 34,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 8,
+      "run_id": "run-034",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 35,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 8,
+      "run_id": "run-035",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 36,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 9,
+      "run_id": "run-036",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 37,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 9,
+      "run_id": "run-037",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 38,
+      "scenario": "search",
+      "variant": "a",
+      "repeat": 10,
+      "run_id": "run-038",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 39,
+      "scenario": "search",
+      "variant": "b",
+      "repeat": 10,
+      "run_id": "run-039",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 40,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 1,
+      "run_id": "run-040",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 41,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 1,
+      "run_id": "run-041",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 42,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 2,
+      "run_id": "run-042",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 43,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 2,
+      "run_id": "run-043",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 44,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 3,
+      "run_id": "run-044",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 45,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 3,
+      "run_id": "run-045",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 46,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 4,
+      "run_id": "run-046",
+      "status": "failed",
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2"
+    },
+    {
+      "index": 47,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 4,
+      "run_id": "run-047",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 48,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 5,
+      "run_id": "run-048",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 49,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 5,
+      "run_id": "run-049",
+      "status": "errored",
+      "reason": "proxy fault"
+    },
+    {
+      "index": 50,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 6,
+      "run_id": "run-050",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 51,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 6,
+      "run_id": "run-051",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 52,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 7,
+      "run_id": "run-052",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 53,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 7,
+      "run_id": "run-053",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 54,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 8,
+      "run_id": "run-054",
+      "status": "failed",
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2"
+    },
+    {
+      "index": 55,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 8,
+      "run_id": "run-055",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 56,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 9,
+      "run_id": "run-056",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 57,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 9,
+      "run_id": "run-057",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 58,
+      "scenario": "book",
+      "variant": "a",
+      "repeat": 10,
+      "run_id": "run-058",
+      "status": "passed",
+      "reason": null
+    },
+    {
+      "index": 59,
+      "scenario": "book",
+      "variant": "b",
+      "repeat": 10,
+      "run_id": "run-059",
+      "status": "not_run",
+      "reason": "spend cap reached"
+    }
+  ]
+}
