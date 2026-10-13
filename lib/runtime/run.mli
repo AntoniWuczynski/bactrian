@@ -121,6 +121,10 @@ type config = {
           the {!Bactrian_core.Clock_label} under [clock]. *)
 }
 
+val recording_id : string -> string
+(** The run ID of a recording given as a run ID or as a run directory: the last
+    path component, without a trailing ['/']. *)
+
 val recorded_mcp :
   Store.t -> from:string -> (Mcp_proxy.config list, string) Stdlib.result
 (** The MCP servers a replay of the recording [from] (a run ID or a run
