@@ -75,8 +75,9 @@ val run :
     half-close in each direction, so one failing connection is torn down alone.
     A connection whose socket cannot be reached is closed after one line
     [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}] is written to
-    [log], a descriptor open for append (nothing is written without [log]). An
-    I/O error in the middle of a relayed connection just ends that connection.
+    [log], a descriptor open for writing, the pipe bactrian drains (nothing is
+    written without [log]). An I/O error in the middle of a relayed connection
+    just ends that connection.
 
     The agent inherits stdin, stdout and stderr and the forwarder's environment
     minus {!log_variable}, and runs in its own process group. Descriptor

@@ -92,8 +92,9 @@ let violation_line ~port ~socket ~reason =
          ("reason", `String reason);
        ])
 
-(* One [write] per line on a descriptor opened for append, so lines from
-   concurrent connections do not interleave. *)
+(* One [write] per line, and a line is far shorter than PIPE_BUF, so on the
+   pipe (or a file opened for append, in tests) lines from concurrent
+   connections do not interleave. *)
 let record ~log line =
   Option.iter
     (fun fd ->
