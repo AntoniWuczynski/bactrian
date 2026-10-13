@@ -50,8 +50,9 @@ val key_checks :
 
 val agent_check : path:string option -> cwd:string -> Experiment.agent -> check
 (** A command agent's executable must be found ({!Proc_util.find_executable}).
-    An HTTP agent's URL must be an [http] or [https] URL with a host. Nothing
-    connects. *)
+    An HTTP agent's URL must be an [http] or [https] URL with a host, and is
+    shown without its user information, query and fragment, which can hold
+    credentials. Nothing connects. *)
 
 val loopback_check : unit -> check
 (** Binds 127.0.0.1 on a port the system picks, and closes it. *)

@@ -93,6 +93,10 @@ let test_agent () =
   check_status "http URL" Pass (url "http://127.0.0.1:9/agent");
   check_status "https URL" Pass (url "https://agent.example/run");
   check_status "no host" Fail (url "http:///agent");
+  Alcotest.(check string)
+    "credentials are not shown"
+    "http://h:9/agent is a well-formed URL (not contacted)"
+    (url "http://user:secret@h:9/agent?token=t#f").message;
   check_status "no scheme" Fail (url "127.0.0.1:9/agent");
   check_status "another scheme" Fail (url "ftp://agent.example/run")
 

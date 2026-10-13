@@ -92,6 +92,14 @@ let http_url_problem url =
   | Some scheme, _ -> Some (Printf.sprintf "has the scheme %S, not http" scheme)
   | None, _ -> Some "has no scheme (http:// or https://)"
 
+(* A URL can carry a password or a token, and this output ends up in terminal
+   logs and CI: only the scheme, host, port and path are shown. *)
+let shown url =
+  Uri.to_string
+    (Uri.with_fragment
+       (Uri.with_query (Uri.with_userinfo (Uri.of_string url) None) [])
+       None)
+
 let agent_check ~path ~cwd : Experiment.agent -> check = function
   | Command { argv; _ } -> (
       match argv with
@@ -107,8 +115,10 @@ let agent_check ~path ~cwd : Experiment.agent -> check = function
   | Http { url; _ } -> (
       match http_url_problem url with
       | None ->
-          check "agent" Pass (url ^ " is a well-formed URL (not contacted)")
-      | Some problem -> check "agent" Fail (Printf.sprintf "%s %s" url problem))
+          check "agent" Pass
+            (shown url ^ " is a well-formed URL (not contacted)")
+      | Some problem ->
+          check "agent" Fail (Printf.sprintf "%s %s" (shown url) problem))
 
 (* The loopback *)
 
@@ -212,7 +222,10 @@ let clock_check ~linux ~library_override ~path target =
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
       match label with
-      | Enforced -> check "clock" Pass "enforced (libfaketime is preloaded)"
+      | Enforced ->
+          check "clock" Pass
+            "enforced (libfaketime is preloaded, unless the experiment's \
+             sandbox.deny_read hides it)"
       | Contract_only reason -> contract_only reason)
   | None -> (
       if not linux then contract_only Macos
