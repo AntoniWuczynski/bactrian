@@ -12,6 +12,11 @@
  (description
   "bactrian runs AI agents written in any language as black-box subprocesses, records their model, tool and network traffic, replays it deterministically, and compares agent versions with confidence intervals.")
  (depends
-  (ocaml (>= 5.4))
+  (ocaml (>= 5.5))
   (cmdliner (>= 2.1.1))
-  (alcotest :with-test)))
+  (yojson (>= 3.0.0))
+  (ppx_deriving_yojson (>= 3.10.0))
+  (re (>= 1.14.0))
+  (alcotest :with-test)
+  (qcheck-core :with-test)
+  (qcheck-alcotest :with-test)))

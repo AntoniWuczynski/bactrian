@@ -10,9 +10,14 @@ homepage: "https://github.com/AntoniWuczynski/bactrian"
 bug-reports: "https://github.com/AntoniWuczynski/bactrian/issues"
 depends: [
   "dune" {>= "3.24"}
-  "ocaml" {>= "5.4"}
+  "ocaml" {>= "5.5"}
   "cmdliner" {>= "2.1.1"}
+  "yojson" {>= "3.0.0"}
+  "ppx_deriving_yojson" {>= "3.10.0"}
+  "re" {>= "1.14.0"}
   "alcotest" {with-test}
+  "qcheck-core" {with-test}
+  "qcheck-alcotest" {with-test}
   "odoc" {with-doc}
 ]
 build: [
