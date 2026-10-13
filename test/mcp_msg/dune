@@ -1,0 +1,6 @@
+(test
+ (name test_mcp_msg)
+ (package bactrian)
+ (libraries bactrian.core alcotest qcheck-core qcheck-alcotest)
+ (flags
+  (:standard -w -70)))
