@@ -11,8 +11,8 @@
     [Unix.putenv]. *)
 
 val marker : string
-(** [BACTRIAN_ENV_FD]: names the descriptor the full environment is read from.
-*)
+(** [BACTRIAN_ENV_FD]: [N:NONCE], the descriptor the full environment is read
+    from and a random nonce that the file must start with. *)
 
 val allowed : string -> bool
 (** Whether a variable may stay in the launch environment: [PATH], [HOME],
@@ -33,14 +33,19 @@ val scrub : exe:string -> (unit, string) result
 (** Re-executes [exe] (resolved to an absolute path without symbolic links) with
     the same arguments and a launch environment of the {!kept} entries plus
     {!marker}, unless the launch environment already holds only {!kept} entries
-    or {!restore} ran in this process. Does not return on success. [Error] when
-    the environment cannot be written or the [exec] fails. *)
+    or {!restore} ran in this process. The environment goes to a file created
+    exclusively (mode 0600, a random name under the temporary directory) and
+    unlinked at once, on a descriptor above 2, after a random nonce. Does not
+    return on success. [Error] when the environment cannot be written or the
+    [exec] fails, with the descriptor closed. *)
 
 val restore : unit -> (unit, string) result
-(** When {!marker} names a descriptor, reads the full environment from it,
+(** When {!marker} is set, reads the full environment from the descriptor it
+    names, which must be above 2, a regular file, and start with its nonce,
     closes it, sets every variable with [Unix.putenv] and sets {!marker} to the
-    empty string. [Ok ()] with nothing to do when {!marker} is unset or empty.
-*)
+    empty string. Anything else is [Error], so a stray [BACTRIAN_ENV_FD] is not
+    taken for an environment. [Ok ()] with nothing to do when {!marker} is unset
+    or empty. *)
 
 val close_inherited_on_exec : unit -> unit
 (** Marks every open descriptor above 2 close-on-exec. bactrian's own
