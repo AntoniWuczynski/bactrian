@@ -2,9 +2,8 @@
 
 type request = {
   run : string;
-      (** A run ID under [./.bactrian/runs], or a run directory, resolved as
-          [replay] resolves its recording
-          ({!Bactrian_runtime.Run.recording_id}). *)
+      (** A run ID under [./.bactrian/runs], or that run's directory
+          [.bactrian/runs/<ID>]. Any other directory is a [Usage] error. *)
 }
 
 type t = { run_id : string; divergences : Bactrian_runtime.Divergences.t list }

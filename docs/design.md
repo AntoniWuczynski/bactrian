@@ -317,7 +317,7 @@ Modes:
 
 Streams replay chunk by chunk. `--timing fast` (default) sends them without delay. `--timing recorded` reproduces the original pacing. Latency figures from a replay always come from recorded timing and are labelled as such.
 
-Each run's divergences are kept in its `divergences.json`, in the form `replay --json` reports them, and the MCP server's `divergences` tool reads them back for one run, named by ID or directory as `replay` names its recording.
+Each run's divergences are kept in its `divergences.json`, in the form `replay --json` reports them, and the MCP server's `divergences` tool reads them back for one run, named by its ID or by its directory `.bactrian/runs/<ID>` (another directory is refused).
 
 Replay tests the agent's own code, never model variance. `compare` therefore computes statistics over live runs only, and replay reports show divergences, not pass rates.
 

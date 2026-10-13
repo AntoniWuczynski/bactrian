@@ -602,7 +602,12 @@ let test_same_as_commands () =
        { run_id = "r1"; divergences = [ divergence ] })
     (call "divergences" (Some {|{"run":".bactrian/runs/r1/"}|}));
   check_refused "no such run" {|no run "r2"|}
-    (call "divergences" (Some {|{"run":"r2"}|}))
+    (call "divergences" (Some {|{"run":"r2"}|}));
+  Sys.mkdir "elsewhere" 0o755;
+  Sys.mkdir "elsewhere/r1" 0o755;
+  check_refused "a directory that is not the run's"
+    {|"elsewhere/r1" is not a run directory under .bactrian/runs|}
+    (call "divergences" (Some {|{"run":"elsewhere/r1"}|}))
 
 (* A plan that takes minutes runs off the event loop: the server answers
    other requests meanwhile, a cancellation stops it, and the end of input

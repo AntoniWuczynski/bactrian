@@ -705,7 +705,7 @@ let divergences =
        `bactrian replay --json` reports them."
     [
       prop ~required:true "run" String
-        "Run ID under .bactrian/runs, or a run directory.";
+        "Run ID under .bactrian/runs, or its directory .bactrian/runs/<ID>.";
     ]
     divergences_args_of_yojson
     (fun context (a : divergences_args) ->
