@@ -1,0 +1,18 @@
+(test
+ (name test_executor)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  fake_upstream
+  weather_agent
+  eio_main
+  mirage-crypto-rng.unix
+  re
+  uri
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))
