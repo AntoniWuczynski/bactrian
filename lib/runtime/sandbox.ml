@@ -112,7 +112,7 @@ let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
     home = host.home;
     project_root = host.project_root;
     bactrian_dir = host.bactrian_dir;
-    state_dir = resolved state_dir;
+    state_dir = Option.map resolved state_dir;
     temp_dir = resolved temp_dir;
     allow_write = host.allow_write;
     deny_read = host.deny_read;
@@ -303,7 +303,7 @@ let probe ~env (host : host) =
         Ok (Some path)
   in
   let* argv =
-    command host ~state_dir ~temp_dir
+    command host ~state_dir:(Some state_dir) ~temp_dir
       ~listeners:[ { port; socket } ]
       ~tag:(Sandbox_log.tag ("probe-" ^ id))
       ~preload:None
@@ -390,7 +390,7 @@ let preflight ~env ~warn settings =
           match mode with
           | `Auto ->
               warn
-                ("sandbox: auto: runs are unsandboxed, because the sandbox is \
+                ("sandbox: auto: running unsandboxed, because the sandbox is \
                   unavailable: " ^ cause);
               Ok
                 (Unsandboxed
@@ -532,7 +532,7 @@ let start ~sw t run agent =
       | Seatbelt ->
           let since = Unix.gettimeofday () in
           let* argv =
-            command host ~state_dir:run.state_dir ~temp_dir:run.temp_dir
+            command host ~state_dir:(Some run.state_dir) ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = None } ]
               ~tag ~preload:run.preload agent
           in
@@ -544,7 +544,7 @@ let start ~sw t run agent =
           let* () = run.listen_unix socket in
           let path = Filename.concat run.run_dir "sandbox.log" in
           let* argv =
-            command host ~state_dir:run.state_dir ~temp_dir:run.temp_dir
+            command host ~state_dir:(Some run.state_dir) ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = Some socket } ]
               ~tag ~preload:run.preload agent
           in
@@ -576,6 +576,18 @@ let start ~sw t run agent =
               },
               Relay_log
                 { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } ))
+
+(* A checker reaches nothing (no listener), writes only to its temporary
+   directory ([allow_write] does not apply) and reads nothing of any run. *)
+let checker t ~temp_dir argv =
+  match t with
+  | Unsandboxed _ -> Ok argv
+  | Sandboxed { host; mode = _ } ->
+      command
+        { host with allow_write = [] }
+        ~state_dir:None ~temp_dir ~listeners:[]
+        ~tag:(Sandbox_log.tag "checker")
+        ~preload:None argv
 
 let strips_preload = function
   | Sandboxed { host = { engine = Bubblewrap path; _ }; _ } -> (
@@ -626,7 +638,7 @@ let preload_hidden t library =
   | Sandboxed { host = { engine = Bubblewrap _; _ } as host; _ } ->
       let dir = host.bactrian_dir in
       let input =
-        input_of host ~state_dir:dir ~temp_dir:dir ~listeners:[] ~tag:""
+        input_of host ~state_dir:(Some dir) ~temp_dir:dir ~listeners:[] ~tag:""
           ~preload:None [ "agent" ]
       in
       List.exists

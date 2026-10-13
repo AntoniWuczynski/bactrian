@@ -79,12 +79,12 @@ for line in sys.stdin:
         sys.stdout.flush()
 |}
 
-(* Says it is ready, waits to be told to go, then passes. *)
+(* Waits to be told to go, then passes. It runs in the sandbox, which lets it
+   write nowhere the test could see, so the test finds it by its marker. *)
 let checker_script =
   {|
 import os, sys, time
-open(sys.argv[2], "w").close()
-while not os.path.exists(sys.argv[3]):
+while not os.path.exists(sys.argv[2]):
     time.sleep(0.1)
 sys.stdin.read()
 print('{"pass": true}')
@@ -398,8 +398,8 @@ let test_children () =
     Store.create ~root:Eio.Path.(Eio.Stdenv.fs env / dir / ".bactrian")
   in
   let go = Filename.concat dir "go"
-  and checker_ready = Filename.concat dir "checker-ready"
   and checker_go = Filename.concat dir "checker-go" in
+  let sandbox = sandbox ~env ~dir in
   let mcp : Mcp_proxy.config list =
     [
       {
@@ -418,18 +418,10 @@ let test_children () =
     {
       assertions = [];
       checkers =
-        [
-          [
-            "python3";
-            "-c";
-            checker_script;
-            checker_marker;
-            checker_ready;
-            checker_go;
-          ];
-        ];
+        [ [ "python3"; "-c"; checker_script; checker_marker; checker_go ] ];
       checks_cwd = dir;
       checker_timeout = 60.;
+      checker_sandbox = sandbox;
     }
   in
   let me = Unix.getpid () in
@@ -462,7 +454,16 @@ let test_children () =
     wait_for ~clock
       ~deadline:(Eio.Time.now clock +. 60.)
       "checker"
-      (fun () -> if Sys.file_exists checker_ready then Some () else None);
+      (fun () ->
+        if
+          List.exists
+            (fun p ->
+              has checker_marker p
+              && (not (forwarder p))
+              && not (has "bwrap" p || has "sandbox-exec" p))
+            (descendants (processes mgr) me)
+        then Some ()
+        else None);
     let tree = descendants (processes mgr) me in
     check_all mgr
       ~roles:
@@ -480,7 +481,7 @@ let test_children () =
       result :=
         Some
           (execute ~env ~proxy ~store ~dir
-             (config ~sandbox:(sandbox ~env ~dir) ~go ~mcp ~checks ())))
+             (config ~sandbox ~go ~mcp ~checks ())))
     observe;
   match !result with
   | Some r -> Alcotest.(check string) "the run" "passed" (outcome r)

@@ -32,6 +32,7 @@ type checks = {
   checkers : string list list;
   checks_cwd : string;
   checker_timeout : float;
+  checker_sandbox : Sandbox.t;
 }
 
 type agent =
@@ -809,7 +810,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           let items =
             Checks.evaluate ~stderr_dir:run_dir
               ~process_mgr:(Eio.Stdenv.process_mgr env)
-              ~table:config.pricing ~clock ~timeout:c.checker_timeout
+              ~table:config.pricing ~clock ~fs:(Eio.Stdenv.fs env)
+              ~sandbox:c.checker_sandbox ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
               ~date:(String.sub (rfc3339 now) 0 10)
               ~assertions:c.assertions ~checkers:c.checkers entries
@@ -826,7 +828,12 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                 | [], problems -> Failed (String.concat "; " problems))
             | Failed _ | Diverged | Errored _ | Not_run _ -> outcome
           in
-          (outcome, Some items)
+          let checker_sandbox =
+            match c.checkers with
+            | [] -> None
+            | _ :: _ -> Some (Sandbox.label c.checker_sandbox)
+          in
+          (outcome, Some (items, checker_sandbox))
       | (Errored _ | Not_run _), (Some _ | None) | _, None -> (outcome, None)
     in
     match
@@ -838,10 +845,12 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               (List.map Divergences.of_matcher findings.divergences))
         ^ "\n");
       Option.iter
-        (fun items ->
+        (fun (items, checker_sandbox) ->
           Store.write_atomic
             Eio.Path.(run_dir / "verdicts.json")
-            (Yojson.Safe.pretty_to_string (Checks.to_json items) ^ "\n"))
+            (Yojson.Safe.pretty_to_string
+               (Checks.to_json ?checker_sandbox items)
+            ^ "\n"))
         verdicts;
       Store.write_atomic
         Eio.Path.(run_dir / "meta.json")

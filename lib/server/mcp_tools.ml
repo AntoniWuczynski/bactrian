@@ -662,7 +662,9 @@ let check =
       let* reports =
         Check_command.run ~files:(files context)
           ~vet:(Policy.scenario context.policy)
-          ~env:context.env { scenarios }
+          ~on_progress:context.on_progress ~bactrian_exe:context.bactrian_exe
+          ~env:context.env
+          { scenarios; sandbox = `Auto }
       in
       of_json (Check_command.to_json reports))
 

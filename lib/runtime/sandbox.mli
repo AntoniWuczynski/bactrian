@@ -1,8 +1,9 @@
-(** The agent's operating-system sandbox at run time (design §5.3).
-    {!Bactrian_core.Sandbox_policy} writes the Seatbelt profile or the
+(** The operating-system sandbox of agents and checkers at run time (design
+    §5.3). {!Bactrian_core.Sandbox_policy} writes the Seatbelt profile or the
     bubblewrap command line. This module checks once that the sandbox works on
-    this host ({!preflight}), wraps each agent's command in it ({!start}), and
-    collects what it denied ({!collect}).
+    this host ({!preflight}), wraps each agent's command in it ({!start}) and
+    each checker's ({!checker}), and collects what it denied the agent
+    ({!collect}).
 
     Every path given to the policy has its symbolic links resolved first,
     because Seatbelt matches resolved paths ([/tmp] is [/private/tmp] on macOS).
@@ -165,6 +166,16 @@ val start :
     is [agent] unchanged. On Linux it also makes the run's Unix socket in a new
     directory under the system's temporary directory (short enough for the
     socket path limit), removed when [sw] ends. *)
+
+val checker :
+  t -> temp_dir:string -> string list -> (string list, string) result
+(** [checker t ~temp_dir argv] is a checker's command wrapped in the sandbox of
+    [t] (design §5.3): no network at all, not even loopback, writes only to
+    [temp_dir], and reads denied as for the agent, except that nothing under
+    [.bactrian/runs] is readable and [sandbox.allow_write] does not apply. On
+    Linux it runs under [bactrian __sandbox-init] with nothing to forward.
+    Unsandboxed, [argv] unchanged. What the sandbox denies a checker is not
+    collected. *)
 
 val preload_hidden : t -> string -> bool
 (** [preload_hidden t library] is whether the library, a resolved absolute path,

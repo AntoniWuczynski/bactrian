@@ -45,8 +45,8 @@ let kind : Assertion.t -> string = function
   | Max_latency_ms _ -> "max_latency"
   | No_egress _ -> "no_egress"
 
-let evaluate ?table ?stderr_dir ~process_mgr ~clock ~timeout ~cwd ~date
-    ~assertions ~checkers entries =
+let evaluate ?table ?stderr_dir ~process_mgr ~clock ~fs ~sandbox ~timeout ~cwd
+    ~date ~assertions ~checkers entries =
   let assertion i a =
     let verdict =
       match
@@ -60,7 +60,8 @@ let evaluate ?table ?stderr_dir ~process_mgr ~clock ~timeout ~cwd ~date
   in
   let checker i argv =
     let result, stderr =
-      Checker_runner.run ~process_mgr ~clock ~timeout ~argv ~cwd entries
+      Checker_runner.run ~process_mgr ~clock ~fs ~sandbox ~timeout ~argv ~cwd
+        entries
     in
     let saved =
       match stderr_dir with
@@ -117,9 +118,12 @@ let item_json { name; verdict } =
   in
   `Assoc ([ ("name", `String name); ("verdict", `String label) ] @ reason)
 
-let to_json items =
+let to_json ?checker_sandbox items =
   `Assoc
-    [
-      ("passed", `Bool (List.is_empty (problems items)));
-      ("items", `List (List.map item_json items));
-    ]
+    ([
+       ("passed", `Bool (List.is_empty (problems items)));
+       ("items", `List (List.map item_json items));
+     ]
+    @ Option.fold ~none:[]
+        ~some:(fun l -> [ ("checker_sandbox", Sandbox.label_json l) ])
+        checker_sandbox)

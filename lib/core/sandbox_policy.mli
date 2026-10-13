@@ -1,7 +1,7 @@
-(** What an agent's operating-system sandbox allows, as a macOS Seatbelt profile
-    or a Linux bubblewrap command line (design §5.3). Pure: nothing here touches
-    the file system, the network or a process. The caller starts the command
-    this module returns.
+(** What an agent's or a checker's operating-system sandbox allows, as a macOS
+    Seatbelt profile or a Linux bubblewrap command line (design §5.3). Pure:
+    nothing here touches the file system, the network or a process. The caller
+    starts the command this module returns.
 
     Every path in a Seatbelt profile reaches [sandbox-exec] as a [-D NAME=VALUE]
     parameter and is named in the profile only as [(param "NAME")], so a path
@@ -26,13 +26,18 @@ type input = {
   home : string;
   project_root : string;
   bactrian_dir : string;  (** The [.bactrian] directory. *)
-  state_dir : string;  (** The run's state directory. Writable. *)
-  temp_dir : string;  (** The run's temporary directory. Writable. *)
+  state_dir : string option;
+      (** The run's state directory. Writable. [None] for a checker, which has
+          no run state: then nothing under [.bactrian/runs] is readable, not
+          even [temp_dir]. *)
+  temp_dir : string;
+      (** The run's or the checker's temporary directory. Writable. *)
   allow_write : string list;
       (** More writable paths ([sandbox.allow_write]). *)
   deny_read : string list;  (** More unreadable paths ([sandbox.deny_read]). *)
   listeners : listener list;  (** Distinct ports. *)
-  agent : string list;  (** The agent's command and arguments. Non-empty. *)
+  agent : string list;
+      (** The agent's or the checker's command and arguments. Non-empty. *)
   bactrian_exe : string;
       (** Absolute path of the bactrian executable, which Linux re-executes as
           [__sandbox-init] inside the sandbox. Unused on macOS. *)
@@ -64,7 +69,7 @@ val deny_list : ?resolve:(string -> string) -> input -> string list
 (** The paths the agent may not read, in the order they are applied: the default
     list of design §5.3 expanded against [home], [project_root] and
     [bactrian_dir] (credential directories and files under [home], the project's
-    [.env] files, [.bactrian/ca] and [.bactrian/runs]), then [deny_read]. The
+    [.env] files, [.bactrian/ca] and [.bactrian/runs]), then [deny_read]. A
     run's own state and temporary directories stay readable even when they sit
     under [.bactrian/runs], except for paths in [deny_read].
 
@@ -125,4 +130,8 @@ val generate :
     path that [exists] reports [`Absent] is left out, since there is nothing to
     hide, and so is an [allow_write] path that is [`Absent], which leaves it
     read-only. [state_dir], [temp_dir] and the sockets must exist when the
-    command runs. *)
+    command runs.
+
+    A checker's input has no [state_dir], no [listeners] and no [allow_write],
+    so on both platforms it has no network at all, not even loopback, and can
+    write only to [temp_dir]. *)

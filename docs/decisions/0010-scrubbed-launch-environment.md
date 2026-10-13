@@ -10,14 +10,14 @@ That call reads the strings area set up at `exec`, not the live `environ`. A pro
 
 ## Decision
 
-`record`, `replay` and `run`, the commands that start agents, MCP servers and checkers, begin by re-executing bactrian when the launch environment holds any variable outside an allowlist: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ` and `TMPDIR`.
+`record`, `replay`, `run` and `check`, the commands that start agents, MCP servers and checkers, begin by re-executing bactrian when the launch environment holds any variable outside an allowlist: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ` and `TMPDIR`.
 
 - bactrian creates a new temporary file under a random name in `TMPDIR` (mode 0600, `O_EXCL`), unlinks it, writes a random nonce and then the full environment into it as NUL-terminated entries and rewinds it. The descriptor stays open across `exec`, and is moved above 2 if bactrian was started with standard input, output or error closed.
 - It then calls `execve` on its own executable, resolved the way the sandbox resolves it (absolute, symbolic links followed), with the same arguments and an environment of the allowlisted variables plus `BACTRIAN_ENV_FD=<descriptor>:<nonce>`. The process is replaced, not spawned, so its process ID, parent, process group, signals and exit status are unchanged.
 - The new image, before parsing its arguments, reads the environment from the descriptor, closes it, sets each variable with `Unix.putenv` and sets `BACTRIAN_ENV_FD` to the empty string. It never re-executes again, so there is no loop. It reads only a regular file above descriptor 2 that starts with the nonce, so a `BACTRIAN_ENV_FD` left in a user's environment can neither block the start on a terminal or pipe nor be taken for an environment. Any other marker is an error with exit 70, as is a failure to write the file or to `exec`.
 - Every platform does this, because `/proc/PID/environ` on Linux is the launch environment too.
 
-Other commands (`compare`, `report`, `plan`, `check`, `mcp-shim`, `__sandbox-init`, `__sandbox-probe`) start no agent and are not re-executed. `check` runs checkers, which get an explicit environment (below).
+Other commands (`compare`, `report`, `plan`, `mcp-shim`, `__sandbox-init`, `__sandbox-probe`) start no agent and are not re-executed. `check` joined the first list when checkers moved into the sandbox, where on macOS they can read bactrian's launch environment as an agent can (decision 0013).
 
 Why a temporary file and not a pipe: the reader is the image that `exec` starts, so the writer is the same process before its `exec`. A pipe holds 16 KiB by default on macOS and 64 KiB on Linux, and a larger environment would block the write forever. A helper process that writes the pipe would be a fork of bactrian that carries the original strings area, keys included, for as long as it lives, and would need reaping. `memfd_create` exists only on Linux and needs a C stub. The file is unlinked before a byte is written, so no path ever leads to its contents. Its data blocks are freed when the descriptor closes, which happens before any child is started.
 
@@ -28,7 +28,7 @@ The restore puts the keys back into bactrian's live environment, so a child that
 | Agent, and the `sandbox-exec` or `bwrap` that wraps it | built explicitly: `PATH`, `LANG`, `TERM`, `--env` names, the variant's variables, bactrian's own variables with placeholder keys, `HOME` and `TMPDIR` in the run, and the clock's preload variables |
 | Linux forwarder (`bactrian __sandbox-init`) | the agent's, from `bwrap`. It drops its log variable before starting the agent |
 | MCP stdio server | `PATH`, `HOME`, `LANG` and the server's own `env` from the experiment |
-| Checker | `PATH`, `HOME`, `LANG`, `TZ` and `BACTRIAN_RUN_ID` |
+| Checker | `PATH`, `LANG`, `TZ`, `BACTRIAN_RUN_ID`, and `HOME` and `TMPDIR` in a temporary directory of its own |
 | Sandbox probe (`bactrian __sandbox-probe`) | `PATH`, and `HOME` and `TMPDIR` in the probe's directory |
 | `bwrap --version`, the end-marker `sandbox-exec` and `touch`, `log show` | `PATH` only |
 

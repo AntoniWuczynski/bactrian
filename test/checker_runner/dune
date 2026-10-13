@@ -1,6 +1,18 @@
 (test
  (name test_checker_runner)
  (package bactrian)
- (libraries bactrian.core bactrian.runtime eio_main unix alcotest)
+ (deps %{bin:bactrian})
+ (action
+  (setenv
+   BACTRIAN_BIN
+   %{bin:bactrian}
+   (run %{test})))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  eio_main
+  mirage-crypto-rng.unix
+  unix
+  alcotest)
  (flags
   (:standard -w -70)))

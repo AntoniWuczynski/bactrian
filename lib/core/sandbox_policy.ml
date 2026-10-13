@@ -6,7 +6,7 @@ type input = {
   home : string;
   project_root : string;
   bactrian_dir : string;
-  state_dir : string;
+  state_dir : string option;
   temp_dir : string;
   allow_write : string list;
   deny_read : string list;
@@ -96,9 +96,9 @@ let validate i =
          ("home", i.home);
          ("project_root", i.project_root);
          ("bactrian_dir", i.bactrian_dir);
-         ("state_dir", i.state_dir);
          ("temp_dir", i.temp_dir);
        ]
+      @ labelled "state_dir" (Option.to_list i.state_dir)
       @ labelled "allow_write" i.allow_write
       @ labelled "deny_read" i.deny_read)
   in
@@ -193,20 +193,30 @@ let seatbelt_of ~resolve i =
   let sockets =
     numbered "SOCKET" (List.filter_map (fun l -> l.socket) i.listeners)
   in
-  let own = [ subpath "STATE"; subpath "TEMP" ] in
+  let own_dirs =
+    Option.fold ~none:[] ~some:(fun d -> [ ("STATE", d) ]) i.state_dir
+    @ [ ("TEMP", i.temp_dir) ]
+  in
+  let own = List.map (fun (name, _) -> subpath name) own_dirs in
   (* Every denial is logged with the run's tag, which is how the run's
      violations are found in the system log (design §5.3). *)
   let tagged = Printf.sprintf "(with message %s)" (param "TAG") in
   let deny_rules =
     List.concat_map
       (fun (name, d) ->
+        (* A checker has no run state, so nothing under the mask over every
+           run is readable again. *)
+        let readable_again =
+          match (d.keep_own_run, i.state_dir) with
+          | true, Some _ ->
+              [
+                Printf.sprintf "(allow file-read-data %s)"
+                  (String.concat " " own);
+              ]
+          | true, None | false, (Some _ | None) -> []
+        in
         Printf.sprintf "(deny file-read-data %s %s)" (subpath name) tagged
-        ::
-        (if d.keep_own_run then
-           [
-             Printf.sprintf "(allow file-read-data %s)" (String.concat " " own);
-           ]
-         else []))
+        :: readable_again)
       deny
   in
   let write_paths =
@@ -256,7 +266,7 @@ let seatbelt_of ~resolve i =
     ^ "\n"
   in
   let params =
-    [ ("TAG", i.tag); ("STATE", i.state_dir); ("TEMP", i.temp_dir) ]
+    (("TAG", i.tag) :: own_dirs)
     @ List.map (fun (n, d) -> (n, d.path)) deny
     @ writes
     @ List.map (fun (n, p) -> (n, string_of_int p)) ports
@@ -288,12 +298,15 @@ let is_under ~dir path =
 let mount_path = function Rw p | Ro p -> p
 
 let bwrap_of ~exists ~resolve i =
+  let own_dirs =
+    List.map (fun p -> Rw p) (Option.to_list i.state_dir @ [ i.temp_dir ])
+  in
   let writable =
-    Rw i.state_dir :: Rw i.temp_dir
-    :: List.filter_map
-         (fun p ->
-           match exists p with `Dir | `File -> Some (Rw p) | `Absent -> None)
-         i.allow_write
+    own_dirs
+    @ List.filter_map
+        (fun p ->
+          match exists p with `Dir | `File -> Some (Rw p) | `Absent -> None)
+        i.allow_write
   in
   let sockets =
     List.filter_map (fun l -> Option.map (fun s -> Ro s) l.socket) i.listeners
@@ -301,8 +314,10 @@ let bwrap_of ~exists ~resolve i =
   let binds = writable @ sockets in
   (* Only the run's own directories and bactrian's sockets come back under the
      mask that hides every run: an [allow_write] path inside another run stays
-     hidden. *)
-  let own = Rw i.state_dir :: Rw i.temp_dir :: sockets in
+     hidden. A checker has no run state, so nothing of a run comes back. *)
+  let own =
+    (match i.state_dir with Some _ -> own_dirs | None -> []) @ sockets
+  in
   let mask d =
     let rebinds () =
       if d.keep_own_run then

@@ -9,7 +9,7 @@ let base : P.input =
     home = "/home/u";
     project_root = "/work/proj";
     bactrian_dir = "/work/proj/.bactrian";
-    state_dir = run_dir ^ "/state";
+    state_dir = Some (run_dir ^ "/state");
     temp_dir = run_dir ^ "/tmp";
     allow_write = [ "/work/proj/out" ];
     deny_read = [ "/work/proj/private" ];
@@ -276,6 +276,49 @@ let test_no_listeners () =
   let s = seatbelt { base with listeners = [] } in
   Alcotest.(check bool) "no network rule" false (contains s.profile "network")
 
+(* A checker: no run state, no listener, no extra writable path. *)
+let checker (i : P.input) : P.input =
+  {
+    i with
+    state_dir = None;
+    temp_dir = "/tmp/ck";
+    listeners = [];
+    allow_write = [];
+    agent = [ "python3"; "check.py" ];
+  }
+
+let test_checker_profile () =
+  let s = seatbelt (checker base) in
+  let has = contains s.profile in
+  Alcotest.(check bool) "no network rule" false (has "network");
+  Alcotest.(check bool)
+    "nothing readable again under the runs" false
+    (has "(allow file-read-data");
+  Alcotest.(check bool)
+    "writes to the temporary directory alone" true
+    (has
+       "(allow file-write* (subpath (param \"TEMP\")) (literal \"/dev/null\") \
+        (literal \"/dev/dtracehelper\"))");
+  Alcotest.(check (option string))
+    "no state parameter" None
+    (List.assoc_opt "STATE" s.params)
+
+let test_checker_bwrap () =
+  let argv = bwrap ~exists:fixture_exists (checker linux) in
+  let rec binds = function
+    | "--bind" :: a :: b :: tl -> (a, b) :: binds tl
+    | "--" :: _ | [] -> []
+    | _ :: tl -> binds tl
+  in
+  Alcotest.(check (list (pair string string)))
+    "the temporary directory is the only writable bind"
+    [ ("/tmp/ck", "/tmp/ck") ]
+    (binds argv);
+  Alcotest.(check (list string))
+    "the forwarder relays nothing"
+    [ "--"; "/opt/bin/bactrian"; "__sandbox-init"; "--"; "python3"; "check.py" ]
+    (List.filteri (fun n _ -> n >= List.length argv - 6) argv)
+
 let error_of i =
   match P.generate ~exists:(fun _ -> `Absent) i with
   | Ok _ -> None
@@ -299,7 +342,7 @@ let test_errors () =
     { base with home = "u" };
   check_error "empty state"
     (Not_absolute { what = "state_dir"; path = "" })
-    { base with state_dir = "" };
+    { base with state_dir = Some "" };
   check_error "relative deny"
     (Not_absolute { what = "deny_read"; path = "../x" })
     { base with deny_read = [ "../x" ] };
@@ -401,10 +444,12 @@ let gen_input platform : P.input QCheck.Gen.t =
   let* project_root = gen_path in
   let* bactrian_dir = gen_path in
   let* under_runs = bool in
+  let* checker = bool in
   let* state_suffix = gen_path in
   let state_dir =
-    if under_runs then bactrian_dir ^ "/runs/r" ^ state_suffix
-    else "/zz9s" ^ state_suffix
+    if checker then None
+    else if under_runs then Some (bactrian_dir ^ "/runs/r" ^ state_suffix)
+    else Some ("/zz9s" ^ state_suffix)
   in
   let* temp_dir = gen_path in
   let* allow_write = list_size (int_range 0 3) gen_path in
@@ -434,9 +479,10 @@ let gen_input platform : P.input QCheck.Gen.t =
 
 let print_input (i : P.input) =
   let list l = String.concat ";" (List.map (Printf.sprintf "%S") l) in
-  Printf.sprintf "home=%S root=%S bdir=%S state=%S tmp=%S aw=[%s] dr=[%s]"
-    i.home i.project_root i.bactrian_dir i.state_dir i.temp_dir
-    (list i.allow_write) (list i.deny_read)
+  Printf.sprintf "home=%S root=%S bdir=%S state=[%s] tmp=%S aw=[%s] dr=[%s]"
+    i.home i.project_root i.bactrian_dir
+    (list (Option.to_list i.state_dir))
+    i.temp_dir (list i.allow_write) (list i.deny_read)
 
 let arb platform = QCheck.make ~print:print_input (gen_input platform)
 
@@ -446,7 +492,7 @@ let map_paths f (i : P.input) : P.input =
     home = f i.home;
     project_root = f i.project_root;
     bactrian_dir = f i.bactrian_dir;
-    state_dir = f i.state_dir;
+    state_dir = Option.map f i.state_dir;
     temp_dir = f i.temp_dir;
     allow_write = List.map f i.allow_write;
     deny_read = List.map f i.deny_read;
@@ -464,7 +510,9 @@ let prop_no_path_in_profile =
     ~count:500 (arb Macos) (fun i ->
       let s = seatbelt i in
       let given =
-        [ i.state_dir; i.temp_dir ] @ i.allow_write @ P.deny_list i @ sockets i
+        Option.to_list i.state_dir
+        @ (i.temp_dir :: i.allow_write)
+        @ P.deny_list i @ sockets i
       in
       List.for_all
         (fun p -> not (contains s.profile p))
@@ -525,8 +573,9 @@ let prop_mount_order =
       let ops = parse_ops (bwrap ~exists:exists_by_hash i) in
       let base_end = first ops (Tmpfs "/run") in
       let writable =
-        i.state_dir :: i.temp_dir
-        :: List.filter (fun p -> exists_by_hash p <> `Absent) i.allow_write
+        Option.to_list i.state_dir
+        @ i.temp_dir
+          :: List.filter (fun p -> exists_by_hash p <> `Absent) i.allow_write
       in
       let last_writable =
         List.fold_left
@@ -561,7 +610,24 @@ let prop_own_dirs_survive_runs_mask =
         (fun p ->
           (not (String.starts_with ~prefix:(runs ^ "/") p))
           || last ops (Bind (p, p)) >? mask)
-        [ i.state_dir; i.temp_dir ])
+        (Option.to_list i.state_dir @ [ i.temp_dir ]))
+
+(* A checker has no run: nothing is bound under the mask over the runs. *)
+let prop_checker_sees_no_run =
+  QCheck.Test.make ~name:"bwrap: a checker gets nothing back under the runs"
+    ~count:500 (arb Linux) (fun i ->
+      let i = { i with state_dir = None; listeners = [] } in
+      let runs = Filename.concat i.bactrian_dir "runs" in
+      let ops = parse_ops (bwrap ~exists:(fun _ -> `Dir) i) in
+      let mask = first ops (Tmpfs runs) in
+      List.for_all
+        (fun (n, op) ->
+          match op with
+          | (Bind (_, p) | Ro_bind (_, p))
+            when String.starts_with ~prefix:(runs ^ "/") p ->
+              not (Some n >? mask)
+          | Bind _ | Ro_bind _ | Tmpfs _ | Remount _ -> true)
+        (List.mapi (fun n op -> (n, op)) ops))
 
 (* A tmpfs is writable: every directory mask is remounted read-only after the
    last mount inside it. *)
@@ -605,6 +671,8 @@ let () =
           Alcotest.test_case "deny_read wins inside the state dir" `Quick
             test_deny_read_wins_in_state;
           Alcotest.test_case "no listeners, no network" `Quick test_no_listeners;
+          Alcotest.test_case "a checker's profile" `Quick test_checker_profile;
+          Alcotest.test_case "a checker's bwrap" `Quick test_checker_bwrap;
           Alcotest.test_case "errors" `Quick test_errors;
           Alcotest.test_case "trailing slash" `Quick test_trailing_slash_runs;
         ] );
@@ -617,6 +685,7 @@ let () =
             prop_argv_carries_params;
             prop_mount_order;
             prop_own_dirs_survive_runs_mask;
+            prop_checker_sees_no_run;
             prop_masks_read_only;
           ] );
     ]

@@ -45,20 +45,23 @@ let experiment_command ~json ~experiment ~resume ~sandbox =
            Output.render_summary_text ~colour:(Lazy.force Output.colour) result);
       Run_command.exit_code result
 
-let check_command json scenarios =
+(* Checkers run in the sandbox, where on macOS they can read bactrian's launch
+   environment, so [check] drops secrets from it as the agent commands do. *)
+let check_command json scenarios sandbox =
+  scrubbed ~json @@ fun () ->
   Eio_main.run @@ fun env ->
-  match Check_command.run ~env { scenarios } with
+  match
+    Check_command.run ~on_progress:Cli.print_progress ~bactrian_exe ~env
+      { scenarios; sandbox }
+  with
   | Error e -> Cli.fail_with ~json e
-  | Ok reports ->
+  | Ok checked ->
       if json then
-        print_endline (Yojson.Safe.to_string (Check_command.to_json reports))
+        print_endline (Yojson.Safe.to_string (Check_command.to_json checked))
       else
-        List.iter
-          (fun r ->
-            print_string
-              (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
-          reports;
-      Check_command.exit_code reports
+        print_string
+          (Output.render_check_text ~colour:(Lazy.force Output.colour) checked);
+      Check_command.exit_code checked
 
 (* Arguments *)
 
@@ -119,24 +122,31 @@ let total_timeout =
     & info [ "total-timeout" ] ~docv:"SECONDS"
         ~doc:"Longest the whole run may take.")
 
-let sandbox_doc =
-  "Run the agent inside the operating-system sandbox: $(b,auto) when the host \
-   supports it (otherwise unsandboxed, with a warning and a label), \
-   $(b,strict) to stop with exit status 69 when it does not, $(b,off) to skip \
-   it."
+let sandbox_doc what =
+  Printf.sprintf
+    "Run %s inside the operating-system sandbox: $(b,auto) when the host \
+     supports it (otherwise unsandboxed, with a warning and a label), \
+     $(b,strict) to stop with exit status 69 when it does not, $(b,off) to \
+     skip it."
+    what
 
-let sandbox_mode =
+let sandbox_mode_for what =
   Arg.(
     value
     & opt (enum Sandbox.modes) Single_run.defaults.sandbox
-    & info [ "sandbox" ] ~docv:"MODE" ~doc:(sandbox_doc ^ " Default $(b,auto)."))
+    & info [ "sandbox" ] ~docv:"MODE"
+        ~doc:(sandbox_doc what ^ " Default $(b,auto)."))
+
+let sandbox_mode = sandbox_mode_for "the agent"
 
 let sandbox_override =
   Arg.(
     value
     & opt (some (enum Sandbox.modes)) None
     & info [ "sandbox" ] ~docv:"MODE"
-        ~doc:(sandbox_doc ^ " Overrides the experiment's $(b,sandbox) setting."))
+        ~doc:
+          (sandbox_doc "the agent and the checkers"
+          ^ " Overrides the experiment's $(b,sandbox) setting."))
 
 let mcp_flag name ~docv ~doc =
   Arg.(value & opt_all string [] & info [ name ] ~docv ~doc)
@@ -384,9 +394,16 @@ let check_cmd =
              and every $(b,golden.fail) trace must fail at least one. Exits 1 \
              and lists the offending traces otherwise, and 64 on a \
              configuration error, printed as file:line:column.";
+          `P
+            "Checkers run in the sandbox with no network and may write only to \
+             a temporary directory of their own, which is their $(b,HOME) and \
+             $(b,TMPDIR).";
         ]
   in
-  Cmd.v info Term.(const check_command $ Cli.json $ scenarios)
+  Cmd.v info
+    Term.(
+      const check_command $ Cli.json $ scenarios
+      $ sandbox_mode_for "the checkers")
 
 let mcp_shim_cmd =
   let name =

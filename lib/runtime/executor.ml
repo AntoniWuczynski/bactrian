@@ -457,8 +457,9 @@ let mcp_configs ~fs (l : loaded) =
     List.map (mcp_config ~fs l) l.experiment.mcp
   else []
 
-let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
-    (variant : Experiment.variant) : Run.config =
+let run_config ~fs ~sandbox ~checker_sandbox (l : loaded)
+    (scenario : Scenario.t) ~scenario_dir (variant : Experiment.variant) :
+    Run.config =
   {
     agent = l.agent;
     cwd = l.dir;
@@ -477,6 +478,7 @@ let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
           checkers = scenario.checkers;
           checks_cwd = scenario_dir;
           checker_timeout = l.turn_timeout;
+          checker_sandbox;
         };
     fixtures =
       Option.map (fun dir -> Filename.concat scenario_dir dir) scenario.fixtures;
@@ -626,20 +628,35 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     if Filename.is_relative path then Filename.concat l.dir path else path
   in
   let mode = Option.value sandbox ~default:experiment.sandbox in
-  let* sandbox =
+  let preflight () =
+    Result.map_error
+      (fun m -> Environment m)
+      (Sandbox.preflight ~env ~warn
+         {
+           mode;
+           allow_write = List.map in_dir experiment.sandbox_allow_write;
+           deny_read = List.map in_dir experiment.sandbox_deny_read;
+           bactrian_exe;
+           bactrian_dir = Eio.Path.native_exn root;
+         })
+  in
+  (* The checkers run in the agent's sandbox. bactrian does not start an HTTP
+     agent, so the probe is run for its checkers alone, when there are any. *)
+  let* sandbox, checker_sandbox =
     match l.agent with
-    | Http _ -> Ok (Sandbox.http_mode mode)
     | Command _ ->
-        Result.map_error
-          (fun m -> Environment m)
-          (Sandbox.preflight ~env ~warn
-             {
-               mode;
-               allow_write = List.map in_dir experiment.sandbox_allow_write;
-               deny_read = List.map in_dir experiment.sandbox_deny_read;
-               bactrian_exe;
-               bactrian_dir = Eio.Path.native_exn root;
-             })
+        let* s = preflight () in
+        Ok (s, s)
+    | Http _ ->
+        let agent = Sandbox.http_mode mode in
+        if
+          List.exists
+            (fun (_, (s : Scenario.t)) -> not (List.is_empty s.checkers))
+            l.scenarios
+        then
+          let* checkers = preflight () in
+          Ok (agent, checkers)
+        else Ok (agent, agent)
   in
   on_sandbox (Sandbox.label sandbox);
   Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
@@ -655,7 +672,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         | Some scenario, Some variant ->
             Ok
               ( i,
-                run_config ~fs ~sandbox l scenario
+                run_config ~fs ~sandbox ~checker_sandbox l scenario
                   ~scenario_dir:
                     (Filename.concat l.dir (Filename.dirname p.scenario))
                   variant )

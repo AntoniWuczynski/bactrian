@@ -70,9 +70,17 @@ let setup dir text =
   write dir "golden/bad.jsonl"
     (trace_text [ "calendar_create"; "calendar_create" ])
 
+let load env dir =
+  G.load ~files:(Eio.Stdenv.fs env)
+    ~scenario_file:(Filename.concat dir "s.json")
+    ()
+
 let check env dir =
-  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") () with
-  | Ok r -> r
+  match load env dir with
+  | Ok s ->
+      G.check ~env ~sandbox:Bactrian_runtime.Sandbox.off
+        ~scenario_file:(Filename.concat dir "s.json")
+        s
   | Error _ -> Alcotest.fail "unexpected configuration errors"
 
 let offenders (r : G.report) =
@@ -190,7 +198,7 @@ let test_invalid_scenario () =
   write dir "s.json"
     {|{"version": 1, "id": "x", "turns": [], "bogus": 1,
  "assertions": [{"max_steps": "many"}]}|};
-  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") () with
+  match load env dir with
   | Ok _ -> Alcotest.fail "expected errors"
   | Error errors ->
       Alcotest.(check bool) "all collected" true (List.length errors >= 3);

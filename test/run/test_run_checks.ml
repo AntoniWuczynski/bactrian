@@ -10,7 +10,14 @@ let strict =
   { Run.from = ""; matcher = Strict; allow_reorder = false; timing = P.Fast }
 
 let checks ?(assertions = []) ?(checkers = []) () : Run.checks option =
-  Some { assertions; checkers; checks_cwd = "."; checker_timeout = 10. }
+  Some
+    {
+      assertions;
+      checkers;
+      checks_cwd = ".";
+      checker_timeout = 10.;
+      checker_sandbox = Sandbox.off;
+    }
 
 let json (r : Run.result) name = Yojson.Safe.from_file (file r name)
 let failing_agent = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ]
@@ -41,6 +48,11 @@ let test_checker_error_is_errored =
     (String.starts_with ~prefix:"checker: "
        (Option.value ~default:"" (Run.outcome_reason r.outcome)));
   Alcotest.check strs "verdicts.json" [ "checker_failed" ] (verdict_names r);
+  Alcotest.(check string)
+    "the checkers' sandbox"
+    {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
+    (Yojson.Safe.to_string
+       J.(member "checker_sandbox" (json r "verdicts.json")));
   (* Its stderr is kept with the run, and the reason points there. *)
   Alcotest.(check string)
     "stderr kept" "no such table\n"
@@ -82,7 +94,10 @@ let test_failed_run_has_verdicts =
         (contains reason "max_steps")
   | Passed | Diverged | Errored _ | Not_run _ ->
       Alcotest.failf "expected Failed, got %s" (outcome_name r));
-  Alcotest.check strs "verdicts.json" [ "pass"; "pass" ] (verdict_names r)
+  Alcotest.check strs "verdicts.json" [ "pass"; "pass" ] (verdict_names r);
+  Alcotest.(check bool)
+    "no checker, no checker_sandbox" true
+    (J.member "checker_sandbox" (json r "verdicts.json") = `Null)
 
 (* Divergences are persisted with their diff paths. *)
 let test_divergences_file =
