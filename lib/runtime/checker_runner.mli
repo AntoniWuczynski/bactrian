@@ -7,7 +7,9 @@
     fresh temporary directory of its own, removed when it ends, and [PATH],
     [LANG] and [TZ] when bactrian itself has them. The group is killed as soon
     as its leader exits, so a background child holding stdout open cannot hold
-    up the read, and in any case by the time [run] returns. *)
+    up the read, and in any case by the time [run] returns. A descendant that
+    starts a session of its own ([setsid]) leaves the group and is not killed:
+    in the sandbox it keeps the checker's policy. *)
 
 type result =
   | Verdict of Bactrian_core.Checker_protocol.verdict

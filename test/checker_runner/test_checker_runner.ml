@@ -92,6 +92,12 @@ def attempt(action, arg):
         if action == "connect":
             host, port = arg.rsplit(":", 1)
             socket.create_connection((host, int(port)), timeout=3).close()
+        elif action == "unix":
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                s.connect(arg)
+            finally:
+                s.close()
         elif action == "write":
             with open(arg, "w") as f:
                 f.write("x")
@@ -298,9 +304,21 @@ let test_sandbox_denies () =
   with_dir @@ fun env dir ->
   let sandbox = strict env dir in
   let denied = Filename.concat dir "denied/secret"
-  and other_run = Filename.concat dir ".bactrian/runs/other/trace.jsonl" in
+  and other_run = Filename.concat dir ".bactrian/runs/other/trace.jsonl"
+  and ca_key = Filename.concat dir ".bactrian/ca/ca.key" in
   write denied "secret";
   write other_run "{}";
+  write ca_key "key";
+  (* Under the system's temporary directory: a socket path has a short limit. *)
+  let socket_path = Filename.temp_file "chk" ".sock" in
+  Sys.remove socket_path;
+  let unix_listener = Unix.socket PF_UNIX SOCK_STREAM 0 in
+  Fun.protect ~finally:(fun () ->
+      Unix.close unix_listener;
+      Sys.remove socket_path)
+  @@ fun () ->
+  Unix.bind unix_listener (ADDR_UNIX socket_path);
+  Unix.listen unix_listener 8;
   let listener = Unix.socket PF_INET SOCK_STREAM 0 in
   Fun.protect ~finally:(fun () -> Unix.close listener) @@ fun () ->
   Unix.bind listener (ADDR_INET (Unix.inet_addr_loopback, 0));
@@ -342,6 +360,13 @@ let test_sandbox_denies () =
         ok );
       ("a deny_read path", "read", denied, either "EPERM" "ENOENT", ok);
       ("another run", "read", other_run, either "EPERM" "ENOENT", ok);
+      ("the certificate authority", "read", ca_key, either "EPERM" "ENOENT", ok);
+      (* On Linux the sandbox's /tmp is an empty file system of its own. *)
+      ( "another process's Unix socket",
+        "unix",
+        socket_path,
+        either "EPERM" "ENOENT",
+        ok );
     ]
 
 (* A checker that keeps to its temporary directory gives its verdict, and the
