@@ -688,6 +688,7 @@ let cmd =
       Compare_cmd.cmd;
       Plan_cmd.cmd;
       Report_cmd.cmd;
+      Doctor_cmd.cmd ~tls_available ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;
       sandbox_probe_cmd;

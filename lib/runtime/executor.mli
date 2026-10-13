@@ -49,6 +49,10 @@ val read_manifest : _ Eio.Path.t -> (manifest, string option) result
 (** Reads an experiment's [manifest.json]. [Error None] when the file does not
     exist, [Error (Some reason)] when it cannot be decoded. *)
 
+val funded : (string * float) list -> (Model_proxy.provider * string) list
+(** The providers (with their names) whose spend cap in [caps_usd] is above 0:
+    the ones an experiment calls live. *)
+
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string

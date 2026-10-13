@@ -1,0 +1,15 @@
+(test
+ (name test_doctor)
+ (package bactrian)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  elf_fixture
+  eio_main
+  mirage-crypto-rng.unix
+  re
+  unix
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))
