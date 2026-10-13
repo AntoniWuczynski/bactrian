@@ -240,6 +240,12 @@ let test_unenforced () =
   Alcotest.check strings "mcp servers are enforced"
     [ "sandbox"; "egress"; "clock" ]
     (names (decoded (doc {|, "mcp": {"calendar": {"command": ["c"]}}|})));
+  Alcotest.check strings "mcp servers that are not intercepted"
+    [ "sandbox"; "mcp"; "clock" ]
+    (names
+       (decoded
+          (doc
+             {|, "intercept": ["model", "fixtures"], "mcp": {"calendar": {"command": ["c"]}}|})));
   Alcotest.check strings "everything off" []
     (names
        (decoded

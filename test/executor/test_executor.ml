@@ -444,10 +444,21 @@ let test_mcp_not_intercepted =
     (experiment_json ctx
        ~extra:({|, "intercept": ["model", "fixtures"]|} ^ mcp_extra)
        ());
-  let env = agent_env ctx (ok (go ctx)) in
+  let s = ok (go ctx) in
+  let env = agent_env ctx s in
   Alcotest.(check bool)
     "no shim target" true
-    (member "BACTRIAN_MCP_URL" env = `Null)
+    (member "BACTRIAN_MCP_URL" env = `Null);
+  let unenforced =
+    Yojson.Safe.Util.(
+      to_list (member "unenforced" (run_meta ctx (List.hd (run_ids s)))))
+  in
+  Alcotest.(check bool)
+    "the unused servers are reported" true
+    (List.exists
+       (fun w ->
+         String.starts_with ~prefix:"mcp:" (Yojson.Safe.Util.to_string w))
+       unenforced)
 
 let test_mcp_replay_refused =
   settings_ctx "mcpreplay" @@ fun ctx ->

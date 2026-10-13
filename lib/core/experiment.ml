@@ -484,6 +484,13 @@ let unenforced t =
            "egress: the agent's network access is neither blocked nor recorded";
          ]
        else []);
+      (match t.mcp with
+      | _ :: _ when not (List.mem `Mcp t.intercept) ->
+          [
+            "mcp: servers are declared but intercept leaves out mcp, so they \
+             are not started and the agent is not told about them";
+          ]
+      | _ :: _ | [] -> []);
       (if t.faketime then
          [
            "clock: faketime auto is not applied (SIM_NOW and TZ are a contract \

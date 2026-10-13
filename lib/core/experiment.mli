@@ -123,7 +123,8 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce yet (design
-    §5.3: the sandbox under [auto], egress and faketime), each starting with the
-    setting's name and a colon. [sandbox: strict] is not listed: it is refused
-    outright where the run starts. *)
+(** One line per setting this build accepts but does not enforce (design §5.3:
+    the sandbox under [auto], egress and faketime, and [mcp] servers when
+    [intercept] leaves out [mcp]), each starting with the setting's name and a
+    colon. [sandbox: strict] is not listed: it is refused outright where the run
+    starts. *)
