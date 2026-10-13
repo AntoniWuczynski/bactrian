@@ -24,7 +24,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 2. An experiment comparing two live model variants over several scenarios with repeats produces a verdict per metric (`regression`, `improvement`, `no-change`, `inconclusive`) whose statistics match reference implementations.
 3. A coding agent can drive all of this through the MCP server (planned).
 4. Prebuilt binaries run on macOS arm64 and Linux x86_64 and arm64 (planned).
-5. Every run is sandboxed by default where the host allows it, and otherwise visibly labelled `unsandboxed`. In sandboxed runs, escape attempts (direct network, writes outside the run, reads of credential paths) fail on macOS and Linux, and real API keys never enter the sandbox (planned).
+5. Every run is sandboxed by default where the host allows it, and otherwise visibly labelled `unsandboxed`. In sandboxed runs, escape attempts (direct network, writes outside the run, reads of credential paths) fail on macOS and Linux, and real API keys never enter the sandbox.
 
 ## 2. Decisions
 
@@ -71,7 +71,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Redact`, `Mask` | Deterministic scrubbing of secrets and configured patterns, and the `normalise` masks applied before keying. |
 | `Mcp_msg` | MCP messages for both protocol eras (2026-07-28 and 2025-11-25). |
 | `Report_data`, `Report_html` | Report data, and its pure rendering to a single self-contained HTML file. |
-| `Sandbox_policy` (planned) | Pure generation of the Seatbelt profile text and the bubblewrap argument list, so that they can be property-tested. |
+| `Sandbox_policy` | Pure generation of the Seatbelt profile text and the bubblewrap argument list, so that they can be property-tested. |
 
 ### `bactrian.runtime` (Eio)
 
@@ -83,7 +83,8 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. |
 | `Agent_clock` | Finds `libfaketimeMT.so.1`, decides whether the agent's clock is enforced, and adds the `LD_PRELOAD` and `FAKETIME` variables to its environment (section 5 step 2, decision record 0009). |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
-| `Checker_runner` | Runs external checker commands with the trace on standard input. Checkers will run sandboxed as well. |
+| `Launch_env` | Re-executes `record`, `replay` and `run` with an allowlisted launch environment and restores the rest from an unlinked temporary file (section 5.2, decision record 0010). |
+| `Checker_runner` | Runs external checker commands with the trace on standard input. Running checkers sandboxed is planned. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
 | `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |
 | `Executor` | Expands experiments, schedules runs with a concurrency limit, one Eio switch per run so a failing run is torn down alone. |

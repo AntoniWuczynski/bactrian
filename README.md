@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. JSON Schemas for the file formats, the MCP server mode and prebuilt binaries are not built yet. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 ## Recording and replaying an agent
 
