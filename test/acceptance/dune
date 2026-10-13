@@ -3,8 +3,8 @@
 ; make dune rerun the test when their sources change. dist/agent.js is built by
 ; `pnpm --dir examples/agents/typescript build`.
 
-(executable
- (name test_acceptance)
+(executables
+ (names test_acceptance test_launch_env_outside)
  (libraries
   bactrian.core
   bactrian.runtime
@@ -41,3 +41,14 @@
     FAKE_MCP_SERVER
     %{exe:../support/fake_mcp/fake_mcp_server.exe}
     (run %{exe:test_acceptance.exe})))))
+
+; The launch environments of bactrian and its children, read from outside
+; while a sandboxed run is live. Needs python3.
+
+(rule
+ (alias acceptance)
+ (action
+  (setenv
+   BACTRIAN_EXE
+   %{exe:../../bin/main.exe}
+   (run %{exe:test_launch_env_outside.exe}))))
