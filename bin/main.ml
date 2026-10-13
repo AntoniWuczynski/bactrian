@@ -72,10 +72,18 @@ let live_problem caps =
 let bactrian_exe = Sys.executable_name
 let sandbox_warning w = prerr_endline ("bactrian: warning: " ^ w)
 
+(* A command that starts agents first drops secrets from its launch
+   environment (design §5.3). *)
+let scrubbed ~json f =
+  match Launch_env.scrub ~exe:bactrian_exe with
+  | Error m -> Cli.fail ~json Output.exit_internal m
+  | Ok () -> f ()
+
 (* [config] gets the store, because a replay reads the recording's MCP servers
    from it, and what the sandbox preflight decided. *)
 let run_command ~json ~live ~sandbox
     (config : Store.t -> Sandbox.t -> (Run.config, string) result) =
+  scrubbed ~json @@ fun () ->
   match read_caps () with
   | Error m -> Cli.fail ~json Output.exit_usage m
   | Ok caps -> (
@@ -135,6 +143,7 @@ let run_command ~json ~live ~sandbox
 (* Experiments *)
 
 let experiment_command ~json ~experiment ~resume ~sandbox =
+  scrubbed ~json @@ fun () ->
   Mirage_crypto_rng_unix.use_default ();
   Eio_main.run @@ fun env ->
   let announced = ref None in
@@ -692,6 +701,14 @@ let cmd =
       sandbox_init_cmd;
       sandbox_probe_cmd;
     ]
+
+(* The image {!Launch_env.scrub} started takes its environment back first. *)
+let () =
+  match Launch_env.restore () with
+  | Ok () -> ()
+  | Error m ->
+      prerr_endline ("bactrian: " ^ m);
+      exit Output.exit_internal
 
 let () =
   let code =
