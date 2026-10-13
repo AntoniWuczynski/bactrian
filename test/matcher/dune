@@ -1,0 +1,6 @@
+(test
+ (name test_matcher)
+ (package bactrian)
+ (libraries bactrian.core alcotest)
+ (flags
+  (:standard -w -70)))
