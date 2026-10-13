@@ -16,6 +16,8 @@ let exits =
           "when the environment is not ready, for example a spend cap of 0, a \
            missing API key or no TLS support for a live call.";
       Cmd.Exit.info exit_internal ~doc:"on an internal error.";
+      Cmd.Exit.info Interrupt.exit_status
+        ~doc:"when interrupted by SIGINT or SIGTERM.";
     ]
 
 (* Whether this build can call a provider over HTTPS. The TLS connector is a
@@ -81,41 +83,58 @@ let live_problem caps =
               "this build has no TLS support (bactrian.tls), so it cannot call \
                providers over HTTPS")
 
-let fail code message =
-  prerr_endline ("bactrian: " ^ message);
+(* Under [--json] a failure before the run is one JSON object on stdout. *)
+let fail ~json code message =
+  if json then
+    print_endline
+      (Yojson.Safe.to_string
+         (`Assoc [ ("error", `String message); ("exit", `Int code) ]))
+  else prerr_endline ("bactrian: " ^ message);
   code
 
 (* Running *)
 
 let run_command ~json ~live (config : Run.config) =
   match read_caps () with
-  | Error m -> fail Output.exit_usage m
+  | Error m -> fail ~json Output.exit_usage m
   | Ok caps -> (
       match if live then live_problem caps else None with
-      | Some m -> fail Output.exit_environment m
+      | Some m -> fail ~json Output.exit_environment m
       | None -> (
           Mirage_crypto_rng_unix.use_default ();
           Eio_main.run @@ fun env ->
           Eio.Switch.run @@ fun sw ->
           let root = Eio.Path.(Eio.Stdenv.cwd env / ".bactrian") in
-          let ledger =
-            Ledger.create ~path:Eio.Path.(root / "ledger.jsonl") ~caps
-          in
-          match
-            P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-          with
-          | Error m -> fail Output.exit_environment m
-          | Ok proxy -> (
+          match Ledger.create ~path:Eio.Path.(root / "ledger.jsonl") ~caps with
+          | exception Ledger.Corrupt { line; reason } ->
+              fail ~json Output.exit_environment
+                (Printf.sprintf
+                   "the spend ledger .bactrian/ledger.jsonl is corrupt (line \
+                    %d: %s)"
+                   line reason)
+          | ledger -> (
               match
-                Run.execute ~env ~proxy ~store:(Store.create ~root) ~ledger
-                  config
+                P.start ~sw ~net:(Eio.Stdenv.net env)
+                  ~clock:(Eio.Stdenv.clock env)
               with
-              | Error m -> fail Output.exit_usage m
-              | Ok result ->
-                  print_string
-                    (if json then Output.render_json result ^ "\n"
-                     else Output.render_text result);
-                  Output.exit_code result.outcome)))
+              | Error m -> fail ~json Output.exit_environment m
+              | Ok proxy -> (
+                  match
+                    Interrupt.run (fun () ->
+                        Run.execute ~env ~proxy ~store:(Store.create ~root)
+                          ~ledger config)
+                  with
+                  | Error signal ->
+                      prerr_endline
+                        (Printf.sprintf "bactrian: interrupted by signal %d"
+                           signal);
+                      Interrupt.exit_status
+                  | Ok (Error m) -> fail ~json Output.exit_usage m
+                  | Ok (Ok result) ->
+                      print_string
+                        (if json then Output.render_json result ^ "\n"
+                         else Output.render_text result);
+                      Output.exit_code result.outcome))))
 
 (* Arguments *)
 
@@ -172,8 +191,7 @@ let total_timeout =
   Arg.(
     value & opt float 600.
     & info [ "total-timeout" ] ~docv:"SECONDS"
-        ~doc:
-          "Longest the whole run may take, and the time to exit after the end.")
+        ~doc:"Longest the whole run may take.")
 
 let agent_argv ~pos_after =
   let docv = "AGENT" in

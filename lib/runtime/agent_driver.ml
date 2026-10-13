@@ -27,6 +27,8 @@ type t = {
   clock : float Eio.Time.clock_ty Eio.Resource.t;
   config : config;
   deadline : float;  (** Absolute [clock] time of the total timeout. *)
+  mutable aborted : bool;
+      (** The run is being stopped, not finished: no exit grace. *)
 }
 
 let max_line = 1 lsl 20
@@ -35,8 +37,17 @@ let pid t = Eio.Process.pid t.proc
 let send t msg =
   let line = Agent_protocol.encode msg in
   let line = if String.ends_with ~suffix:"\n" line then line else line ^ "\n" in
-  try Ok (Eio.Flow.copy_string line t.stdin)
-  with Eio.Io _ as e -> Error (Write_failed (Printexc.to_string e))
+  (* An agent that stops reading fills the pipe and blocks the write. *)
+  let remaining = Float.max 0. (t.deadline -. Eio.Time.now t.clock) in
+  match
+    Eio.Time.with_timeout t.clock remaining (fun () ->
+        Ok (Eio.Flow.copy_string line t.stdin))
+  with
+  | Ok () -> Ok ()
+  | Error `Timeout ->
+      t.aborted <- true;
+      Error Total_timeout
+  | exception (Eio.Io _ as e) -> Error (Write_failed (Printexc.to_string e))
 
 let status_within t seconds =
   match
@@ -53,7 +64,7 @@ let read_line t =
       Error (Agent_exited (status_within t t.config.exit_grace))
   | exception Eio.Buf_read.Buffer_limit_exceeded -> Error Line_too_long
 
-let recv t =
+let recv_message t =
   let remaining = t.deadline -. Eio.Time.now t.clock in
   if remaining <= 0. then Error Total_timeout
   else
@@ -71,12 +82,23 @@ let recv t =
         | Ok msg -> Ok msg
         | Error error -> Error (Protocol_violation { line; error }))
 
+let recv t =
+  let result = recv_message t in
+  (match result with
+  | Error (Turn_timeout | Total_timeout | Protocol_violation _ | Line_too_long)
+    ->
+      t.aborted <- true
+  | Error (Spawn_failed _ | Write_failed _ | Agent_exited _) | Ok _ -> ());
+  result
+
 (* The leader's pid is also the group id. [Unix.kill] with a negative pid signals
-   the whole group; ESRCH means the group is already empty. *)
+   the whole group; ESRCH means the group is already empty. macOS reports EPERM
+   instead when only zombies are left, and the agent runs as our own user, so
+   EPERM cannot mean a foreign process here. *)
 let signal_group pgid signal =
   match Unix.kill (-pgid) signal with
   | () -> true
-  | exception Unix.Unix_error (Unix.ESRCH, _, _) -> false
+  | exception Unix.Unix_error ((Unix.ESRCH | Unix.EPERM), _, _) -> false
 
 let group_gone pgid = not (signal_group pgid 0)
 
@@ -95,8 +117,9 @@ let shutdown t =
   Eio.Cancel.protect @@ fun () ->
   Eio.Resource.close t.stdin;
   let pgid = pid t in
+  let exit_grace = if t.aborted then 0. else t.config.exit_grace in
   let status =
-    match status_within t t.config.exit_grace with
+    match status_within t exit_grace with
     | Some status -> status
     | None -> (
         ignore (signal_group pgid Sys.sigterm : bool);
@@ -127,7 +150,13 @@ let open_stderr ~sw path =
         (Unix.Unix_error
            (Unix.EBADF, "open_out", "stderr file has no descriptor"))
 
+(* The agent's switch is protected from the caller's cancellation: its reaper
+   fibre has to keep running to learn the exit status during shutdown, which
+   happens exactly when the caller is cancelled. [f] runs in a fibre of the
+   caller's own switch, so it is still cancelled with the caller. *)
 let with_agent ~process_mgr ~clock config f =
+  Eio.Switch.run @@ fun caller_sw ->
+  Eio.Cancel.protect @@ fun () ->
   Eio.Switch.run @@ fun sw ->
   match
     let stdin_r, stdin_w = Eio_unix.pipe sw in
@@ -165,14 +194,12 @@ let with_agent ~process_mgr ~clock config f =
           clock;
           config;
           deadline = Eio.Time.now clock +. config.total_timeout;
+          aborted = false;
         }
       in
       let result =
-        match f t with
-        | v -> `Ok v
-        | exception e -> `Raised (e, Printexc.get_raw_backtrace ())
+        Eio.Promise.await (Eio.Fiber.fork_promise ~sw:caller_sw (fun () -> f t))
       in
+      if Result.is_error result then t.aborted <- true;
       let status = shutdown t in
-      match result with
-      | `Ok v -> Ok (v, status)
-      | `Raised (e, bt) -> Printexc.raise_with_backtrace e bt)
+      match result with Ok v -> Ok (v, status) | Error e -> raise e)

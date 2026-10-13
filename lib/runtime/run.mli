@@ -49,9 +49,7 @@ type config = {
   replay : replay option;  (** None = record. *)
   env_passthrough : string list;
   turn_timeout : float;
-  total_timeout : float;
-      (** Also the time the agent has to exit after [end]. SIGKILL follows
-          SIGTERM after 5 seconds. *)
+  total_timeout : float;  (** Longest the whole run may take. *)
 }
 
 type result = {

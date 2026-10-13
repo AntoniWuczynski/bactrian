@@ -15,6 +15,7 @@
   fake_upstream
   eio_main
   mirage-crypto-rng.unix
+  re
   unix
   uri
   yojson

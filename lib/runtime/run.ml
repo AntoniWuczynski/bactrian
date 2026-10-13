@@ -112,9 +112,11 @@ let describe_driver_error : D.error -> string = function
   | Line_too_long -> "protocol_violation: line over 1 MiB"
   | Turn_timeout -> "timeout: turn"
   | Total_timeout -> "timeout: total"
-  | Agent_exited None -> "crashed: stdout closed before the final reply"
+  | Agent_exited None ->
+      "protocol_violation: stdout closed before the final reply"
   | Agent_exited (Some st) ->
-      "crashed: " ^ describe_exit st ^ " before the final reply"
+      "protocol_violation: stdout closed before the final reply ("
+      ^ describe_exit st ^ ")"
 
 let describe_refusal : Ledger.refusal -> string = function
   | Cap_reached { provider; cap; spent; requested } ->
@@ -198,24 +200,30 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~sim_now =
 
 (* The conversation *)
 
+let wrong_turn ~what ~turn ~expected =
+  Printf.sprintf "protocol_violation: %s for turn %d, expected %d" what turn
+    expected
+
 let converse ~t_ms ~add driver ~(start : Agent_protocol.to_agent) turns =
   let send m = Result.map_error describe_driver_error (D.send driver m) in
   let rec await n =
     match D.recv driver with
     | Error e -> Error (describe_driver_error e)
-    | Ok (Event { turn; name; data }) ->
+    | Ok (Event { turn; name; data }) when turn = n ->
         add (Trace_builder.Got_event { t_ms = t_ms (); turn; name; data });
         await n
+    | Ok (Event { turn; name = _; data = _ }) ->
+        Error (wrong_turn ~what:"event" ~turn ~expected:n)
     | Ok (Reply { turn; content }) when turn = n ->
         add (Got_reply { t_ms = t_ms (); turn; content });
         Ok ()
     | Ok (Reply { turn; content = _ }) ->
-        Error
-          (Printf.sprintf "protocol_violation: reply for turn %d, expected %d"
-             turn n)
-    | Ok (Agent_error { turn; message }) ->
+        Error (wrong_turn ~what:"reply" ~turn ~expected:n)
+    | Ok (Agent_error { turn; message }) when turn = n ->
         add (Got_error { t_ms = t_ms (); turn; message });
         Error ("agent_error: " ^ message)
+    | Ok (Agent_error { turn; message = _ }) ->
+        Error (wrong_turn ~what:"error" ~turn ~expected:n)
   in
   let* () = send start in
   let rec go n = function
@@ -235,9 +243,16 @@ let refusing ~allow_reorder : Matcher.divergence -> bool = function
   | Missing_request _ | Unconsumed _ | Shape_mismatch _ -> true
 
 let decide_outcome ~replay (findings : P.findings) failure =
-  match (findings.cap_refusals, failure) with
-  | r :: _, _ -> Not_run (describe_refusal r)
-  | [], _ -> (
+  (* An unpriced model is a configuration problem, not missing data. *)
+  let unpriced =
+    List.find_map
+      (function Ledger.Unknown_model m -> Some m | Cap_reached _ -> None)
+      findings.cap_refusals
+  in
+  match (unpriced, findings.cap_refusals, failure) with
+  | Some m, _, _ -> Errored ("no price for model " ^ m)
+  | None, r :: _, _ -> Not_run (describe_refusal r)
+  | None, [], _ -> (
       let diverged =
         match replay with
         | None -> false
@@ -304,6 +319,11 @@ let no_findings : P.findings =
     cap_refusals = [];
     errors = [];
   }
+
+(* After [end] the agent gets this long to exit on its own, and after SIGTERM
+   this long before SIGKILL. *)
+let exit_grace = 5.
+let kill_grace = 5.
 
 (* One run *)
 
@@ -415,8 +435,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
         stderr_path = Eio.Path.(run_dir / "agent.stderr");
         turn_timeout = config.turn_timeout;
         total_timeout = config.total_timeout;
-        exit_grace = config.total_timeout;
-        kill_grace = 5.;
+        exit_grace;
+        kill_grace;
       }
     in
     let start : Agent_protocol.to_agent =
@@ -445,62 +465,76 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
     Option.iter Store.close writer;
     Ok (failure, findings)
   in
+  let interrupted = ref None in
   let driven =
-    try drive () with Eio.Io _ as e -> Error (Printexc.to_string e)
+    try drive () with
+    | Eio.Io _ as e -> Error (Printexc.to_string e)
+    | Eio.Cancel.Cancelled _ as ex ->
+        interrupted := Some ex;
+        Error "interrupted"
   in
-  let failure, findings, fault =
-    match driven with
-    | Ok (failure, findings) -> (failure, findings, None)
-    | Error msg -> (None, unregister (), Some msg)
+  let finalise () =
+    let failure, findings, fault =
+      match driven with
+      | Ok (failure, findings) -> (failure, findings, None)
+      | Error msg -> (None, unregister (), Some msg)
+    in
+    let replay = Option.map (fun (r, _, _) -> r) recording in
+    let cassette =
+      Result.map_error store_error (Store.read_cassette store ~run_id)
+    in
+    let fault, cassette =
+      match (fault, cassette) with
+      | None, Ok c -> (None, c)
+      | Some m, Ok c -> (Some m, c)
+      | Some m, Error _ ->
+          (Some m, { Cassette.header; exchanges = []; complete = true })
+      | None, Error m ->
+          (Some m, { Cassette.header; exchanges = []; complete = true })
+    in
+    let outcome =
+      match fault with
+      | Some m -> Errored m
+      | None -> decide_outcome ~replay findings failure
+    in
+    let spend =
+      List.filter_map
+        (fun (name, after) ->
+          let before =
+            Option.value (List.assoc_opt name spend_before) ~default:0.
+          in
+          if after > before then Some (name, after -. before) else None)
+        (spent_by_provider ledger)
+    in
+    let entries =
+      Trace_builder.build
+        {
+          run_id;
+          scenario = config.scenario;
+          variant = config.variant;
+          sim_now;
+          clock = Contract_only;
+          cassette;
+          agent = List.rev !events;
+          resolve = (fun p -> Result.to_option (Store.read_payload store p));
+        }
+    in
+    match
+      write_trace run_dir entries;
+      Store.write_atomic
+        Eio.Path.(run_dir / "meta.json")
+        (Yojson.Safe.pretty_to_string
+           (meta_json ~run_id ~config ~sim_now ~outcome ~findings ~spend
+              ~replay_of:(Option.map (fun (_, id, _) -> id) recording))
+        ^ "\n")
+    with
+    | () -> Ok { run_id; outcome; run_dir = run_dir_path; findings; spend }
+    | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
   in
-  let replay = Option.map (fun (r, _, _) -> r) recording in
-  let cassette =
-    Result.map_error store_error (Store.read_cassette store ~run_id)
-  in
-  let fault, cassette =
-    match (fault, cassette) with
-    | None, Ok c -> (None, c)
-    | Some m, Ok c -> (Some m, c)
-    | Some m, Error _ ->
-        (Some m, { Cassette.header; exchanges = []; complete = true })
-    | None, Error m ->
-        (Some m, { Cassette.header; exchanges = []; complete = true })
-  in
-  let outcome =
-    match fault with
-    | Some m -> Errored m
-    | None -> decide_outcome ~replay findings failure
-  in
-  let spend =
-    List.filter_map
-      (fun (name, after) ->
-        let before =
-          Option.value (List.assoc_opt name spend_before) ~default:0.
-        in
-        if after > before then Some (name, after -. before) else None)
-      (spent_by_provider ledger)
-  in
-  let entries =
-    Trace_builder.build
-      {
-        run_id;
-        scenario = config.scenario;
-        variant = config.variant;
-        sim_now;
-        clock = Contract_only;
-        cassette;
-        agent = List.rev !events;
-        resolve = (fun p -> Result.to_option (Store.read_payload store p));
-      }
-  in
-  match
-    write_trace run_dir entries;
-    Store.write_atomic
-      Eio.Path.(run_dir / "meta.json")
-      (Yojson.Safe.pretty_to_string
-         (meta_json ~run_id ~config ~sim_now ~outcome ~findings ~spend
-            ~replay_of:(Option.map (fun (_, id, _) -> id) recording))
-      ^ "\n")
-  with
-  | () -> Ok { run_id; outcome; run_dir = run_dir_path; findings; spend }
-  | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
+  match !interrupted with
+  | None -> finalise ()
+  | Some ex ->
+      (* Teardown has to finish whatever the cancellation: meta.json says the
+         run was interrupted, then the cancellation goes on. *)
+      ignore (Eio.Cancel.protect finalise);
+      raise ex

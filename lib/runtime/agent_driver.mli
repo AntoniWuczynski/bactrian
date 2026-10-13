@@ -8,8 +8,11 @@
     When {!with_agent}'s callback returns (or raises, or the fibre is cancelled)
     the agent is shut down: stdin is closed, the agent gets [exit_grace] seconds
     to exit, then the whole process group receives SIGTERM, then SIGKILL after
-    [kill_grace] seconds. The group is signalled even when the leader has
-    already exited, so stray children cannot outlive the run. *)
+    [kill_grace] seconds. When the run is stopped instead of finished (a turn or
+    total timeout, a protocol violation, an exception or cancellation in the
+    callback) there is no exit grace: SIGTERM follows at once. The group is
+    signalled even when the leader has already exited, so stray children cannot
+    outlive the run. *)
 
 module Agent_protocol = Bactrian_core.Agent_protocol
 

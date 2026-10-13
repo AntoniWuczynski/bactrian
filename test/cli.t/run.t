@@ -28,6 +28,7 @@ The record and replay commands document the same statuses.
          64  on a usage or confi
          69  when the environmen
          70  on an internal erro
+         130 when interrupted by
 
 Usage errors exit 64.
 
@@ -56,7 +57,10 @@ A malformed spend cap is a configuration error.
   bactrian: BACTRIAN_CAP_OPENAI="lots" is not a non-negative amount in USD
   [64]
 
-A live recording needs a cap above zero and the provider's key first.
+A live recording needs a cap above zero and the provider's key first. The
+caller's own caps and keys must not leak into these checks.
+
+  $ unset BACTRIAN_CAP_OPENAI BACTRIAN_CAP_ANTHROPIC BACTRIAN_CAP_GEMINI BACTRIAN_CAP_OPENROUTER OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY
 
   $ bactrian record --turn hi -- true
   bactrian: no provider has a spend cap above 0: set BACTRIAN_CAP_OPENAI, BACTRIAN_CAP_ANTHROPIC, BACTRIAN_CAP_GEMINI, BACTRIAN_CAP_OPENROUTER (USD) for the providers this run calls

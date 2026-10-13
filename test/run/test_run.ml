@@ -461,6 +461,209 @@ let test_cap_reached =
   Alcotest.(check int) "cap refusals" 1 (List.length r.findings.cap_refusals);
   Alcotest.(check int) "upstream untouched" 0 (List.length (F.requests ctx.up))
 
+(* Timeouts and interrupts *)
+
+let gone pid =
+  match Unix.kill pid 0 with
+  | () -> false
+  | exception Unix.Unix_error (Unix.ESRCH, _, _) -> true
+
+let wait_for ~what ?(limit = 15.) ?(on_timeout = ignore) pred =
+  let t0 = Unix.gettimeofday () in
+  let rec go () =
+    match pred () with
+    | Some v -> v
+    | None ->
+        if Unix.gettimeofday () -. t0 > limit then (
+          on_timeout ();
+          Alcotest.failf "timed out waiting for %s" what)
+        else (
+          Unix.sleepf 0.05;
+          go ())
+  in
+  go ()
+
+let read_pid path =
+  match In_channel.with_open_bin path In_channel.input_all with
+  | text -> int_of_string_opt (String.trim text)
+  | exception Sys_error _ -> None
+
+(* An agent that writes its pid to the state directory, then hangs. With
+   [stubborn] it also ignores SIGTERM. *)
+let hung_agent ~stubborn =
+  [
+    "sh";
+    "-c";
+    Printf.sprintf
+      {|echo $$ > "$BACTRIAN_STATE_DIR/pid.tmp" && mv "$BACTRIAN_STATE_DIR/pid.tmp" "$BACTRIAN_STATE_DIR/pid"; %swhile :; do sleep 1; done|}
+      (if stubborn then {|trap "" TERM; |} else "");
+  ]
+
+let test_hung_agent_is_killed =
+  with_ctx "hung" @@ fun ctx ->
+  let turn_timeout = 1. in
+  let t0 = Unix.gettimeofday () in
+  let r =
+    ok
+      (execute ctx
+         { (config ~agent:(hung_agent ~stubborn:true) ()) with turn_timeout })
+  in
+  let elapsed = Unix.gettimeofday () -. t0 in
+  Alcotest.(check string) "outcome" "failed: timeout: turn" (outcome_name r);
+  Alcotest.(check bool)
+    (Printf.sprintf "gone within turn_timeout + 6 s (took %.1f s)" elapsed)
+    true
+    (elapsed < turn_timeout +. 6.);
+  match read_pid (Filename.concat (file r "state") "pid") with
+  | Some pid -> Alcotest.(check bool) "agent group gone" true (gone pid)
+  | None -> Alcotest.fail "the agent never wrote its pid"
+
+let test_interrupt_helper =
+  Alcotest.test_case "a signal cancels the function and runs its cleanup" `Quick
+  @@ fun () ->
+  Eio_main.run @@ fun _env ->
+  let cleaned = ref false in
+  let result =
+    Interrupt.run (fun () ->
+        Fun.protect ~finally:(fun () -> cleaned := true) @@ fun () ->
+        Unix.kill (Unix.getpid ()) Sys.sigterm;
+        Eio.Fiber.await_cancel ())
+  in
+  Alcotest.(check (result unit int)) "interrupted" (Error Sys.sigterm) result;
+  Alcotest.(check bool) "cleanup ran" true !cleaned;
+  Alcotest.(check (result int int))
+    "no signal" (Ok 3)
+    (Interrupt.run (fun () -> 3))
+
+(* SIGINT to a replaying bactrian: the agent's group is killed, the cassette is
+   left partial, meta.json says interrupted and the status is 130. *)
+let test_cli_interrupt =
+  with_ctx "interrupt" @@ fun ctx ->
+  let recorded = record ctx in
+  let root = Filename.concat (Eio.Path.native_exn ctx.dir) ".bactrian" in
+  let runs = Filename.concat root "runs" in
+  let cwd = Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn ctx.dir) in
+  let agent =
+    String.concat " " (List.map Filename.quote (hung_agent ~stubborn:false))
+  in
+  let stderr_file = Filename.concat cwd "interrupt-stderr.txt" in
+  let pid =
+    let devnull = Unix.openfile "/dev/null" [ Unix.O_RDWR ] 0 in
+    let err = Unix.openfile stderr_file [ Unix.O_WRONLY; Unix.O_CREAT ] 0o600 in
+    Fun.protect ~finally:(fun () ->
+        Unix.close devnull;
+        Unix.close err)
+    @@ fun () ->
+    let argv =
+      Array.of_list
+        [
+          "sh";
+          "-c";
+          Printf.sprintf "cd %s && exec %s replay %s -- %s" (Filename.quote cwd)
+            (Filename.quote bactrian_bin)
+            recorded.run_id agent;
+        ]
+    in
+    Unix.create_process "sh" argv devnull devnull err
+  in
+  let new_run =
+    wait_for ~what:"the replaying agent to start" (fun () ->
+        Sys.readdir runs |> Array.to_list
+        |> List.find_opt (fun id ->
+            (not (String.equal id recorded.run_id))
+            && Option.is_some
+                 (read_pid (String.concat "/" [ runs; id; "state"; "pid" ]))))
+  in
+  let agent_pid =
+    Option.get (read_pid (String.concat "/" [ runs; new_run; "state"; "pid" ]))
+  in
+  Unix.kill pid Sys.sigint;
+  let _, status =
+    wait_for ~what:"bactrian to exit"
+      ~on_timeout:(fun () ->
+        let text = read stderr_file in
+        Unix.kill pid Sys.sigkill;
+        Alcotest.failf "bactrian stderr: %s" text)
+      (fun () ->
+        match Unix.waitpid [ Unix.WNOHANG ] pid with
+        | 0, _ -> None
+        | r -> Some r)
+  in
+  (match status with
+  | Unix.WEXITED n ->
+      if n <> 130 then Alcotest.failf "exit %d: %s" n (read stderr_file)
+  | Unix.WSIGNALED n | Unix.WSTOPPED n -> Alcotest.failf "signal %d" n);
+  wait_for ~what:"the agent group to be gone" ~limit:6. (fun () ->
+      if gone agent_pid then Some () else None);
+  let run_dir = Filename.concat runs new_run in
+  let meta = Yojson.Safe.from_file (Filename.concat run_dir "meta.json") in
+  Alcotest.(check string)
+    "outcome" "errored"
+    Yojson.Safe.Util.(to_string (member "outcome" meta));
+  Alcotest.(check string)
+    "reason" "interrupted"
+    Yojson.Safe.Util.(to_string (member "reason" meta));
+  let cassette = read (Filename.concat run_dir "cassette.jsonl") in
+  Alcotest.(check bool)
+    "cassette is partial" false
+    (contains cassette Cassette.end_line)
+
+let replace_all ~sub ~by text =
+  Re.replace_string (Re.compile (Re.str sub)) ~by text
+
+let test_unknown_model_errors =
+  with_ctx "unpriced" @@ fun ctx ->
+  let script = replace_all ~sub:"gpt-6-luna" ~by:"no-such-model" python_agent in
+  let r =
+    ok (execute ctx (config ~agent:[ "python3"; "-I"; "-c"; script ] ()))
+  in
+  Alcotest.(check string)
+    "outcome" "errored: no price for model no-such-model" (outcome_name r)
+
+let events_agent turn =
+  Printf.sprintf
+    {|
+import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        print(json.dumps({"v": 1, "type": "event", "turn": %d, "name": "x", "data": {}}), flush=True)
+        print(json.dumps({"v": 1, "type": "reply", "turn": m["turn"], "content": "ok"}), flush=True)
+|}
+    turn
+
+let test_event_for_another_turn =
+  with_ctx "event-turn" @@ fun ctx ->
+  let run turn =
+    outcome_name
+      (ok
+         (execute ctx
+            (config ~agent:[ "python3"; "-I"; "-c"; events_agent turn ] ())))
+  in
+  Alcotest.(check string) "own turn" "passed" (run 1);
+  Alcotest.(check string)
+    "other turn" "failed: protocol_violation: event for turn 2, expected 1"
+    (run 2)
+
+(* An agent that never reads stdin: the turn does not fit the pipe, so the
+   write blocks until the total timeout. *)
+let test_blocked_write =
+  with_ctx "blocked" @@ fun ctx ->
+  let t0 = Unix.gettimeofday () in
+  let r =
+    ok
+      (execute ctx
+         {
+           (config ~agent:[ "sleep"; "60" ]
+              ~turns:[ String.make 1_000_000 'x' ]
+              ())
+           with
+           total_timeout = 2.;
+         })
+  in
+  Alcotest.(check string) "outcome" "failed: timeout: total" (outcome_name r);
+  Alcotest.(check bool) "gone promptly" true (Unix.gettimeofday () -. t0 < 9.)
+
 let test_unknown_recording =
   with_ctx "missing" @@ fun ctx ->
   match
@@ -493,5 +696,19 @@ let () =
           Alcotest.test_case "agent reports an error" `Slow
             test_agent_error_reply;
           Alcotest.test_case "cap reached" `Slow test_cap_reached;
+          Alcotest.test_case "unpriced model is an error" `Slow
+            test_unknown_model_errors;
+          Alcotest.test_case "event for another turn" `Slow
+            test_event_for_another_turn;
+          Alcotest.test_case "write blocked by a deaf agent" `Slow
+            test_blocked_write;
+        ] );
+      ( "teardown",
+        [
+          Alcotest.test_case "a hung agent is gone after the turn timeout" `Slow
+            test_hung_agent_is_killed;
+          test_interrupt_helper;
+          Alcotest.test_case "SIGINT tears the run down" `Slow
+            test_cli_interrupt;
         ] );
     ]
