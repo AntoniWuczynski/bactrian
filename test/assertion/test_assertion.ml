@@ -418,6 +418,8 @@ let test_decode_ok () =
   decoded "max_cost int" {|{"max_cost_usd":1}|} (A.Max_cost_usd 1.0);
   decoded "max_cost float" {|{"max_cost_usd":0.05}|} (A.Max_cost_usd 0.05);
   decoded "latency int" {|{"max_latency":250}|} (A.Max_latency_ms 250);
+  decoded "latency bare float is ms" {|{"max_latency":2.5}|}
+    (A.Max_latency_ms 3);
   decoded "latency ms" {|{"max_latency":"0.25s"}|} (A.Max_latency_ms 250);
   decoded "latency s" {|{"max_latency":"1.5s"}|} (A.Max_latency_ms 1500);
   decoded "latency m" {|{"max_latency":"2m"}|} (A.Max_latency_ms 120000);

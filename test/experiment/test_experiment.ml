@@ -168,6 +168,18 @@ let test_ms_duration () =
   | Command { turn_timeout = 0.25; total_timeout = 1.5; _ } -> ()
   | Command _ | Http _ -> Alcotest.fail "ms duration"
 
+let test_bare_number_duration () =
+  let t =
+    decoded
+      (doc
+         ~agent:
+           {|"agent": {"protocol": "command", "command": ["x"], "timeouts": {"turn": 90, "total": 1.5}}|}
+         "")
+  in
+  match t.agent with
+  | Command { turn_timeout = 90.; total_timeout = 1.5; _ } -> ()
+  | Command _ | Http _ -> Alcotest.fail "a bare number is seconds"
+
 let test_caseless_normalise () =
   let t = decoded (doc {|, "normalise": ["(?i)date: .*"]|}) in
   Alcotest.(check int) "normalise" 1 (List.length t.normalise)
@@ -269,6 +281,8 @@ let () =
           Alcotest.test_case "compare defaults" `Quick test_compare_defaults;
           Alcotest.test_case "http agent and durations" `Quick test_http;
           Alcotest.test_case "millisecond durations" `Quick test_ms_duration;
+          Alcotest.test_case "bare number durations" `Quick
+            test_bare_number_duration;
           Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
@@ -317,10 +331,15 @@ let () =
                ~agent:
                  {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":"0s"}}|}
                "");
-          case "duration without unit" [ "agent.timeouts.turn" ]
+          case "duration string without unit" [ "agent.timeouts.turn" ]
             (doc
                ~agent:
-                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":30}}|}
+                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":"30"}}|}
+               "");
+          case "bare duration not positive" [ "agent.timeouts.turn" ]
+            (doc
+               ~agent:
+                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":0}}|}
                "");
           case "repeats below one" [ "repeats" ] (doc {|, "repeats": 0|});
           case "concurrency below one" [ "concurrency" ]

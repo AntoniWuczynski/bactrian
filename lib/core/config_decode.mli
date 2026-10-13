@@ -41,7 +41,8 @@ val float_at_least : float -> float decoder
 val bool : bool decoder
 
 val duration : float decoder
-(** Seconds, from a positive ["120s"], ["2m"] or ["1.5s"]. *)
+(** Seconds, from a positive ["120s"], ["2m"], ["1.5s"] or ["250ms"], or a
+    positive bare number of seconds such as [90]. *)
 
 val regex : string decoder
 (** A pattern {!Redact.val-pattern} accepts. *)
