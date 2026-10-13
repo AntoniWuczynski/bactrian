@@ -242,7 +242,7 @@ let test_unenforced_warned_and_recorded =
   let warnings = ref [] in
   let s = ok (go ~warn:(fun w -> warnings := w :: !warnings) ctx) in
   let warnings = List.rev !warnings in
-  Alcotest.(check bool) "warned" true (List.length warnings >= 2);
+  Alcotest.(check bool) "warned" true (List.length warnings >= 1);
   List.iter
     (fun id ->
       Alcotest.(check (list string))

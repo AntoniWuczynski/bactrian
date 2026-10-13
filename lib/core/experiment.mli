@@ -51,7 +51,7 @@ type t = {
       (** More writable paths, relative to the experiment file. *)
   sandbox_deny_read : string list;
       (** More unreadable paths, relative to the experiment file. *)
-  faketime : bool;
+  faketime : bool;  (** [clock: {faketime: auto}], [false] for [off]. *)
   caps_usd : (string * float) list;
   pricing : string option;  (** Price file, relative to the experiment file. *)
   seed : int;
@@ -133,8 +133,8 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce (egress and
-    faketime, [mcp] servers when [intercept] leaves out [mcp], and the isolation
-    of an [http] agent), each starting with the setting's name and a colon. The
-    sandbox is enforced, and a run it could not cover is labelled instead
-    (design §5.3). *)
+(** One line per setting this build accepts but does not enforce (egress, [mcp]
+    servers when [intercept] leaves out [mcp], and the isolation of an [http]
+    agent), each starting with the setting's name and a colon. The sandbox and
+    the clock are enforced where the host allows, and a run they could not cover
+    is labelled instead (design §5.3, §5 step 2). *)

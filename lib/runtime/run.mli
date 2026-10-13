@@ -114,6 +114,10 @@ type config = {
           inside the sandbox, or not, and [meta.json] records the
           {!Sandbox.type-label} under [sandbox]. The MCP stdio servers are never
           inside it. *)
+  faketime : bool;
+      (** The experiment's [clock: {faketime: auto}]: inject [libfaketime] where
+          {!Agent_clock} can, [false] for [off]. [meta.json] records the
+          {!Bactrian_core.Clock_label} under [clock]. *)
 }
 
 val recorded_mcp :
@@ -139,6 +143,9 @@ type result = {
       (** What the sandbox denied the agent, also in the trace as
           [sandbox_violation] events and in [meta.json] under
           [sandbox_violations] ([{collected, reason?, items}]). *)
+  clock : Clock_label.t;
+      (** Whether the agent's clock was enforced, also in the trace's and the
+          cassette's headers and in [meta.json] under [clock]. *)
 }
 
 val execute :
@@ -155,17 +162,19 @@ val execute :
   (result, string) Stdlib.result
 (** Creates the run directory, cassette, state directory and temporary directory
     ([tmp], removed at teardown), builds the agent's environment (design §5 step
-    2 minus egress and libfaketime: provider base URLs from the proxy,
-    placeholder keys, SIM_NOW, TZ, BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP
-    variables, HOME and the XDG and npm cache variables inside the state
-    directory, TMPDIR, PYTHONDONTWRITEBYTECODE=1, PATH, LANG, TERM and the
-    passthrough list, and nothing else; an HTTP agent gets the per-run variables
-    (not HOME, the XDG, npm and TMPDIR ones, PYTHONDONTWRITEBYTECODE, PATH, LANG
-    and TERM, nor the passthrough list), with the variant's variables, as the
-    [env] of its [start] message instead and keeps its own environment), starts
-    a command agent inside the sandbox when [config.sandbox] says so, drives the
-    turns, tears down, collects the sandbox's violations, derives and writes
-    trace.jsonl and meta.json (atomically), and returns the outcome.
+    2 minus egress: provider base URLs from the proxy, placeholder keys,
+    SIM_NOW, TZ, BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP variables, HOME
+    and the XDG and npm cache variables inside the state directory, TMPDIR,
+    PYTHONDONTWRITEBYTECODE=1, PATH, LANG, TERM and the passthrough list, and
+    nothing else, plus the {!Agent_clock} variables where it injects
+    [libfaketime]; an HTTP agent gets the per-run variables (not HOME, the XDG,
+    npm and TMPDIR ones, PYTHONDONTWRITEBYTECODE, PATH, LANG and TERM, nor the
+    passthrough list, and never the [libfaketime] ones), with the variant's
+    variables, as the [env] of its [start] message instead and keeps its own
+    environment), starts a command agent inside the sandbox when
+    [config.sandbox] says so, drives the turns, tears down, collects the
+    sandbox's violations, derives and writes trace.jsonl and meta.json
+    (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
     failure, unreadable fixtures, an invalid pattern): no agent was started.

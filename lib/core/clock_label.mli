@@ -13,12 +13,15 @@ type reason =
   | Unreadable_executable
       (** The agent's executable was not found, not readable, not an ELF file
           after following a [#!] line one level, or it is not little-endian. *)
+  | Http_mode
+      (** An [http] agent is not started by bactrian, so there is no process to
+          inject [libfaketime] into and no executable to probe. *)
 
 type t = Enforced | Contract_only of reason
 
 val reason_name : reason -> string
 (** [macos], [faketime-off], [library-not-found], [invalid-sim-now],
-    [static-binary], [go-binary] or [unreadable-executable]. *)
+    [static-binary], [go-binary], [unreadable-executable] or [http-mode]. *)
 
 val of_kind : Elf_probe.kind -> t
 (** The label of a run that injected the library, given the kind of the agent's

@@ -1,0 +1,6 @@
+(test
+ (name test_agent_clock)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime elf_fixture unix alcotest)
+ (flags
+  (:standard -w -70)))

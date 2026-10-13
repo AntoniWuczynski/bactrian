@@ -192,6 +192,20 @@ let test_escapes_fail =
       (* Linux reports only relay failures, and these attempts make none. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
+(* The preload reaches the agent through bubblewrap and the forwarder, and
+   faking the forwarder's clock harms nothing (design §5 step 2). *)
+let test_clock =
+  sandboxed "sandbox-clock" @@ fun ctx ->
+  Clock_support.skip_unless
+    (Clock_support.usable "python3")
+    "python3 is not usable: skipped";
+  Clock_support.skip_unless
+    ((not Clock_support.linux) || Option.is_some Clock_support.library)
+    "libfaketimeMT.so.1 is not installed: skipped";
+  Clock_support.check_clock
+    (Clock_support.run_agent ~sandbox:(strict ctx) ctx
+       [ "python3"; "-I"; "-c"; Clock_support.python_agent ])
+
 (* SIGINT to a sandboxed replay: bactrian exits 130 and nothing of the agent
    survives. The agent's own pid is no help, since on Linux it lives in another
    pid namespace, so its processes are found by a marker in their command
@@ -444,5 +458,7 @@ let () =
             test_escapes_fail;
           Alcotest.test_case "SIGINT ends a sandboxed replay" `Slow
             test_interrupt;
+          Alcotest.test_case "the clock reaches the sandboxed agent" `Slow
+            test_clock;
         ] );
     ]

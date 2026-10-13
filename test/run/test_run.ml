@@ -38,7 +38,11 @@ let test_record =
   let str k = Yojson.Safe.Util.(to_string (member k meta)) in
   Alcotest.(check string) "meta run id" r.run_id (str "run_id");
   Alcotest.(check string) "meta outcome" "passed" (str "outcome");
-  Alcotest.(check string) "meta clock" "contract_only" (str "clock");
+  Alcotest.(check string)
+    "meta clock"
+    (Printf.sprintf {|{"mode":"contract_only","reason":"%s"}|}
+       (if Agent_clock.linux () then "faketime-off" else "macos"))
+    (Yojson.Safe.to_string (Yojson.Safe.Util.member "clock" meta));
   Alcotest.(check string)
     "meta sandbox" {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
     (Yojson.Safe.to_string (Yojson.Safe.Util.member "sandbox" meta));

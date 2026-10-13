@@ -543,10 +543,4 @@ let unenforced t =
              are not started and the agent is not told about them";
           ]
       | _ :: _ | [] -> []);
-      (if t.faketime then
-         [
-           "clock: faketime auto is not applied (SIM_NOW and TZ are a contract \
-            only)";
-         ]
-       else []);
     ]

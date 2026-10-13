@@ -98,6 +98,38 @@ let test_env_contract =
     "meta.json label" {|{"mode":"auto","applied":false,"reason":"http mode"}|}
     (Yojson.Safe.to_string (Yojson.Safe.Util.member "sandbox" meta))
 
+(* bactrian does not start an HTTP agent, so it cannot preload anything into it:
+   the clock is a contract only, and the [env] has SIM_NOW and TZ but no
+   libfaketime variables, whatever the experiment asks for. *)
+let test_clock =
+  with_ctx "http-clock" @@ fun ctx ->
+  with_agent ctx @@ fun agent ->
+  let r =
+    ok
+      (execute ctx
+         {
+           (http_config (H.url agent)) with
+           sim_now = Clock_support.sim_now;
+           faketime = true;
+         })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check string)
+    "meta.json label" {|{"mode":"contract_only","reason":"http-mode"}|}
+    (Clock_support.meta_clock r);
+  Alcotest.(check string)
+    "trace header" "contract_only"
+    (Clock_support.header_clock r);
+  let s = List.hd (H.sessions agent) in
+  Alcotest.(check string)
+    "SIM_NOW" Clock_support.sim_now
+    (List.assoc "SIM_NOW" s.env);
+  Alcotest.(check bool) "TZ" true (List.mem_assoc "TZ" s.env);
+  Alcotest.check strs "no libfaketime variable" []
+    (List.filter
+       (fun k -> k = "LD_PRELOAD" || String.starts_with ~prefix:"FAKETIME" k)
+       (List.map fst s.env))
+
 let test_concurrent_runs =
   with_ctx "http-concurrent" @@ fun ctx ->
   with_agent ~start_delay:0.3 ctx @@ fun agent ->
@@ -168,6 +200,7 @@ let () =
       ( "http mode",
         [
           Alcotest.test_case "the env contract" `Slow test_env_contract;
+          Alcotest.test_case "the clock is a contract" `Slow test_clock;
           Alcotest.test_case "concurrent runs" `Slow test_concurrent_runs;
           Alcotest.test_case "unreachable server" `Slow test_unreachable;
         ] );

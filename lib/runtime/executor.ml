@@ -498,6 +498,7 @@ let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
          List.map (mcp_config ~fs l) l.experiment.mcp
        else []);
     sandbox;
+    faketime = l.experiment.faketime;
   }
 
 (* One process runs an experiment at a time: two would both start the pending

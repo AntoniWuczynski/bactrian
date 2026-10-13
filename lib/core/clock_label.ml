@@ -6,6 +6,7 @@ type reason =
   | Static_binary
   | Go_binary
   | Unreadable_executable
+  | Http_mode
 
 type t = Enforced | Contract_only of reason
 
@@ -17,6 +18,7 @@ let reason_name = function
   | Static_binary -> "static-binary"
   | Go_binary -> "go-binary"
   | Unreadable_executable -> "unreadable-executable"
+  | Http_mode -> "http-mode"
 
 let of_kind : Elf_probe.kind -> t = function
   | Dynamic -> Enforced

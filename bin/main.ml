@@ -315,6 +315,7 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     total_timeout;
     mcp;
     sandbox;
+    faketime = true;
   }
 
 let positive name v =

@@ -226,6 +226,7 @@ let with_world ?(deny_read = []) name f =
           (match agent with
           | Command _ -> sandbox
           | Http _ -> Sandbox.http_mode `Auto);
+        faketime = true;
       }
     in
     ok
