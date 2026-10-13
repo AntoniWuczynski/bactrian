@@ -9,6 +9,11 @@ type located_error = {
   message : string;
 }
 
+let located_line e =
+  Printf.sprintf "%s:%d:%d: %s%s" e.file e.line e.column
+    (if String.equal e.path "" then "" else e.path ^ ": ")
+    e.message
+
 (* An error before the file name is known. *)
 type problem = { at : int * int; ppath : string; msg : string }
 

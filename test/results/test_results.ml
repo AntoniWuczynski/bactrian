@@ -248,7 +248,7 @@ let test_reads_what_the_run_wrote =
   match Results.load ~fs:ctx.fs ~root:ctx.root ~experiment_id:ctx.id with
   | Error (Results.Bad_run { file; _ }) ->
       Alcotest.(check string) "which file" "divergences.json" file
-  | Ok _ | Error (No_such_experiment _ | Bad_manifest _) ->
+  | Ok _ | Error (No_such_experiment _ | Bad_manifest _ | Bad_experiment _) ->
       Alcotest.fail "a malformed divergences.json is an error"
 
 let test_end_to_end =
@@ -295,7 +295,8 @@ let test_errors =
     "{";
   (match err "broken" with
   | Results.Bad_manifest _ -> ()
-  | No_such_experiment _ | Bad_run _ -> Alcotest.fail "expected Bad_manifest");
+  | No_such_experiment _ | Bad_run _ | Bad_experiment _ ->
+      Alcotest.fail "expected Bad_manifest");
   (* A malformed trace is an error naming the run. *)
   let l = load ctx in
   let id = Option.get (List.hd l.runs).run_id in
@@ -304,7 +305,37 @@ let test_errors =
   | Results.Bad_run { run_id; file; _ } ->
       Alcotest.(check (pair string string))
         "which" (id, "trace.jsonl") (run_id, file)
-  | No_such_experiment _ | Bad_manifest _ -> Alcotest.fail "expected Bad_run"
+  | No_such_experiment _ | Bad_manifest _ | Bad_experiment _ ->
+      Alcotest.fail "expected Bad_run"
+
+(* An experiment file with a mistake is an error at the mistake, not a
+   missing setting. A file that is gone is no file. *)
+let test_bad_experiment_file =
+  with_experiment "badexp" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json
+       ~compare:
+         {|, "compare": {"baseline": "a", "confidence": 1.5, "thresholds": {"pass_rate": 0.1}}|});
+  (match Results.load ~fs:ctx.fs ~root:ctx.root ~experiment_id:ctx.id with
+  | Error (Results.Bad_experiment [ e ]) ->
+      Alcotest.(check string) "located" "compare.confidence" e.path
+  | Error (Bad_experiment es) ->
+      Alcotest.failf "expected one error, got %d" (List.length es)
+  | Ok _ | Error (No_such_experiment _ | Bad_manifest _ | Bad_run _) ->
+      Alcotest.fail "expected Bad_experiment");
+  Eio.Path.unlink Eio.Path.(Eio.Stdenv.cwd ctx.env / ctx.dir / "exp.json");
+  let l = load ctx in
+  Alcotest.(check bool) "gone" true (Option.is_none l.experiment);
+  match
+    Results.settings l ~baseline:None ~candidate:None
+      ~fail_on_inconclusive:false
+  with
+  | Error m ->
+      Alcotest.(check bool)
+        ("says the file is gone: " ^ m)
+        true
+        (Re.execp (Re.compile (Re.str "is gone")) m)
+  | Ok _ -> Alcotest.fail "no baseline without the file"
 
 let () =
   Alcotest.run "results"
@@ -313,6 +344,8 @@ let () =
         [
           Alcotest.test_case "runs, checks and measures" `Slow test_load;
           Alcotest.test_case "errors" `Slow test_errors;
+          Alcotest.test_case "bad or missing experiment file" `Slow
+            test_bad_experiment_file;
           Alcotest.test_case "reads meta.json and divergences.json" `Slow
             test_reads_what_the_run_wrote;
         ] );

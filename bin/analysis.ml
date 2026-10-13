@@ -5,12 +5,13 @@ open Bactrian_runtime
 let ( let* ) = Result.bind
 
 let results_error ~json (e : Results.error) =
-  let code =
-    match e with
-    | No_such_experiment _ -> Output.exit_usage
-    | Bad_manifest _ | Bad_run _ -> Output.exit_internal
-  in
-  Cli.fail ~json code (Format.asprintf "%a" Results.pp_error e)
+  match e with
+  | Bad_experiment errors -> Cli.fail_located ~json errors
+  | No_such_experiment _ ->
+      Cli.fail ~json Output.exit_usage (Format.asprintf "%a" Results.pp_error e)
+  | Bad_manifest _ | Bad_run _ ->
+      Cli.fail ~json Output.exit_internal
+        (Format.asprintf "%a" Results.pp_error e)
 
 let analyse ~json ~baseline ~candidate ~fail_on_inconclusive ~experiment_id env
     =

@@ -98,7 +98,7 @@ Once an experiment has run, `compare` turns its runs into a verdict per metric, 
 bactrian compare <experiment-id> --baseline luna --candidate flash --gate
 ```
 
-The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required. Every gate metric needs a threshold under `thresholds`. None is ever assumed, so a missing one (including a missing experiment file or `compare` section) is a usage error, exit 64, naming the metric.
+The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required. A mistake in the file is reported at its line and column, exit 64. Every gate metric needs a threshold under `thresholds`. None is ever assumed, so a missing one (including a missing experiment file or `compare` section) is a usage error, exit 64, naming the metric.
 
 ```yaml
 compare:

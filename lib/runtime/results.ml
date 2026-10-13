@@ -11,12 +11,17 @@ type error =
   | No_such_experiment of string
   | Bad_manifest of string
   | Bad_run of { run_id : string; file : string; reason : string }
+  | Bad_experiment of Config_loader.located_error list
 
 let pp_error ppf = function
   | No_such_experiment id -> Format.fprintf ppf "no experiment %S" id
   | Bad_manifest m -> Format.fprintf ppf "%s" m
   | Bad_run { run_id; file; reason } ->
       Format.fprintf ppf "run %s: %s: %s" run_id file reason
+  | Bad_experiment errors ->
+      Format.pp_print_list
+        (fun ppf e -> Format.pp_print_string ppf (Config_loader.located_line e))
+        ppf errors
 
 let ( let* ) = Result.bind
 
@@ -181,8 +186,18 @@ let valid_id id =
     (String.equal id "" || String.equal id "." || String.equal id ".."
    || String.contains id '/' || String.contains id '\000')
 
+(* [None] when the file no longer exists. Any other problem with it is an
+   error, so that a mistake in the file is shown where it is rather than as a
+   missing setting. *)
 let load_experiment ~fs file =
-  Result.to_option (Config_loader.load_experiment Eio.Path.(fs / file))
+  let path = Eio.Path.(fs / file) in
+  match Eio.Path.kind ~follow:true path with
+  | `Not_found -> Ok None
+  | `Unknown | `Fifo | `Character_special | `Directory | `Block_device
+  | `Regular_file | `Symbolic_link | `Socket -> (
+      match Config_loader.load_experiment path with
+      | Ok e -> Ok (Some e)
+      | Error errors -> Error (Bad_experiment errors))
 
 let load ~fs ~root ~experiment_id =
   if not (valid_id experiment_id) then Error (No_such_experiment experiment_id)
@@ -196,7 +211,7 @@ let load ~fs ~root ~experiment_id =
       | Error None -> Error (No_such_experiment experiment_id)
       | Error (Some m) -> Error (Bad_manifest m)
     in
-    let experiment = load_experiment ~fs manifest.experiment_file in
+    let* experiment = load_experiment ~fs manifest.experiment_file in
     let* runs =
       List.fold_left
         (fun acc r ->
@@ -244,17 +259,28 @@ let thresholds (c : Experiment.compare) =
   in
   Ok (gate, List.filter (fun (m, _) -> not (List.mem_assoc m gate)) declared)
 
-let choose ~what ~flag ~from_experiment =
+(* Why the experiment file cannot supply a setting, when it cannot. *)
+let unavailable (l : loaded) =
+  match l.experiment with
+  | None ->
+      Printf.sprintf "the experiment file %s that the manifest records is gone"
+        l.manifest.experiment_file
+  | Some _ ->
+      Printf.sprintf "the experiment file %s has no compare section"
+        l.manifest.experiment_file
+
+let choose l ~what ~flag ~from_experiment =
   match (flag, from_experiment) with
   | Some v, _ | None, Some v -> Ok v
-  | None, None -> Error (Printf.sprintf "--%s is required" what)
+  | None, None ->
+      Error (Printf.sprintf "--%s is required: %s" what (unavailable l))
 
 let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
   let compare =
     Option.bind l.experiment (fun (e : Experiment.t) -> e.compare)
   in
   let* baseline =
-    choose ~what:"baseline" ~flag:baseline
+    choose l ~what:"baseline" ~flag:baseline
       ~from_experiment:
         (Option.map (fun (c : Experiment.compare) -> c.baseline) compare)
   in
@@ -267,7 +293,7 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
     | None -> []
   in
   let* candidate =
-    choose ~what:"candidate" ~flag:candidate
+    choose l ~what:"candidate" ~flag:candidate
       ~from_experiment:(match others with [ only ] -> Some only | _ -> None)
   in
   let variants = List.map (fun (r : D.run) -> r.variant) l.runs in
@@ -291,9 +317,10 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
         Ok (c.population, c.confidence, gate, report_metrics)
     | None ->
         Error
-          "gate metric pass_rate has no threshold: declare \
-           compare.thresholds.pass_rate in the experiment file (the file the \
-           manifest records is gone or has no compare section)"
+          (Printf.sprintf
+             "gate metric pass_rate has no threshold, because %s, and a \
+              threshold is never assumed"
+             (unavailable l))
   in
   Ok
     {

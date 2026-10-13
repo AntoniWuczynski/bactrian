@@ -28,11 +28,6 @@ let fail ~json code message =
   else prerr_endline ("bactrian: " ^ message);
   code
 
-let located_line (e : Config_loader.located_error) =
-  Printf.sprintf "%s:%d:%d: %s%s" e.file e.line e.column
-    (if String.equal e.path "" then "" else e.path ^ ": ")
-    e.message
-
 let located_json (e : Config_loader.located_error) =
   `Assoc
     [
@@ -53,7 +48,7 @@ let fail_located ~json errors =
               ("errors", `List (List.map located_json errors));
               ("exit", `Int Output.exit_usage);
             ]))
-  else List.iter (fun e -> prerr_endline (located_line e)) errors;
+  else List.iter (fun e -> prerr_endline (Config_loader.located_line e)) errors;
   Output.exit_usage
 
 let json =

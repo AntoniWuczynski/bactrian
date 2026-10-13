@@ -6,10 +6,10 @@ to be named.
   $ ID=20261013T090000Z-0badc0de
 
   $ bactrian compare $ID
-  bactrian: --baseline is required
+  bactrian: --baseline is required: the experiment file demo.yaml that the manifest records is gone
   [64]
   $ bactrian compare $ID --baseline a
-  bactrian: --candidate is required
+  bactrian: --candidate is required: the experiment file demo.yaml that the manifest records is gone
   [64]
   $ bactrian compare $ID --baseline a --candidate a
   bactrian: the baseline and the candidate are the same variant
@@ -18,13 +18,13 @@ to be named.
   bactrian: no runs of variant "c" in this experiment
   [64]
   $ bactrian compare $ID --baseline a --candidate b
-  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  bactrian: gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed
   [64]
   $ bactrian compare $ID --baseline a --candidate b --json
-  {"error":"gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)","exit":64}
+  {"error":"gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed","exit":64}
   [64]
   $ bactrian report $ID --baseline a --candidate b -o out/report.html
-  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  bactrian: gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed
   [64]
   $ bactrian compare nope --baseline a --candidate b
   bactrian: no experiment "nope"
@@ -40,6 +40,15 @@ the message names the metric.
   $ grep -v thresholds demo.yaml > nothr.yaml && mv nothr.yaml demo.yaml
   $ bactrian compare $ID
   bactrian: gate metric pass_rate has no entry in compare.thresholds
+  [64]
+
+A mistake in the experiment file is reported where it is, not as a missing
+setting.
+
+  $ ../snapshot.exe experiment .
+  $ printf '  confidence: 1.5\n' >> demo.yaml
+  $ bactrian compare $ID
+  demo.yaml:10:3: compare.confidence: must be strictly between 0 and 1, found 1.5
   [64]
   $ ../snapshot.exe experiment .
 
@@ -101,5 +110,5 @@ The report is one self-contained file.
   [1]
   $ rm demo.yaml
   $ bactrian report $ID -o out/report.html
-  bactrian: --baseline is required
+  bactrian: --baseline is required: the experiment file demo.yaml that the manifest records is gone
   [64]

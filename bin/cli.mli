@@ -10,9 +10,6 @@ val fail : json:bool -> int -> string -> int
 (** Prints the message, as [{"error": …, "exit": code}] under [json] or as
     [bactrian: message] on stderr otherwise, and returns the code. *)
 
-val located_line : Bactrian_runtime.Config_loader.located_error -> string
-(** [file:line:column: path: message]. *)
-
 val fail_located :
   json:bool -> Bactrian_runtime.Config_loader.located_error list -> int
 (** Every configuration error with its location, then {!Output.exit_usage}. *)
