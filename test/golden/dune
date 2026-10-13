@@ -1,0 +1,6 @@
+(test
+ (name test_golden)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime eio_main re yojson alcotest)
+ (flags
+  (:standard -w -70)))

@@ -136,6 +136,88 @@ let run_command ~json ~live (config : Run.config) =
                          else Output.render_text result);
                       Output.exit_code result.outcome))))
 
+(* Experiments *)
+
+let located_line (e : Config_loader.located_error) =
+  Printf.sprintf "%s:%d:%d: %s%s" e.file e.line e.column
+    (if String.equal e.path "" then "" else e.path ^ ": ")
+    e.message
+
+let located_json (e : Config_loader.located_error) =
+  `Assoc
+    [
+      ("file", `String e.file);
+      ("line", `Int e.line);
+      ("column", `Int e.column);
+      ("path", `String e.path);
+      ("message", `String e.message);
+    ]
+
+(* Configuration errors, all of them, with their locations. *)
+let fail_located ~json errors =
+  if json then
+    print_endline
+      (Yojson.Safe.to_string
+         (`Assoc
+            [
+              ("errors", `List (List.map located_json errors));
+              ("exit", `Int Output.exit_usage);
+            ]))
+  else List.iter (fun e -> prerr_endline (located_line e)) errors;
+  Output.exit_usage
+
+let experiment_command ~json ~experiment ~resume =
+  Mirage_crypto_rng_unix.use_default ();
+  Eio_main.run @@ fun env ->
+  let announced = ref None in
+  match
+    Interrupt.run (fun () ->
+        Executor.run_experiment ~env ~experiment_file:experiment ~resume
+          ~announce:(fun id ->
+            announced := Some id;
+            prerr_endline ("bactrian: experiment " ^ id))
+          ())
+  with
+  | Error signal ->
+      prerr_endline
+        (Printf.sprintf "bactrian: interrupted by signal %d%s" signal
+           (match !announced with
+           | Some id ->
+               Printf.sprintf ", resume with: bactrian run %s --resume %s"
+                 experiment id
+           | None -> ""));
+      Interrupt.exit_status
+  | Ok (Error (Configuration errors)) -> fail_located ~json errors
+  | Ok (Error (Usage m)) -> fail ~json Output.exit_usage m
+  | Ok (Error (Environment m)) -> fail ~json Output.exit_environment m
+  | Ok (Ok summary) ->
+      print_string
+        (if json then Output.render_summary_json summary ^ "\n"
+         else
+           Output.render_summary_text ~colour:(Lazy.force Output.colour) summary);
+      Output.summary_exit_code summary
+
+let check_command scenarios =
+  Eio_main.run @@ fun env ->
+  let results =
+    List.map (fun scenario_file -> Golden.check ~env ~scenario_file) scenarios
+  in
+  match List.concat_map (function Ok _ -> [] | Error e -> e) results with
+  | _ :: _ as errors -> fail_located ~json:false errors
+  | [] ->
+      let reports = List.filter_map Result.to_option results in
+      List.iter
+        (fun r ->
+          print_string
+            (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
+        reports;
+      if
+        List.for_all
+          (fun (r : Golden.report) -> List.is_empty r.offenders)
+          reports
+      then Output.exit_ok
+      else Output.exit_failed
+
 (* Arguments *)
 
 let scenario =
@@ -213,6 +295,8 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     timezone;
     replay;
     env_passthrough;
+    variant_env = [];
+    checks = None;
     turn_timeout;
     total_timeout;
   }
@@ -369,13 +453,74 @@ let replay_cmd =
         $ mode $ threshold $ allow_reorder $ timing $ cwd $ scenario $ variant
         $ sim_now $ timezone $ env_passthrough $ turn_timeout $ total_timeout))
 
+let run_cmd =
+  let experiment =
+    Arg.(
+      required
+      & pos 0 (some string) None
+      & info [] ~docv:"EXPERIMENT" ~doc:"The experiment file (YAML or JSON).")
+  in
+  let resume =
+    Arg.(
+      value
+      & opt (some string) None
+      & info [ "resume" ] ~docv:"ID"
+          ~doc:
+            "Continue the experiment $(docv) (see ./.bactrian/experiments): \
+             runs that finished are not repeated.")
+  in
+  let run json experiment resume =
+    experiment_command ~json ~experiment ~resume
+  in
+  let info =
+    Cmd.info "run" ~exits
+      ~doc:"Run an experiment: its scenarios, variants and repeats"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Runs every scenario of $(i,EXPERIMENT) with every variant, \
+             $(b,repeats) times, at most $(b,concurrency) at a time, in a \
+             seeded blocked and interleaved order. Each run is judged by its \
+             scenario's assertions and checkers. Spend is capped per provider \
+             by $(b,caps_usd). Progress is kept in \
+             ./.bactrian/experiments/ID/manifest.json. Interrupt with Ctrl-C \
+             and continue with $(b,--resume). The exit status is 70 if a run \
+             errored, else 1 if a run failed, else 2 if a run did not happen, \
+             else 0.";
+        ]
+  in
+  Cmd.v info Term.(const run $ json $ experiment $ resume)
+
+let check_cmd =
+  let scenarios =
+    Arg.(
+      non_empty & pos_all string []
+      & info [] ~docv:"SCENARIO" ~doc:"A scenario file (YAML or JSON).")
+  in
+  let info =
+    Cmd.info "check" ~exits
+      ~doc:"Check scenarios' assertions and checkers against golden traces"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Evaluates each $(i,SCENARIO)'s assertions and checkers on its \
+             golden traces. Every $(b,golden.pass) trace must pass them all \
+             and every $(b,golden.fail) trace must fail at least one. Exits 1 \
+             and lists the offending traces otherwise, and 64 on a \
+             configuration error, printed as file:line:column.";
+        ]
+  in
+  Cmd.v info Term.(const check_command $ scenarios)
+
 let cmd =
   let info =
     Cmd.info "bactrian" ~version:Bactrian_core.Version.current ~exits
       ~doc:"Record, replay and statistically compare AI agent runs"
   in
   let default = Term.(ret (const (`Help (`Auto, None)))) in
-  Cmd.group ~default info [ record_cmd; replay_cmd ]
+  Cmd.group ~default info [ record_cmd; replay_cmd; run_cmd; check_cmd ]
 
 let () =
   let code =

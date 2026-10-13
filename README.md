@@ -6,7 +6,7 @@ The name comes from the two-humped camel. Most of what bactrian does is compare 
 
 ## Status
 
-Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Live comparison, statistics, MCP interception, the sandbox and the MCP server are also still to come.
+Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Comparing variants with statistics, MCP interception, the sandbox and the MCP server are also still to come.
 
 ## Recording and replaying an agent
 
@@ -26,6 +26,53 @@ bactrian replay <run-id> --mode until-divergence -- uv run --project examples/ag
 ```
 
 Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json` and the agent's stderr. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
+
+## Experiments
+
+A scenario says what to ask the agent and how to judge the answer. An experiment runs scenarios against variants of the agent, several times each. Both are YAML (JSON also works) and unknown fields are rejected.
+
+```yaml
+# scenarios/schedule.yaml
+version: 1
+id: schedule-meeting
+turns:
+  - user: "You promised Amy a meeting, can you set it up?"
+assertions:
+  - tool_sequence: { mode: contains, tools: [calendar_read, calendar_create] }
+  - output: { turn: last, regex: "(?i)wednesday" }
+  - max_steps: 12
+checkers:
+  - command: ["python3", "checks/no_double_booking.py"]
+golden:
+  pass: [golden/ok.trace.jsonl]
+  fail: [golden/double-booked.trace.jsonl]
+```
+
+```yaml
+# experiment.yaml
+version: 1
+name: luna-vs-flash
+agent:
+  protocol: command
+  command: ["node", "dist/adapter.js"]
+scenarios: ["scenarios/*.yaml"]
+variants:
+  luna: { env: { AGENT_MODEL: gpt-6-luna } }
+  flash: { env: { AGENT_MODEL: gemini-3.8-flash } }
+repeats: 20
+concurrency: 4
+caps_usd: { openai: 10, gemini: 20 }
+seed: 1
+```
+
+Check the assertions and checkers against the scenario's golden traces before trusting them (every `pass` trace must pass and every `fail` trace must fail), then run the experiment:
+
+```sh
+bactrian check scenarios/*.yaml
+bactrian run experiment.yaml
+```
+
+`check` exits 1 and lists the offending traces otherwise, and both commands exit 64 on a configuration error, printing every mistake as `file:line:column`. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`: runs that finished are not repeated. Each run directory also gets a `verdicts.json` with the result of every assertion and checker. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls real providers, so for now it needs HTTPS support that is not built yet.
 
 ## Building from source
 

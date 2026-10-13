@@ -74,3 +74,75 @@ Replaying a run that does not exist is a configuration error.
   $ bactrian replay no-such-run -- true
   bactrian: no cassette for run "no-such-run"
   [64]
+
+The run and check commands document the same statuses.
+
+  $ bactrian run --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -E '^ +[0-9]+ +(on|when)' | cut -c1-30
+         0   on success: the run
+         1   when the run failed
+         2   when the run did no
+         64  on a usage or confi
+         69  when the environmen
+         70  on an internal erro
+         130 when interrupted by
+  $ bactrian check --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -cE '^ +[0-9]+ +(on|when)'
+  7
+
+Missing arguments are usage errors.
+
+  $ bactrian run 2> /dev/null
+  [64]
+  $ bactrian check 2> /dev/null
+  [64]
+
+An experiment with several mistakes reports all of them with file, line, column
+and path, and exits 64.
+
+  $ cat > exp.yaml <<'YAML'
+  > version: 1
+  > name: demo
+  > agent: { protocol: command, command: ["true"] }
+  > scenarios: ["scenarios/*.yaml"]
+  > variants:
+  >   a: { env: {} }
+  > repeats: 0
+  > surprise: 1
+  > YAML
+  $ bactrian run exp.yaml
+  exp.yaml:7:1: repeats: must be at least 1, found 0
+  exp.yaml:8:1: surprise: unknown field
+  [64]
+  $ bactrian run exp.yaml --json
+  {"errors":[{"file":"exp.yaml","line":7,"column":1,"path":"repeats","message":"must be at least 1, found 0"},{"file":"exp.yaml","line":8,"column":1,"path":"surprise","message":"unknown field"}],"exit":64}
+  [64]
+
+A glob that matches nothing is a configuration error too.
+
+  $ sed -e '/^repeats/d' -e '/^surprise/d' exp.yaml > nomatch.yaml
+  $ bactrian run nomatch.yaml
+  nomatch.yaml:4:13: scenarios[0]: glob "scenarios/*.yaml" matches no files
+  [64]
+
+An experiment with scenarios still needs a spend cap and a key, and an unknown
+experiment cannot be resumed.
+
+  $ mkdir scenarios
+  $ cat > scenarios/s.yaml <<'YAML'
+  > version: 1
+  > id: s
+  > turns: [{ user: hi }]
+  > YAML
+  $ bactrian run nomatch.yaml
+  bactrian: no provider has a spend cap above 0: set caps_usd in the experiment
+  [69]
+  $ sed 's/^repeats.*//' exp.yaml | sed -e '/^surprise/d' > capped.yaml
+  $ echo 'caps_usd: { openai: 1 }' >> capped.yaml
+  $ bactrian run capped.yaml
+  bactrian: openai has a spend cap but OPENAI_API_KEY is not set
+  [69]
+  $ OPENAI_API_KEY=k bactrian run capped.yaml
+  bactrian: this build has no TLS support (bactrian.tls), so it cannot call providers over HTTPS
+  [69]
+  $ OPENAI_API_KEY=k bactrian run capped.yaml --resume nope
+  bactrian: no experiment "nope"
+  [64]

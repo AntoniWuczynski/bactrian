@@ -8,4 +8,5 @@
   cmdliner
   eio_main
   mirage-crypto-rng.unix
+  unix
   yojson))
