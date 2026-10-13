@@ -27,20 +27,9 @@ let scrubbed_env entries =
     (run_id entries)
   @ inherited
 
-(* The leader's pid is also the group id; ESRCH means the group is empty. *)
-let signal_group pgid signal =
-  match Unix.kill (-pgid) signal with
-  | () -> true
-  | exception Unix.Unix_error (Unix.ESRCH, _, _) -> false
-
 let kill_group clock pgid =
-  ignore (signal_group pgid Sys.sigkill : bool);
-  let rec poll tries =
-    if tries > 0 && signal_group pgid 0 then (
-      Eio.Time.sleep clock 0.02;
-      poll (tries - 1))
-  in
-  poll 250
+  ignore (Process_group.signal pgid Sys.sigkill : bool);
+  ignore (Process_group.wait_gone ~clock ~timeout:5. pgid : bool)
 
 let describe_status = function
   | `Exited code -> Printf.sprintf "exited with status %d" code

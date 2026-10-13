@@ -91,28 +91,6 @@ let recv t =
   | Error (Spawn_failed _ | Write_failed _ | Agent_exited _) | Ok _ -> ());
   result
 
-(* The leader's pid is also the group id. [Unix.kill] with a negative pid signals
-   the whole group; ESRCH means the group is already empty. macOS reports EPERM
-   instead when only zombies are left, and the agent runs as our own user, so
-   EPERM cannot mean a foreign process here. *)
-let signal_group pgid signal =
-  match Unix.kill (-pgid) signal with
-  | () -> true
-  | exception Unix.Unix_error ((Unix.ESRCH | Unix.EPERM), _, _) -> false
-
-let group_gone pgid = not (signal_group pgid 0)
-
-let wait_group_gone t pgid seconds =
-  let rec poll () =
-    if group_gone pgid then ()
-    else (
-      Eio.Time.sleep t.clock 0.02;
-      poll ())
-  in
-  match Eio.Time.with_timeout t.clock seconds (fun () -> Ok (poll ())) with
-  | Ok () -> true
-  | Error `Timeout -> false
-
 let shutdown t =
   Eio.Cancel.protect @@ fun () ->
   Eio.Resource.close t.stdin;
@@ -122,20 +100,22 @@ let shutdown t =
     match status_within t exit_grace with
     | Some status -> status
     | None -> (
-        ignore (signal_group pgid Sys.sigterm : bool);
+        ignore (Process_group.signal pgid Sys.sigterm : bool);
         match status_within t t.config.kill_grace with
         | Some status -> status
         | None ->
-            ignore (signal_group pgid Sys.sigkill : bool);
+            ignore (Process_group.signal pgid Sys.sigkill : bool);
             Eio.Process.await t.proc)
   in
   (* The leader is gone; children may remain. *)
   if
-    signal_group pgid Sys.sigterm
-    && not (wait_group_gone t pgid t.config.kill_grace)
+    Process_group.signal pgid Sys.sigterm
+    && not
+         (Process_group.wait_gone ~clock:t.clock ~timeout:t.config.kill_grace
+            pgid)
   then begin
-    ignore (signal_group pgid Sys.sigkill : bool);
-    ignore (wait_group_gone t pgid 5. : bool)
+    ignore (Process_group.signal pgid Sys.sigkill : bool);
+    ignore (Process_group.wait_gone ~clock:t.clock ~timeout:5. pgid : bool)
   end;
   status
 

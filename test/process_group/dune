@@ -1,0 +1,6 @@
+(test
+ (name test_process_group)
+ (package bactrian)
+ (libraries bactrian.runtime eio_main unix alcotest)
+ (flags
+  (:standard -w -70)))
