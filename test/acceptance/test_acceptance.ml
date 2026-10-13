@@ -526,7 +526,8 @@ let escapes agent () =
   Out_channel.with_open_bin secret_file (fun oc -> output_string oc "s3cret");
   let project_file = Filename.concat dir "escaped" in
   let r =
-    execute ~argv:(agent.argv ())
+    execute
+      ~agent:(Command (agent.argv ()))
       ~variant_env:
         [
           ("REAL_HOME_FILE", home_file);
