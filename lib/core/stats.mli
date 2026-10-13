@@ -8,9 +8,8 @@ val wilson : successes:int -> trials:int -> confidence:float -> interval
     [proportion_confint(method="wilson")]. Bounds are clamped to [[0, 1]], and
     are exactly [0.] at [successes = 0] and [1.] at [successes = trials].
 
-    @raise Invalid_argument
-      if [trials <= 0], [successes] is outside [[0, trials]] or [confidence] is
-      outside [(0, 1)]. *)
+    Raises [Invalid_argument] if [trials <= 0], [successes] is outside
+    [[0, trials]] or [confidence] is outside [(0, 1)]. *)
 
 val newcombe_diff :
   s1:int -> n1:int -> s2:int -> n2:int -> confidence:float -> interval
@@ -20,38 +19,38 @@ val newcombe_diff :
     [= d + sqrt ((u2 - p2)^2 + (p1 - l1)^2)] (Newcombe 1998, Statistics in
     Medicine 17:873-890, method 10).
 
-    @raise Invalid_argument on the same conditions as {!wilson}, per arm. *)
+    Raises [Invalid_argument] on the same conditions as {!wilson}, per arm. *)
 
 val pass_hat_k : successes:int -> trials:int -> k:int -> float
 (** Unbiased estimator C(c,k)/C(n,k) of the probability that k independent
     attempts all succeed. Computed as the product of [(c - i) / (n - i)] for
     [i < k], so it never overflows. [0.0] when [successes < k].
 
-    @raise Invalid_argument
-      unless [0 <= successes <= trials] and [1 <= k <= trials]. *)
+    Raises [Invalid_argument] unless [0 <= successes <= trials] and
+    [1 <= k <= trials]. *)
 
 val median : float array -> float
 (** [quantile xs 0.5].
 
-    @raise Invalid_argument if [xs] is empty. *)
+    Raises [Invalid_argument] if [xs] is empty. *)
 
 val quantile : float array -> float -> float
 (** Linear interpolation (type 7). The Hyndman-Fan type 7 quantile, as
     [numpy.quantile(method="linear")], of a sorted copy of the array. When an
     interpolation endpoint is infinite the infinite endpoint is returned.
 
-    @raise Invalid_argument
-      if the array is empty, contains NaN, or [q] is outside [[0, 1]]. *)
+    Raises [Invalid_argument] if the array is empty, contains NaN, or [q] is
+    outside [[0, 1]]. *)
 
 val normal_quantile : float -> float
 (** Inverse standard normal CDF (Wichura's AS241, PPND16, relative accuracy
     about 1e-16). [normal_quantile 0. = neg_infinity],
     [normal_quantile 1. = infinity].
 
-    @raise Invalid_argument if [p] is NaN or outside [[0, 1]]. *)
+    Raises [Invalid_argument] if [p] is NaN or outside [[0, 1]]. *)
 
 val bonferroni_level : confidence:float -> family:int -> float
 (** [1 - (1 - confidence) / family], the per-interval level that keeps the
     family-wise confidence at least [confidence].
 
-    @raise Invalid_argument if [family < 1]. *)
+    Raises [Invalid_argument] if [family < 1]. *)

@@ -56,7 +56,6 @@ val log_ratio_of_medians :
     negates it exactly. A resample whose median is zero gives an infinite
     replicate, so an interval bound can be infinite.
 
-    @raise Invalid_argument
-      if either array is empty or holds a negative value. [None] also when every
-      replicate is undefined (both resampled medians zero; such replicates are
-      dropped). *)
+    Raises [Invalid_argument] if either array is empty or holds a negative
+    value. [None] also when every replicate is undefined (both resampled medians
+    zero; such replicates are dropped). *)

@@ -1,10 +1,10 @@
 (** Power simulation for [bactrian plan].
 
     The simulator runs the exact decision rule of {!Compare}: it draws pass/fail
-    outcomes for both arms, hands them to {!Compare.run} and records whether the
-    pass-rate verdict is the correct one. It is pure and deterministic: every
-    random draw comes from a [Random.State.t] derived from [seed], the repeat
-    count and the simulation index, never from the global generator.
+    outcomes for both arms, hands them to {!Compare.val-run} and records whether
+    the pass-rate verdict is the correct one. It is pure and deterministic:
+    every random draw comes from a [Random.State.t] derived from [seed], the
+    repeat count and the simulation index, never from the global generator.
 
     Inside the simulation the bootstrap uses 400 resamples rather than the
     10,000 of a real comparison, to keep a planning call fast. The Monte Carlo
@@ -44,10 +44,9 @@ val plan : assumption -> answer
     [Improvement] when [true_effect <= -threshold] and [No_change] otherwise.
     The repeat count is searched by doubling, then bisection.
 
-    @raise Invalid_argument
-      if [baseline_rates] is empty, [max_repeats] or [simulations] is below 1,
-      or {!Compare.run} rejects the simulated input (for example [`Scenarios]
-      with fewer than 10 scenarios). *)
+    Raises [Invalid_argument] if [baseline_rates] is empty, [max_repeats] or
+    [simulations] is below 1, or {!Compare.val-run} rejects the simulated input
+    (for example [`Scenarios] with fewer than 10 scenarios). *)
 
 val power_at : assumption -> repeats:int -> float
 (** Simulated probability of the correct verdict at one repeat count ([power]
