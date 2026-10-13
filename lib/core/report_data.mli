@@ -114,7 +114,14 @@ type scenario_row = {
 type arm_row = { scenario : string; variant : string; stats : Arm_stats.t }
 (** One scenario's runs in one compared variant. *)
 
-type summary = { variant : string; cost : dist option; latency : dist option }
+type summary = {
+  variant : string;
+  cost : dist option;
+  latency : dist option;
+  tokens : dist option;
+}
+(** Over the variant's finished runs in the scenarios both arms finished (not
+    the [dropped] ones), the runs the verdicts are about. *)
 type signature_count = { signature : string list; count : int }
 
 type behaviour = {
@@ -188,5 +195,5 @@ val to_json : t -> Yojson.Safe.t
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution
     order: the header, verdicts, per-scenario results, the statistics of each
-    scenario and variant, and cost and latency summaries. What
+    scenario and variant, and cost, latency and tokens summaries. What
     [bactrian compare --json] prints. *)

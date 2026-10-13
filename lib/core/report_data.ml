@@ -167,7 +167,14 @@ type scenario_row = {
 }
 
 type arm_row = { scenario : string; variant : string; stats : Arm_stats.t }
-type summary = { variant : string; cost : dist option; latency : dist option }
+
+type summary = {
+  variant : string;
+  cost : dist option;
+  latency : dist option;
+  tokens : dist option;
+}
+
 type signature_count = { signature : string list; count : int }
 
 type behaviour = {
@@ -236,12 +243,22 @@ let finished (r : run) =
   | Passed | Failed | Diverged -> true
   | Errored | Not_run | Pending | Interrupted -> false
 
-let summary runs variant =
-  let mine = List.filter finished (of_variant variant runs) in
+let summary ~dropped runs variant =
+  let mine =
+    List.filter
+      (fun (r : run) ->
+        finished r && not (List.exists (String.equal r.scenario) dropped))
+      (of_variant variant runs)
+  in
   {
     variant;
     cost = dist (List.filter_map (fun (r : run) -> r.cost) mine);
     latency = dist (List.filter_map (fun (r : run) -> r.latency_ms) mine);
+    tokens =
+      dist
+        (List.filter_map
+           (fun (r : run) -> Option.map float_of_int r.tokens)
+           mine);
   }
 
 let metric_row (settings : Compare.input) (m : Compare.metric_result) =
@@ -464,7 +481,7 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
     arms = arms settings ~level:arms_level runs scenario_names;
     arms_level;
-    summaries = List.map (summary runs) compared;
+    summaries = List.map (summary ~dropped:result.dropped runs) compared;
     behaviours = List.map (behaviour settings runs) scenario_names;
     failures =
       List.filter
@@ -718,6 +735,7 @@ let summary_fields (t : t) =
                  ("variant", `String s.variant);
                  ("cost_usd", dist_json s.cost);
                  ("latency_ms", dist_json s.latency);
+                 ("tokens", dist_json s.tokens);
                ])
            t.summaries) );
   ]

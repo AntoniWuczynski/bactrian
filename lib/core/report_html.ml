@@ -412,15 +412,18 @@ let measure_block (d : D.t) ~id ~title ~noun ~format
       ]
 
 let measures_section (d : D.t) =
-  section "cost-latency" "Cost and latency"
+  section "cost-latency" "Cost, latency and tokens"
     (para ~cls:[ "note" ]
-       "Over finished runs. Latency is the time spent in model calls. The \
+       "Over the finished runs of the scenarios both arms finished, the runs \
+        the verdicts are about. Latency is the time spent in model calls. The \
         verdict table compares scenario-weighted means of cost and tokens and \
         per-scenario medians of latency, with bootstrap intervals."
     :: (measure_block d ~id:"cost" ~title:"Cost per run" ~noun:"cost"
           ~format:F.usd (fun s -> s.cost)
        @ measure_block d ~id:"latency" ~title:"Latency per run" ~noun:"latency"
-           ~format:F.ms (fun s -> s.latency)))
+           ~format:F.ms (fun s -> s.latency)
+       @ measure_block d ~id:"tokens" ~title:"Tokens per run"
+           ~noun:"token count" ~format:tokens_text (fun s -> s.tokens)))
 
 (* Behaviour *)
 

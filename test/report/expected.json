@@ -371,12 +371,14 @@
     {
       "variant": "a",
       "cost_usd": { "n": 30, "median": 0.011, "p90": 0.012 },
-      "latency_ms": { "n": 30, "median": 655.0, "p90": 691.0 }
+      "latency_ms": { "n": 30, "median": 655.0, "p90": 691.0 },
+      "tokens": { "n": 30, "median": 210.0, "p90": 210.0 }
     },
     {
       "variant": "b",
       "cost_usd": { "n": 28, "median": 0.012, "p90": 0.0213 },
-      "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 }
+      "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 },
+      "tokens": { "n": 28, "median": 410.0, "p90": 410.0 }
     }
   ],
   "behaviours": [

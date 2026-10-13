@@ -251,6 +251,35 @@ let test_zero_width () =
         "cost not" true
         (Option.is_none (Report_format.zero_width_text (row "cost")))
 
+let test_summaries_compared_scenarios () =
+  (* The candidate errors on every run of search, so search is dropped from
+     the comparison, and from the summaries too. *)
+  let runs =
+    List.map
+      (fun (r : R.run) ->
+        if r.variant = "b" && r.scenario = "search" then
+          { r with status = Errored }
+        else r)
+      Fixture.runs
+  in
+  let settings =
+    { (Fixture.settings ()) with runs = List.map R.compare_run runs }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result runs
+      in
+      Alcotest.(check (list string)) "dropped" [ "search" ] t.dropped;
+      let a = List.hd t.summaries in
+      Alcotest.(check (option int))
+        "baseline cost over book and refund only" (Some 20)
+        (Option.map (fun (x : R.dist) -> x.n) a.cost);
+      Alcotest.(check (option int))
+        "tokens too" (Some 20)
+        (Option.map (fun (x : R.dist) -> x.n) a.tokens)
+
 let test_arms () =
   Alcotest.(check (list (pair string string)))
     "every scenario, baseline then candidate"
@@ -449,6 +478,8 @@ let () =
           Alcotest.test_case "per scenario and variant" `Quick test_arms;
           Alcotest.test_case "undefined metric" `Quick test_undefined;
           Alcotest.test_case "zero-width interval" `Quick test_zero_width;
+          Alcotest.test_case "summaries over compared scenarios" `Quick
+            test_summaries_compared_scenarios;
         ] );
       ( "json",
         [

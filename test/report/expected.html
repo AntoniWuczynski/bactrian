@@ -551,8 +551,8 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 </div>
 </section>
 <section id="cost-latency">
-<h2>Cost and latency</h2>
-<p class="note">Over finished runs. Latency is the time spent in model calls. The verdict table compares scenario-weighted means of cost and tokens and per-scenario medians of latency, with bootstrap intervals.</p>
+<h2>Cost, latency and tokens</h2>
+<p class="note">Over the finished runs of the scenarios both arms finished, the runs the verdicts are about. Latency is the time spent in model calls. The verdict table compares scenario-weighted means of cost and tokens and per-scenario medians of latency, with bootstrap intervals.</p>
 <h3 id="cost">Cost per run</h3>
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 88" class="chart" role="img" aria-label="Cost per run">
@@ -660,6 +660,61 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 <td class="num">28</td>
 <td class="num">955 ms</td>
 <td class="num">990 ms</td>
+</tr>
+</table>
+</div>
+<h3 id="tokens">Tokens per run</h3>
+<figure>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 88" class="chart" role="img" aria-label="Tokens per run">
+<title>Tokens per run</title>
+<desc>a (baseline) median 210, 90th percentile 210; b (candidate) median 410, 90th percentile 410</desc>
+<g class="row">
+<title>a (baseline): median 210, 90th percentile 210</title>
+<text class="lbl" x="16" y="15" text-anchor="start">a (baseline)</text>
+<rect class="bar base" x="16" y="22" width="157.756" height="12">
+</rect>
+<line class="whisker" x1="173.756" y1="28" x2="173.756" y2="28">
+</line>
+<line class="whisker" x1="173.756" y1="23" x2="173.756" y2="33">
+</line>
+<text class="val" x="179.756" y="32" text-anchor="start">210</text>
+</g>
+<g class="row">
+<title>b (candidate): median 410, 90th percentile 410</title>
+<text class="lbl" x="16" y="59" text-anchor="start">b (candidate)</text>
+<rect class="bar cand" x="16" y="66" width="308" height="12">
+</rect>
+<line class="whisker" x1="324" y1="72" x2="324" y2="72">
+</line>
+<line class="whisker" x1="324" y1="67" x2="324" y2="77">
+</line>
+<text class="val" x="330" y="76" text-anchor="start">410</text>
+</g>
+</svg>
+<figcaption>Bar: median. Whisker: 90th percentile.</figcaption>
+</figure>
+<div class="scroll">
+<table>
+<caption>Tokens per run as a table</caption>
+<thead>
+<tr>
+<th scope="col">Variant</th>
+<th scope="col">Runs</th>
+<th scope="col">Median</th>
+<th scope="col">90th percentile</th>
+</tr>
+</thead>
+<tr>
+<th scope="row">a (baseline)</th>
+<td class="num">30</td>
+<td class="num">210</td>
+<td class="num">210</td>
+</tr>
+<tr>
+<th scope="row">b (candidate)</th>
+<td class="num">28</td>
+<td class="num">410</td>
+<td class="num">410</td>
 </tr>
 </table>
 </div>
