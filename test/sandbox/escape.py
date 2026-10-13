@@ -4,7 +4,8 @@ outcome of each attempt: "ok" when it worked, "failed" with the error when it
 did not. A sandboxed run must have every attempt fail except the model call and
 the write to the state directory, which also dumps the agent's environment.
 
-The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE."""
+The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE. It
+also tries to forge a line in the Linux forwarder's violation log."""
 
 import base64
 import json
@@ -18,6 +19,7 @@ from typing import cast
 
 TIMEOUT = 5.0
 PUBLIC = "1.1.1.1"
+FORGED = b'{"kind":"relay_failed","port":1,"socket":"/forged","reason":"forged"}\n'
 
 
 def model() -> str:
@@ -79,6 +81,17 @@ def deny_read() -> str:
         return f"read {len(secret.read())} bytes"
 
 
+def forwarder_log() -> str:
+    # On Linux the agent's parent is the sandbox's forwarder, which holds the
+    # violation log's pipe as descriptor 3. Elsewhere there is no /proc.
+    fd = os.open(f"/proc/{os.getppid()}/fd/3", os.O_WRONLY)
+    try:
+        os.write(fd, FORGED)
+    finally:
+        os.close(fd)
+    return "written"
+
+
 def state_write() -> str:
     path = os.path.join(os.environ["BACTRIAN_STATE_DIR"], "agent-env.json")
     with open(path, "w") as out:
@@ -95,6 +108,7 @@ ACTIONS: dict[str, Callable[[], str]] = {
     "home_write": lambda: write(os.environ["REAL_HOME_FILE"]),
     "project_write": lambda: write(os.environ["PROJECT_FILE"]),
     "deny_read": deny_read,
+    "forwarder_log": forwarder_log,
     "state_write": state_write,
 }
 

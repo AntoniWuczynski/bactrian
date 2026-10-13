@@ -447,8 +447,9 @@ let mcp_flags_acceptance agent era () =
 
 (* Escape agents (test/sandbox): each makes one model call, then tries to reach
    a public host by HTTPS, TCP, WebSocket and DNS, to write to the real home
-   directory and the project, to read a denied directory and to leak the real
-   key. Every attempt has to fail. *)
+   directory and the project, to read a denied directory, to forge a line in
+   the forwarder's violation log through /proc and to leak the real key. Every
+   attempt has to fail. *)
 
 let usable tool = Sys.command (tool ^ " --version > /dev/null 2>&1") = 0
 
@@ -565,6 +566,7 @@ let escapes agent () =
       "home_write";
       "project_write";
       "deny_read";
+      "forwarder_log";
     ]
   in
   List.iter

@@ -34,11 +34,20 @@ val describe_parse_error : parse_error -> string
 
 val log_variable : string
 (** [BACTRIAN_SANDBOX_LOG_FD]: the number of a descriptor the forwarder inherits
-    from bactrian, open for append on the run's violation log, which it passes
-    to {!run} as [log] and [hidden_fd]. The log lies outside every path the
-    sandbox lets the agent write, and the agent does not inherit the descriptor,
-    so the agent cannot add lines to it. {!run} removes the variable from the
-    agent's environment. *)
+    from bactrian, the write end of a pipe that bactrian copies into the run's
+    violation log, which the forwarder passes to {!run} as [log] and
+    [hidden_fd]. The agent does not inherit the descriptor, and the forwarder
+    makes itself not dumpable first ({!set_undumpable}), so the agent cannot
+    reopen it through [/proc/PID/fd] either. Through the pipe the forwarder can
+    only add lines. {!run} removes the variable from the agent's environment. *)
+
+val set_undumpable : unit -> bool
+(** On Linux, [prctl(PR_SET_DUMPABLE, 0)] for the calling process: the files of
+    a process that is not dumpable under [/proc/PID] belong to root, so a
+    process of the same user without privileges, such as the agent, cannot open
+    its descriptors through [/proc/PID/fd]. Whether that worked. Elsewhere it
+    does nothing and gives [true]. The forwarder calls it before it starts the
+    agent, which [exec] makes dumpable again. *)
 
 type error =
   | Listen_failed of { port : int; reason : string }

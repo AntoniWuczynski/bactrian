@@ -5,3 +5,4 @@ _opam/
 .env
 .env.*
 !.env.example
+compile_commands.json

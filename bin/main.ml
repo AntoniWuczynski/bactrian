@@ -621,6 +621,10 @@ let sandbox_init_cmd =
           ("bactrian __sandbox-init: " ^ Sandbox_init.describe_parse_error e);
         Output.exit_usage
     | Ok config -> (
+        if not (Sandbox_init.set_undumpable ()) then
+          prerr_endline
+            "bactrian __sandbox-init: cannot make the forwarder undumpable: \
+             the agent may add lines to the violation log";
         Eio_main.run @@ fun env ->
         Eio.Switch.run @@ fun sw ->
         (* Standard input, output and error are the agent's own. *)

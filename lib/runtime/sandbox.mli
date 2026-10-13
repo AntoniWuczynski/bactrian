@@ -70,8 +70,8 @@ type run = {
   run_id : string;
   run_dir : string;
       (** Absolute. Holds [sandbox.log], the Linux forwarder's violation log,
-          which no sandboxed process can write: only the forwarder holds a
-          descriptor on it. *)
+          which bactrian writes from a pipe whose write end only the forwarder
+          holds (see {!Sandbox_init.log_variable}). *)
   state_dir : string;
   temp_dir : string;
   port : int;

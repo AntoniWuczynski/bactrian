@@ -504,7 +504,35 @@ let describe_violations = function
 type started =
   | Nothing
   | Seatbelt_log of { tag : string; since : float; marker : string }
-  | Relay_log of string
+  | Relay_log of {
+      path : string;
+      writer : Eio_unix.sink_ty Eio.Resource.t;
+      drained : bool Eio.Promise.or_exn;
+    }
+
+(* The forwarder writes one line per relay failure, so this much means
+   something is flooding the log, and the rest is dropped (still read, so the
+   writer never blocks). *)
+let max_log = 16 * 1024 * 1024
+
+(* Copies the forwarder's lines to [fd] until every write end of the pipe is
+   closed. Whether any were dropped. *)
+let drain reader fd =
+  let r = Eio.Buf_read.of_flow ~max_size:max_log reader in
+  let rec copy written dropped =
+    match Eio.Buf_read.line r with
+    | exception End_of_file -> dropped
+    | exception Eio.Buf_read.Buffer_limit_exceeded -> true
+    | line ->
+        let text = line ^ "\n" in
+        let n = String.length text in
+        if written + n > max_log then copy written true
+        else begin
+          ignore (Unix.write_substring fd text 0 n : int);
+          copy (written + n) dropped
+        end
+  in
+  copy 0 false
 
 let start ~sw t run agent =
   match t with
@@ -525,27 +553,40 @@ let start ~sw t run agent =
           let* dir = socket_dir ~sw in
           let socket = Filename.concat dir "model.sock" in
           let* () = run.listen_unix socket in
-          let log = Filename.concat run.run_dir "sandbox.log" in
-          let* fd =
-            match
-              Unix.openfile log [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ] 0o600
-            with
-            | fd -> Ok (Eio_unix.Fd.of_unix ~sw ~close_unix:true fd)
-            | exception Unix.Unix_error (e, _, _) ->
-                Error (log ^ ": " ^ Unix.error_message e)
-          in
+          let path = Filename.concat run.run_dir "sandbox.log" in
           let* argv =
             command host ~state_dir:run.state_dir ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = Some socket } ]
               ~tag ~preload:run.preload agent
           in
+          let* fd =
+            match
+              Unix.openfile path
+                [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ]
+                0o600
+            with
+            | fd -> Ok fd
+            | exception Unix.Unix_error (e, _, _) ->
+                Error (path ^ ": " ^ Unix.error_message e)
+          in
+          (* The forwarder gets the write end of a pipe, not the file: a
+             process that reopens its descriptor through /proc can then at
+             most add lines, never truncate or rewrite them. *)
+          let reader, writer = Eio_unix.pipe sw in
+          let drained =
+            Eio.Fiber.fork_promise ~sw (fun () ->
+                Fun.protect
+                  ~finally:(fun () -> Unix.close fd)
+                  (fun () -> drain reader fd))
+          in
           Ok
             ( {
                 argv;
                 env = [ (Sandbox_init.log_variable, "3") ];
-                fds = [ (3, fd) ];
+                fds = [ (3, Eio_unix.Resource.fd writer) ];
               },
-              Relay_log log ))
+              Relay_log
+                { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } ))
 
 let own_port = function
   | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> true
@@ -680,29 +721,52 @@ let seatbelt_violations ~env ~tag ~since ~marker =
       | exception (Eio.Io _ as e) ->
           Not_collected ("log show failed: " ^ Printexc.to_string e))
 
-let relay_violations path =
+let relay_violations ~gaps path =
   match In_channel.with_open_bin path In_channel.input_all with
   | exception Sys_error m -> Not_collected m
-  | text -> (
-      let lines =
-        List.filter
-          (fun l -> not (String.equal l ""))
-          (String.split_on_char '\n' text)
-      in
-      match
-        List.fold_right
-          (fun line acc ->
-            let* rest = acc in
-            let* v = Sandbox_log.of_relay_line line in
-            Ok (v :: rest))
-          lines (Ok [])
-      with
-      | Ok items ->
-          Collected { items; coverage = Relay_failures_only; gaps = [] }
-      | Error m -> Not_collected ("sandbox.log: " ^ m))
+  | text ->
+      let items, bad = Sandbox_log.of_relay_log text in
+      Collected
+        {
+          items;
+          coverage = Relay_failures_only;
+          gaps =
+            (gaps
+            @
+            if bad = 0 then []
+            else
+              [
+                Printf.sprintf "%s in sandbox.log %s skipped"
+                  (plural bad "unreadable line")
+                  (if bad = 1 then "was" else "were");
+              ]);
+        }
+
+(* Every write end is gone once bubblewrap has exited, so this is a bound on a
+   forwarder that did not, never a wait in a normal run. *)
+let drain_timeout = 5.
 
 let collect ~env = function
   | Nothing -> unsandboxed_violations
   | Seatbelt_log { tag; since; marker } ->
       seatbelt_violations ~env ~tag ~since ~marker
-  | Relay_log path -> relay_violations path
+  | Relay_log { path; writer; drained } -> (
+      Eio.Resource.close writer;
+      match
+        Eio.Time.with_timeout (Eio.Stdenv.clock env) drain_timeout (fun () ->
+            Ok (Eio.Promise.await_exn drained))
+      with
+      | Ok dropped ->
+          relay_violations path
+            ~gaps:
+              (if dropped then
+                 [
+                   Printf.sprintf
+                     "the log passed %d bytes, the rest was dropped" max_log;
+                 ]
+               else [])
+      | Error `Timeout ->
+          relay_violations path
+            ~gaps:[ "a process still held the log open at the end of the run" ]
+      | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
+          Not_collected ("sandbox.log: " ^ Printexc.to_string e))

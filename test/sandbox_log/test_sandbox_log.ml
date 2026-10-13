@@ -117,6 +117,14 @@ let test_settle () =
     (Some ("unsettled", [ "/a by cat(3)"; "/b by cat(3)" ]), 2, 1.)
     (settle ~deadline:1.5 [ ([ "/a" ], true); ([ "/a"; "/b" ], true) ])
 
+let test_relay_log () =
+  let good =
+    {|{"kind":"relay_failed","port":8080,"socket":"/s","reason":"refused"}|}
+  in
+  let items, bad = L.of_relay_log (good ^ "\nnot json\n\n" ^ good ^ "\n{") in
+  Alcotest.(check int) "both good lines kept" 2 (List.length items);
+  Alcotest.(check int) "the bad ones counted" 2 bad
+
 let test_relay () =
   (match
      L.of_relay_line
@@ -143,6 +151,7 @@ let () =
           Alcotest.test_case "messages" `Quick test_messages;
           Alcotest.test_case "ndjson" `Quick test_ndjson;
           Alcotest.test_case "settle" `Quick test_settle;
+          Alcotest.test_case "a whole relay log" `Quick test_relay_log;
         ] );
       ("linux", [ Alcotest.test_case "relay failures" `Quick test_relay ]);
     ]

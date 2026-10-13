@@ -57,3 +57,8 @@ val settle :
 val of_relay_line : string -> (violation, string) result
 (** One line of the Linux forwarder's log:
     [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}]. *)
+
+val of_relay_log : string -> violation list * int
+(** The violations of a whole forwarder log, one per line that {!of_relay_line}
+    reads, with the number of non-empty lines it could not read. One bad line
+    loses only itself. *)

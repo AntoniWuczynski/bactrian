@@ -12,6 +12,11 @@ type parse_error =
 let ( let* ) = Result.bind
 let log_variable = "BACTRIAN_SANDBOX_LOG_FD"
 
+(* SAFETY: the C function ignores its argument, allocates nothing on the OCaml
+   heap and only calls prctl, so it may be [@@noalloc]. Its result is an
+   immediate OCaml bool. *)
+external set_undumpable : unit -> bool = "bactrian_set_undumpable" [@@noalloc]
+
 (* Parsing *)
 
 let parse_port text =

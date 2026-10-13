@@ -126,3 +126,14 @@ let of_relay_line line =
               detail =
                 Printf.sprintf "127.0.0.1:%d to %s: %s" port socket reason;
             })
+
+let of_relay_log text =
+  let lines =
+    List.filter
+      (fun l -> not (String.equal l ""))
+      (String.split_on_char '\n' text)
+  in
+  let items =
+    List.filter_map (fun l -> Result.to_option (of_relay_line l)) lines
+  in
+  (items, List.length lines - List.length items)

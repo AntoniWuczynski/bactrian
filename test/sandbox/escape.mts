@@ -5,10 +5,11 @@
  * and the write to the state directory, which also dumps the agent's
  * environment.
  *
- * The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE. */
+ * The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE.
+ * It also tries to forge a line in the Linux forwarder's violation log. */
 
 import { promises as dns } from "node:dns";
-import { readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -94,6 +95,18 @@ function write(path: string): Action {
 const denyRead: Action = () =>
   Promise.resolve(`read ${readFileSync(SECRET_FILE).length} bytes`);
 
+// On Linux the agent's parent is the sandbox's forwarder, which holds the
+// violation log's pipe as descriptor 3. Elsewhere there is no /proc.
+const forwarderLog: Action = () => {
+  const fd = openSync(`/proc/${process.ppid}/fd/3`, constants.O_WRONLY);
+  try {
+    writeSync(fd, '{"kind":"relay_failed","port":1,"socket":"/forged","reason":"forged"}\n');
+  } finally {
+    closeSync(fd);
+  }
+  return Promise.resolve("written");
+};
+
 const stateWrite: Action = () => {
   writeFileSync(
     join(STATE_DIR, "agent-env.json"),
@@ -111,6 +124,7 @@ const ACTIONS: Record<string, Action> = {
   home_write: write(REAL_HOME_FILE),
   project_write: write(PROJECT_FILE),
   deny_read: denyRead,
+  forwarder_log: forwarderLog,
   state_write: stateWrite,
 };
 
