@@ -1,0 +1,33 @@
+(** Whether a run's clock was enforced (design §5 step 2, §11). Every run has
+    [SIM_NOW] and [TZ] in its environment, which is the contract. The clock is
+    [Enforced] when [libfaketime] was also injected and the agent's executable
+    can take it, and [Contract_only] otherwise, with the reason. *)
+
+type reason =
+  | Macos  (** Not Linux: bactrian injects nothing there. *)
+  | Faketime_off  (** The experiment says [clock: {faketime: off}]. *)
+  | Library_not_found  (** No [libfaketimeMT.so.1] on this host. *)
+  | Invalid_sim_now  (** [SIM_NOW] is not an RFC 3339 time since 1970. *)
+  | Static_binary  (** A statically linked executable ignores [LD_PRELOAD]. *)
+  | Go_binary  (** Go reads the clock without the C library. *)
+  | Unreadable_executable
+      (** The agent's executable was not found, not readable, not an ELF file
+          after following a [#!] line one level, or it is not little-endian. *)
+
+type t = Enforced | Contract_only of reason
+
+val reason_name : reason -> string
+(** [macos], [faketime-off], [library-not-found], [invalid-sim-now],
+    [static-binary], [go-binary] or [unreadable-executable]. *)
+
+val of_kind : Elf_probe.kind -> t
+(** The label of a run that injected the library, given the kind of the agent's
+    executable. *)
+
+val to_clock : t -> Trace.clock
+(** What the trace and cassette headers record. *)
+
+val to_json : t -> Yojson.Safe.t
+(** [{"mode": "enforced"}] or
+    [{"mode": "contract_only", "reason": "static-binary"}], as in [meta.json].
+*)

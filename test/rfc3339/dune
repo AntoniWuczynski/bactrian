@@ -1,0 +1,6 @@
+(test
+ (name test_rfc3339)
+ (package bactrian)
+ (libraries bactrian.core alcotest)
+ (flags
+  (:standard -w -70)))
