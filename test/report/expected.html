@@ -114,6 +114,8 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 <dl class="facts">
 <dt>Estimand</dt>
 <dd>Suite: performance on exactly these scenarios. Uncertainty comes from run-to-run variation only.</dd>
+<dt>Cost, tokens and latency</dt>
+<dd>Cost and tokens: the ratio of the candidate's mean per run to the baseline's, each mean weighting every scenario equally. Latency: the average over scenarios of each scenario's ratio of medians (a geometric mean). Both over the scenarios that both arms finished, with bootstrap intervals that resample runs within each scenario.</dd>
 <dt>Confidence</dt>
 <dd>95%</dd>
 <dt>Gate family</dt>
@@ -130,7 +132,7 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 <h2>Verdicts</h2>
 <div class="scroll">
 <table>
-<caption>Candidate against baseline. Pass rate is a difference in percentage points. The others are relative changes in the median.</caption>
+<caption>Candidate against baseline. Pass rate is a difference in percentage points. Cost and tokens are relative changes in the scenario-weighted mean, latency in the typical scenario's median.</caption>
 <thead>
 <tr>
 <th scope="col">Metric</th>
@@ -156,19 +158,19 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 <tr>
 <th scope="row">Cost</th>
 <td>no</td>
-<td class="num">+9.1%</td>
-<td class="num">0.0% to +9.1%</td>
+<td class="num">+29.9%</td>
+<td class="num">+24.4% to +35.2%</td>
 <td class="num">0.9500</td>
 <td class="num">20.0% dearer, 16.7% cheaper</td>
 <td>
-<span class="badge no-change">No change</span>
+<span class="badge regression">Regression</span>
 </td>
 </tr>
 <tr>
 <th scope="row">Median latency</th>
 <td>no</td>
-<td class="num">+45.8%</td>
-<td class="num">+40.5% to +50.2%</td>
+<td class="num">+45.5%</td>
+<td class="num">+41.6% to +49.3%</td>
 <td class="num">0.9500</td>
 <td class="num">25.0% slower, 20.0% faster</td>
 <td>
@@ -341,7 +343,7 @@ ul.messages { margin: 0.25rem 0; padding-left: 1.25rem; }
 </section>
 <section id="cost-latency">
 <h2>Cost and latency</h2>
-<p class="note">Over finished runs. Latency is the time spent in model calls. The verdict table compares medians with bootstrap intervals.</p>
+<p class="note">Over finished runs. Latency is the time spent in model calls. The verdict table compares scenario-weighted means of cost and tokens and per-scenario medians of latency, with bootstrap intervals.</p>
 <h3 id="cost">Cost per run</h3>
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 400 88" class="chart" role="img" aria-label="Cost per run">

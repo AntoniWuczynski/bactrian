@@ -52,6 +52,9 @@ let render_compare_text ~colour (d : D.t) =
   line "estimand %s, confidence %.0f%%, seed %d, %d resamples"
     (match d.population with `Suite -> "suite" | `Scenarios -> "scenarios")
     (d.confidence *. 100.) d.seed d.resamples;
+  line
+    "cost and tokens compare scenario-weighted means, latency the geometric \
+     mean of per-scenario ratios of medians";
   line "gate: %s (level %.4f per interval)"
     (match d.gate with
     | [] -> "none"

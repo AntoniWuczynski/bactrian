@@ -44,6 +44,10 @@ val trace_line : Trace.entry -> string
 val exit_meaning : int -> string
 (** What a gate exit status means. *)
 
+val value_estimand_text : string
+(** What the cost, tokens and latency comparisons estimate, for a report header.
+*)
+
 val interval : (float -> string) -> Stats.interval -> string
 (** [lower to upper]. *)
 

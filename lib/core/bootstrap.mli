@@ -37,23 +37,54 @@ val hierarchical_diff :
 (** [scenarios] estimand: scenarios resampled with replacement (the same draw
     for both arms), then runs within each. *)
 
-val log_ratio_of_medians :
+(** {1 Value metrics}
+
+    Both statistics below are log ratios of the candidate to the baseline over K
+    scenarios, with each scenario weighted equally. Each resample draws runs
+    with replacement within every scenario and arm, so every scenario keeps its
+    run count (stratified resampling: under a fixed suite, varying how many runs
+    come from cheap and dear scenarios would add variation that does not exist).
+    A resample whose mean or median is zero gives an infinite replicate, so an
+    interval bound can be infinite. A replicate that is undefined (zero in both
+    arms) is dropped, and the result is [None] when every replicate is.
+
+    Raises [Invalid_argument] on a negative value. *)
+
+val log_ratio_of_means :
   rng:Random.State.t ->
   resamples:int ->
   confidence:float ->
   baseline:arm list ->
   candidate:arm list ->
   (float * Stats.interval) option
-(** Point estimate and interval of log(median_B / median_A), each median taken
-    over the arm's values pooled across its scenarios. Each resample draws runs
-    with replacement within every scenario and arm, so every scenario keeps its
-    run count, and recomputes the pooled medians (stratified resampling: under a
-    fixed suite, varying how many runs come from cheap and dear scenarios would
-    add variation that does not exist). [None] if either median is zero.
-    Computed as [log median_B -. log median_A] so that a swap negates it
-    exactly. A resample whose median is zero gives an infinite replicate, so an
-    interval bound can be infinite.
+(** [log (mean_B / mean_A)], where an arm's mean is the equal-weighted average
+    over scenarios of its per-scenario mean. For spend and tokens, which add up:
+    a change confined to a few scenarios moves this mean in proportion. [None]
+    if either mean is zero.
 
-    Raises [Invalid_argument] on a negative value. [None] also when every
-    replicate is undefined (both resampled medians zero; such replicates are
-    dropped). *)
+    The interval is the expanded percentile interval: the percentile interval at
+    {!expanded_level} for the fewest runs any scenario has in either arm. A
+    plain percentile interval of a mean of skewed values is too narrow with few
+    runs (simulated coverage 0.83 to 0.88 at a nominal 0.90 for lognormal costs
+    with 5 to 40 runs per scenario). *)
+
+val expanded_level : confidence:float -> n:int -> float
+(** The level of Hesterberg's expanded percentile interval (Hesterberg 2015,
+    "What Teachers Should Know About the Bootstrap", The American Statistician
+    69(4):371-386): the level whose normal critical value is
+    [sqrt (n / (n - 1)) * t] with [t] the [(1 + confidence) / 2] quantile of
+    Student's t on [n - 1] degrees of freedom. It widens a bootstrap interval of
+    a mean from [n] values to make up for the bootstrap's own narrowness at
+    small [n]. [confidence] itself when [n < 2]. *)
+
+val mean_log_ratio_of_medians :
+  rng:Random.State.t ->
+  resamples:int ->
+  confidence:float ->
+  baseline:arm list ->
+  candidate:arm list ->
+  (float * Stats.interval) option
+(** [(1/K) Σ_k log (median_B,k / median_A,k)], the equal-weighted average over
+    scenarios of per-scenario log ratios of medians: the typical scenario's
+    relative change, robust to a few slow runs. [None] if any per-scenario
+    median is zero. *)

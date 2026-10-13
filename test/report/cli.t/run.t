@@ -48,6 +48,7 @@ The terminal table. Without --gate the exit status is 0 whatever the verdict.
   $ bactrian compare $ID --baseline a --candidate b
   experiment demo (20261013T090000Z-0badc0de): candidate b against baseline a
   estimand suite, confidence 95%, seed 7, 10000 resamples
+  cost and tokens compare scenario-weighted means, latency the geometric mean of per-scenario ratios of medians
   gate: pass_rate (level 0.9500 per interval)
   
   metric     gate  estimate  interval              level   threshold  verdict

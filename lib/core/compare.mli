@@ -7,13 +7,15 @@
     the bootstrap alone collapses to zero width when every run of both arms
     passes, and then calls a confident [No_change] on no evidence.
 
-    Cost, median latency and tokens are compared on
-    [log (median_candidate / median_baseline)] over the scenarios both arms have
-    outcomes for, with the interval of {!Bootstrap.log_ratio_of_medians}
-    (resampling within each scenario). Thresholds are given as relative changes
-    [δ] and applied as [log (1 + δ)]. Such a metric is undefined when any of
-    those scenarios has fewer than 5 values in either arm, or a pooled median is
-    zero.
+    Cost and tokens are compared on the log ratio of equal-weighted means,
+    {!Bootstrap.log_ratio_of_means}, because they add up and a change confined
+    to a few scenarios must show. Latency is compared on the equal-weighted
+    average of per-scenario log ratios of medians,
+    {!Bootstrap.mean_log_ratio_of_medians}. Both use the scenarios both arms
+    have outcomes for and resample within each scenario. Thresholds are given as
+    relative changes [δ] and applied as [log (1 + δ)]. Such a metric is
+    undefined when any of those scenarios has fewer than 5 values in either arm,
+    or a mean (cost, tokens) or median (latency) is zero.
 
     Only scenarios with outcomes in both arms are compared. The others are
     listed in [dropped] and count as missing data for the exit code. *)
@@ -29,9 +31,8 @@ type verdict =
 type metric_result = {
   metric : metric;
   estimate : float;
-      (** Pass rate difference, or log ratio for cost and latency. [nan] when
-          the metric is undefined (a median is zero, or an arm has no values).
-      *)
+      (** Pass rate difference, or log ratio for cost, latency and tokens. [nan]
+          when the metric is undefined. *)
   interval : Stats.interval;
   threshold : float;
       (** On the scale of [estimate]: [δ] for pass rate, [log (1 + δ)] for the

@@ -110,6 +110,13 @@ let exit_meaning = function
   | 3 -> "missing data may bias the comparison"
   | n -> Printf.sprintf "exit status %d" n
 
+let value_estimand_text =
+  "Cost and tokens: the ratio of the candidate's mean per run to the \
+   baseline's, each mean weighting every scenario equally. Latency: the \
+   average over scenarios of each scenario's ratio of medians (a geometric \
+   mean). Both over the scenarios that both arms finished, with bootstrap \
+   intervals that resample runs within each scenario."
+
 let interval f (i : Stats.interval) =
   Printf.sprintf "%s to %s" (f i.lower) (f i.upper)
 

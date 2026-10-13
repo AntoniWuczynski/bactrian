@@ -550,6 +550,29 @@ let test_cost_stratified_interval () =
   Alcotest.(check (float 1e-12)) "estimate" (log 1.5) m.estimate;
   Alcotest.check verdict_t "regression" Regression m.verdict
 
+let test_minority_change () =
+  (* The candidate doubles cost and latency in one scenario of three. A pooled
+     median moves by about 9% and called that No_change at 20%, while mean
+     spend rose by a third. *)
+  let arm v s factor =
+    List.init 30 (fun i ->
+        let x = factor *. (1. +. (float_of_int i /. 100.)) in
+        run_of s v (Some true) ~cost:(Some x) ~latency:(Some (100. *. x)))
+  in
+  let rs =
+    List.concat_map
+      (fun (s, f) -> arm "A" s 1. @ arm "B" s f)
+      [ ("s00", 2.); ("s01", 1.); ("s02", 1.) ]
+  in
+  let r =
+    ok (C.run (input ~gate:[ (C.Cost, 0.2); (C.Latency_p50, 0.2) ] ~seed:3 rs))
+  in
+  let cost = metric r C.Cost and latency = metric r C.Latency_p50 in
+  Alcotest.(check (float 1e-12)) "cost" (log (4. /. 3.)) cost.estimate;
+  Alcotest.check verdict_t "cost regresses" Regression cost.verdict;
+  Alcotest.(check (float 1e-12)) "latency" (log 2. /. 3.) latency.estimate;
+  Alcotest.check verdict_t "latency regresses" Regression latency.verdict
+
 let test_dropped_scenario () =
   (* 30 scenarios x 10 runs, the candidate errors on every run of
      one scenario (3.3% of its runs, under the 5% trip-wire). *)
@@ -757,6 +780,8 @@ let () =
             test_cost_common_scenarios_only;
           Alcotest.test_case "cost stratified" `Quick
             test_cost_stratified_interval;
+          Alcotest.test_case "change in one scenario of three" `Quick
+            test_minority_change;
           Alcotest.test_case "dropped scenario" `Quick test_dropped_scenario;
           Alcotest.test_case "swap negates" `Quick test_swap_negates;
           Alcotest.test_case "missing variant" `Quick test_no_variant_runs;

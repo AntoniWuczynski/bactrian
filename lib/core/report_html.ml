@@ -91,6 +91,7 @@ let header (d : D.t) =
         (List.concat
            [
              fact "Estimand" (estimand_text d.population);
+             fact "Cost, tokens and latency" F.value_estimand_text;
              fact "Confidence" (Printf.sprintf "%.0f%%" (d.confidence *. 100.));
              fact "Gate family" (gate_text d);
              fact "Level per gate interval"
@@ -148,7 +149,8 @@ let verdict_table (d : D.t) =
   table
     ~caption:
       "Candidate against baseline. Pass rate is a difference in percentage \
-       points. The others are relative changes in the median."
+       points. Cost and tokens are relative changes in the scenario-weighted \
+       mean, latency in the typical scenario's median."
     ~head:
       [
         "Metric";
@@ -312,7 +314,8 @@ let measures_section (d : D.t) =
   section "cost-latency" "Cost and latency"
     (para ~cls:[ "note" ]
        "Over finished runs. Latency is the time spent in model calls. The \
-        verdict table compares medians with bootstrap intervals."
+        verdict table compares scenario-weighted means of cost and tokens and \
+        per-scenario medians of latency, with bootstrap intervals."
     :: (measure_block d ~id:"cost" ~title:"Cost per run" ~noun:"cost"
           ~format:F.usd (fun s -> s.cost)
        @ measure_block d ~id:"latency" ~title:"Latency per run" ~noun:"latency"

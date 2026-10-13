@@ -151,8 +151,13 @@ let value_estimate (input : input) ~rng ~common metric ~level =
       (b @ c)
   then None
   else
-    Bootstrap.log_ratio_of_medians ~rng ~resamples:input.resamples
-      ~confidence:level ~baseline:b ~candidate:c
+    let statistic =
+      match metric with
+      | Latency_p50 -> Bootstrap.mean_log_ratio_of_medians
+      | Pass_rate | Cost | Tokens -> Bootstrap.log_ratio_of_means
+    in
+    statistic ~rng ~resamples:input.resamples ~confidence:level ~baseline:b
+      ~candidate:c
 
 let undefined metric ~threshold ~level ~in_gate : metric_result =
   {
