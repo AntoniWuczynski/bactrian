@@ -8,12 +8,12 @@ type request = {
 
 type t = { summary : Executor.summary; sandbox : Sandbox.label option }
 
-let run ~on_progress ~bactrian_exe ~env (r : request) =
+let run ?stop ~on_progress ~bactrian_exe ~env (r : request) =
   Mirage_crypto_rng_unix.use_default ();
   let announced = ref None in
   let label = ref None in
   match
-    Interrupt.run (fun () ->
+    Interrupt.run ?stop (fun () ->
         Executor.run_experiment ?sandbox:r.sandbox
           ~on_sandbox:(fun l -> label := Some l)
           ~bactrian_exe ~env ~experiment_file:r.experiment ~resume:r.resume

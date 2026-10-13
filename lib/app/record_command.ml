@@ -20,11 +20,11 @@ let prepare r =
 
 let validate r = Result.map ignore (prepare r)
 
-let run ~on_progress ~bactrian_exe ~env r =
+let run ?stop ~on_progress ~bactrian_exe ~env r =
   match prepare r with
   | Error m -> Error (Command_error.Usage m)
   | Ok mcp ->
-      Single_run.execute ~on_progress ~bactrian_exe ~env ~live:true
+      Single_run.execute ?stop ~on_progress ~bactrian_exe ~env ~live:true
         ~sandbox:r.common.sandbox (fun _ sandbox ->
           Ok
             (Single_run.config r.common ~turns:r.turns ~replay:None ~mcp sandbox))

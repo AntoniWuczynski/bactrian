@@ -19,6 +19,7 @@ type t = {
 }
 
 val run :
+  ?stop:Interrupt.trigger ->
   on_progress:(Progress.t -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
@@ -27,9 +28,11 @@ val run :
 (** Runs the experiment (see {!Bactrian_runtime.Executor.run_experiment}).
     [on_progress] gets {!Progress.Experiment_started} once the ID is known and a
     {!Progress.Warning} for each setting that is accepted but not enforced.
-    SIGINT and SIGTERM stop the experiment and give [Interrupted] with the
-    experiment's ID if it had started. Seeds the random generator, and must be
-    called inside [Eio_main.run], after {!Bactrian_runtime.Launch_env.scrub}. *)
+    SIGINT and SIGTERM, or [stop] when given (then no signal handler is
+    installed), stop the experiment and give [Interrupted] with the experiment's
+    ID if it had started, so it can be resumed. Seeds the random generator, and
+    must be called inside [Eio_main.run], after
+    {!Bactrian_runtime.Launch_env.scrub}. *)
 
 val exit_code : t -> int
 (** {!Exit_code.of_summary}. *)

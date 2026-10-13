@@ -30,7 +30,7 @@ let prepare r =
 
 let validate r = Result.map ignore (prepare r)
 
-let run ~on_progress ~bactrian_exe ~env r =
+let run ?stop ~on_progress ~bactrian_exe ~env r =
   match prepare r with
   | Error m -> Error (Command_error.Usage m)
   | Ok matcher ->
@@ -39,7 +39,7 @@ let run ~on_progress ~bactrian_exe ~env r =
         | Until_divergence -> true
         | Strict | Fuzzy _ -> false
       in
-      Single_run.execute ~on_progress ~bactrian_exe ~env ~live
+      Single_run.execute ?stop ~on_progress ~bactrian_exe ~env ~live
         ~sandbox:r.common.sandbox (fun store sandbox ->
           let* mcp = Run.recorded_mcp store ~from:r.from in
           Ok

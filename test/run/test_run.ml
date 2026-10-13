@@ -425,6 +425,34 @@ let test_interrupt_helper =
     "no signal" (Ok 3)
     (Interrupt.run (fun () -> 3))
 
+let test_interrupt_trigger =
+  Alcotest.test_case "a trigger cancels only the work it guards" `Quick
+  @@ fun () ->
+  Eio_main.run @@ fun _env ->
+  let stop = Interrupt.trigger () and other = Interrupt.trigger () in
+  let cleaned = ref false in
+  let result =
+    Eio.Fiber.first
+      (fun () ->
+        Interrupt.run ~stop (fun () ->
+            Fun.protect ~finally:(fun () -> cleaned := true) @@ fun () ->
+            Eio.Fiber.await_cancel ()))
+      (fun () ->
+        Interrupt.fire stop Sys.sigint;
+        Interrupt.fire stop Sys.sigterm;
+        Eio.Fiber.await_cancel ())
+  in
+  Alcotest.(check (result unit int)) "stopped" (Error Sys.sigint) result;
+  Alcotest.(check bool) "cleanup ran" true !cleaned;
+  Alcotest.(check (option int))
+    "first signal kept" (Some Sys.sigint) (Interrupt.fired stop);
+  Alcotest.(check (result int int))
+    "already fired" (Error Sys.sigint)
+    (Interrupt.run ~stop (fun () -> 3));
+  Alcotest.(check (result int int))
+    "another trigger" (Ok 3)
+    (Interrupt.run ~stop:other (fun () -> 3))
+
 (* SIGINT to a replaying bactrian: the agent's group is killed, the cassette is
    left partial, meta.json says interrupted and the status is 130. *)
 let test_cli_interrupt =
@@ -694,6 +722,7 @@ let () =
           Alcotest.test_case "a hung agent is gone after the turn timeout" `Slow
             test_hung_agent_is_killed;
           test_interrupt_helper;
+          test_interrupt_trigger;
           Alcotest.test_case "SIGINT tears the run down" `Slow
             test_cli_interrupt;
         ] );

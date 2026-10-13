@@ -34,6 +34,7 @@ val config :
     other than the default table, or variant environment. *)
 
 val execute :
+  ?stop:Interrupt.trigger ->
   on_progress:(Progress.t -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
@@ -51,7 +52,7 @@ val execute :
     Seeds the random generator, and must be called inside [Eio_main.run]. A
     command that starts agents needs a launch environment free of secrets, so
     the caller runs {!Bactrian_runtime.Launch_env.scrub} first. SIGINT and
-    SIGTERM cancel the run and give [Interrupted] (see
+    SIGTERM, or [stop] when given, cancel the run and give [Interrupted] (see
     {!Bactrian_runtime.Interrupt.run}); [on_progress] gets a {!Progress.Warning}
     for a sandbox that does not apply and for MCP servers the sandbox does not
     cover. A run that fails or diverges is [Ok]: look at its outcome. *)

@@ -21,6 +21,7 @@ val validate : request -> (unit, string) result
     timeout is not positive. {!run} checks the same. *)
 
 val run :
+  ?stop:Bactrian_runtime.Interrupt.trigger ->
   on_progress:(Progress.t -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->

@@ -106,7 +106,7 @@ let live_problem caps =
               "this build has no TLS support (bactrian.tls), so it cannot call \
                providers over HTTPS")
 
-let execute ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
+let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   let warn w = on_progress (Progress.Warning w) in
   match read_caps () with
   | Error m -> Error (Command_error.Usage m)
@@ -148,7 +148,7 @@ let execute ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
               | Ok (sandbox, proxy) -> (
                   let store = Store.create ~root in
                   match
-                    Interrupt.run (fun () ->
+                    Interrupt.run ?stop (fun () ->
                         Result.bind (config_of store sandbox) (fun config ->
                             Option.iter warn
                               (Sandbox.mcp_warning sandbox

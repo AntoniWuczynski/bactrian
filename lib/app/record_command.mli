@@ -15,6 +15,7 @@ val validate : request -> (unit, string) result
     declaration is malformed. {!run} checks the same. *)
 
 val run :
+  ?stop:Bactrian_runtime.Interrupt.trigger ->
   on_progress:(Progress.t -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
