@@ -25,6 +25,10 @@ val key :
 (** The replay key: [Canon.digest] of an object holding the method, the path,
     the query and the canonical request.
 
+    The query is normalised here: every parameter named [key] (case-sensitive,
+    it carries API keys) is dropped, and the rest are sorted by name, then by
+    value, so neither their order nor the secret affects the key.
+
     [headers] defaults to [[]]. Only [anthropic-version], [anthropic-beta] and
     [openai-beta] are kept, because they change behaviour (decision 0005). Names
     are compared case-insensitively and lowercased in the key, values are taken
@@ -36,8 +40,11 @@ type divergence =
   | Missing_request of {
       request : request;
       nearest : (Cassette.exchange * Diff.change list * float) option;
-          (** Closest unconsumed exchange on the same channel, its diff and
-              similarity. *)
+          (** Closest of the next 64 unconsumed exchanges on the same channel in
+              [seq] order (the window keeps a miss cheap), with its diff and
+              similarity. Candidates whose leaf counts alone rule out beating
+              the best so far are skipped, and ties go to the lowest [seq].
+              Fuzzy mode uses the same search. *)
     }
   | Unconsumed of Cassette.exchange
   | Reordered of { request : request; expected : Cassette.exchange }
@@ -58,7 +65,8 @@ val start : mode:mode -> allow_reorder:bool -> Cassette.exchange list -> state
 
 val decide : state -> request -> state * decision * divergence list
 (** The list carries non-fatal findings: [Reordered] when [allow_reorder] is
-    set, and the divergence that triggered the switch to live. *)
+    set, the divergence that triggered the switch to live, and, when a strict
+    refusal as [Reordered] also has the wrong shape, the [Shape_mismatch]. *)
 
 val switched : state -> bool
 (** Whether [Until_divergence] has switched the model channel to live. *)

@@ -110,13 +110,38 @@ let test_key () =
   differs "meth" (M.key ~meth:"GET" ~path:"/p" ~query:[ ("a", "1") ] c);
   differs "path" (M.key ~meth:"POST" ~path:"/q" ~query:[ ("a", "1") ] c);
   differs "query" (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "2") ] c);
-  Alcotest.(check bool)
-    "query order" false
-    (String.equal
-       (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1"); ("b", "2") ] c)
-       (M.key ~meth:"POST" ~path:"/p" ~query:[ ("b", "2"); ("a", "1") ] c));
+  Alcotest.(check string)
+    "query order does not matter"
+    (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1"); ("b", "2") ] c)
+    (M.key ~meth:"POST" ~path:"/p" ~query:[ ("b", "2"); ("a", "1") ] c);
+  Alcotest.(check string)
+    "repeated names are sorted by value"
+    (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1"); ("a", "2") ] c)
+    (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "2"); ("a", "1") ] c);
+  differs "repeated names keep their values"
+    (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1"); ("a", "1") ] c);
   differs "body"
     (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1") ] (doc {|{"a":2}|}))
+
+let test_key_drops_api_key () =
+  let c = doc {|{"a":1}|} in
+  let key query = M.key ~meth:"POST" ~path:"/p" ~query c in
+  let base = key [ ("alt", "sse") ] in
+  Alcotest.(check string)
+    "key parameter ignored" base
+    (key [ ("key", "<secret:1>"); ("alt", "sse") ]);
+  Alcotest.(check string)
+    "whatever its value" base
+    (key [ ("alt", "sse"); ("key", "other") ]);
+  Alcotest.(check string)
+    "every occurrence" base
+    (key [ ("key", "a"); ("alt", "sse"); ("key", "b") ]);
+  Alcotest.(check bool)
+    "case-sensitive" false
+    (String.equal base (key [ ("alt", "sse"); ("Key", "x") ]));
+  Alcotest.(check bool)
+    "other names kept" false
+    (String.equal base (key [ ("alt", "sse"); ("keys", "x") ]))
 
 let test_key_headers () =
   let c = doc {|{"a":1}|} in
@@ -204,6 +229,23 @@ let test_reordered_model () =
   in
   Alcotest.(check bool) "http refuses" true (is_refuse (fst (List.hd rs)))
 
+let test_reordered_and_shape () =
+  let exs = [ ex 0 "a"; ex ~stream:true 1 "b" ] in
+  let request = req ~shape:M.Whole_body Model "b" in
+  let _, rs = run (start M.Strict exs) [ request ] in
+  let d, f = only rs in
+  Alcotest.(check string) "refused as reordered" "refuse:reordered" (tag d);
+  Alcotest.(check (list string)) "shape reported too" [ "shape" ] (tags f);
+  let _, rs = run (start M.Strict exs) [ req ~shape:M.Streamed Model "b" ] in
+  let d, f = only rs in
+  Alcotest.(check string) "right shape" "refuse:reordered" (tag d);
+  Alcotest.(check (list string)) "no shape finding" [] (tags f);
+  let _, rs = run (start M.Until_divergence exs) [ request ] in
+  let d, f = only rs in
+  Alcotest.(check string) "lenient refuses on shape" "refuse:shape" (tag d);
+  Alcotest.(check (list string))
+    "and reports the order" [ "reordered" ] (tags f)
+
 let test_mcp_unordered () =
   let exs =
     [ ex ~channel:Mcp 0 "a"; ex ~channel:Mcp 1 "b"; ex ~channel:Mcp 2 "c" ]
@@ -287,6 +329,133 @@ let test_fuzzy () =
   Alcotest.(check string) "tag" "serve" (tag d);
   Alcotest.(check (option (float 0.))) "no sim" None (sim_of d)
 
+let test_fuzzy_threshold_boundary () =
+  let rec_c = doc {|{"a":"1","b":"2","c":"3","d":"4"}|} in
+  let asked = doc {|{"a":"1","b":"2","c":"3","d":"X"}|} in
+  let exs = [ ex ~canon:rec_c 0 "r" ] in
+  let go threshold =
+    fst
+      (only
+         (snd
+            (run (start (M.Fuzzy threshold) exs) [ req ~canon:asked Model "q" ])))
+  in
+  Alcotest.(check string) "equal serves" "serve" (tag (go 0.75));
+  Alcotest.(check string)
+    "just above refuses" "refuse:missing"
+    (tag (go (Float.succ 0.75)))
+
+let test_nearest_tie () =
+  let asked = doc {|{"a":"1","b":"2"}|} in
+  let exs =
+    [
+      ex ~canon:(doc {|{"a":"1","b":"X"}|}) 5 "late";
+      ex ~canon:(doc {|{"a":"X","b":"2"}|}) 3 "early";
+    ]
+  in
+  let nearest_seq st =
+    let _, rs = run st [ req ~canon:asked Model "q" ] in
+    match nearest_of (fst (only rs)) with
+    | Some (e, _, _) -> e.Cassette.seq
+    | None -> Alcotest.fail "expected nearest"
+  in
+  Alcotest.(check int) "strict" 3 (nearest_seq (start M.Strict exs));
+  let _, rs = run (start (M.Fuzzy 0.5) exs) [ req ~canon:asked Model "q" ] in
+  Alcotest.(check int) "fuzzy serves" 3 (seq_of (fst (only rs)))
+
+let test_transport_error_shape () =
+  let e = { (ex 0 "a") with outcome = Transport_error "refused" } in
+  List.iter
+    (fun shape ->
+      let _, rs = run (start M.Strict [ e ]) [ req ~shape Model "a" ] in
+      Alcotest.(check string) "served" "serve" (tag (fst (only rs))))
+    [ M.Streamed; M.Whole_body ]
+
+(* The nearest search looks at the first 64 unconsumed exchanges only. *)
+let test_nearest_window () =
+  let far i = doc (Printf.sprintf {|{"a":"%d","b":"%d","c":"%d"}|} i i i) in
+  let close = doc {|{"a":"1","b":"2","c":"X"}|} in
+  let asked = doc {|{"a":"1","b":"2","c":"3"}|} in
+  let build close_at =
+    List.init 100 (fun i ->
+        ex
+          ~canon:(if i = close_at then close else far (i + 10))
+          i (Printf.sprintf "k%d" i))
+  in
+  let nearest_seq exs =
+    let _, rs = run (start M.Strict exs) [ req ~canon:asked Model "q" ] in
+    Option.map (fun (e, _, _) -> e.Cassette.seq) (nearest_of (fst (only rs)))
+  in
+  Alcotest.(check (option int))
+    "last in window" (Some 63)
+    (nearest_seq (build 63));
+  Alcotest.(check bool)
+    "first outside the window" true
+    (match nearest_seq (build 64) with
+    | Some 64 -> false
+    | Some _ | None -> true);
+  (* consumed exchanges do not count towards the window *)
+  let exs = build 80 in
+  let st, _ =
+    run (start M.Strict exs)
+      (List.init 20 (fun i -> req Model (Printf.sprintf "k%d" i)))
+  in
+  let _, rs = run st [ req ~canon:asked Model "q" ] in
+  Alcotest.(check (option int))
+    "window slides over pending" (Some 80)
+    (Option.map (fun (e, _, _) -> e.Cassette.seq) (nearest_of (fst (only rs))))
+
+let time f =
+  let t0 = Sys.time () in
+  let r = f () in
+  (r, Sys.time () -. t0)
+
+let wide i =
+  Canon.list
+    (List.init 60 (fun j -> Canon.string (Printf.sprintf "v%d.%d" i j)))
+
+let test_perf_many_misses () =
+  let exs =
+    List.init 10_000 (fun i -> ex ~canon:(wide i) i (Printf.sprintf "k%d" i))
+  in
+  let st = start M.Strict exs in
+  let (), dt =
+    time (fun () ->
+        for i = 0 to 999 do
+          let _, d, _ = M.decide st (req ~canon:(wide (i * 7)) Model "none") in
+          if not (is_refuse d) then Alcotest.fail "expected a miss"
+        done)
+  in
+  Alcotest.(check bool)
+    (Printf.sprintf "1000 misses in %.2fs" dt)
+    true (dt < 2.0)
+
+let test_perf_fuzzy_growing () =
+  let history n changed =
+    Canon.list
+      (List.init n (fun m ->
+           let content =
+             if changed && m = n - 1 then "changed" else string_of_int m
+           in
+           doc (Printf.sprintf {|{"role":"user","content":"%s"}|} content)))
+  in
+  let exs =
+    List.init 1000 (fun i ->
+        ex ~canon:(history (i + 1) false) i (Printf.sprintf "k%d" i))
+  in
+  let (), dt =
+    time (fun () ->
+        let st = ref (start (M.Fuzzy 0.5) exs) in
+        for i = 0 to 999 do
+          let s, d, _ =
+            M.decide !st (req ~canon:(history (i + 1) true) Model "none")
+          in
+          st := s;
+          if not (String.equal (tag d) "serve") then
+            Alcotest.fail "expected a serve"
+        done)
+  in
+  Alcotest.(check bool) (Printf.sprintf "1000 fuzzy in %.2fs" dt) true (dt < 2.0)
+
 let test_until_divergence () =
   let exs =
     [
@@ -350,10 +519,13 @@ let () =
       ( "matcher",
         [
           Alcotest.test_case "key" `Quick test_key;
+          Alcotest.test_case "key drops api key" `Quick test_key_drops_api_key;
           Alcotest.test_case "key headers" `Quick test_key_headers;
           Alcotest.test_case "strict in order" `Quick test_strict_in_order;
           Alcotest.test_case "occurrence" `Quick test_occurrence;
           Alcotest.test_case "reordered" `Quick test_reordered_model;
+          Alcotest.test_case "reordered and shape" `Quick
+            test_reordered_and_shape;
           Alcotest.test_case "mcp unordered" `Quick test_mcp_unordered;
           Alcotest.test_case "channels independent" `Quick
             test_channels_independent;
@@ -361,6 +533,15 @@ let () =
           Alcotest.test_case "miss nearest" `Quick test_miss_nearest;
           Alcotest.test_case "miss no candidate" `Quick test_miss_no_candidate;
           Alcotest.test_case "fuzzy" `Quick test_fuzzy;
+          Alcotest.test_case "fuzzy threshold boundary" `Quick
+            test_fuzzy_threshold_boundary;
+          Alcotest.test_case "nearest tie" `Quick test_nearest_tie;
+          Alcotest.test_case "transport error shape" `Quick
+            test_transport_error_shape;
+          Alcotest.test_case "nearest window" `Quick test_nearest_window;
+          Alcotest.test_case "perf: many misses" `Slow test_perf_many_misses;
+          Alcotest.test_case "perf: fuzzy growing history" `Slow
+            test_perf_fuzzy_growing;
           Alcotest.test_case "until divergence" `Quick test_until_divergence;
           Alcotest.test_case "tool miss no switch" `Quick
             test_tool_miss_no_switch;

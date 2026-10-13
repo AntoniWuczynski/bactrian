@@ -95,3 +95,5 @@ and merge_fields n fa fb =
 let similarity a b =
   let total = Int.max (leaves a) (leaves b) in
   float_of_int (matches a b) /. float_of_int total
+
+let leaf_count = leaves

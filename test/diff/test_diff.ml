@@ -70,6 +70,18 @@ let similarity_values () =
   Alcotest.check float_t "empty containers differ" 0.0 (sim "[]" "{}");
   Alcotest.check float_t "same value, other path" 0.0 (sim "[1,2]" "[2,1]")
 
+let leaf_counts () =
+  let n s = Diff.leaf_count (parse s) in
+  Alcotest.(check int) "scalar" 1 (n "1");
+  Alcotest.(check int) "empty list" 1 (n "[]");
+  Alcotest.(check int) "empty object" 1 (n "{}");
+  Alcotest.(check int) "nested" 4 (n {|{"a":[1,2,{"b":"x"}],"c":[]}|});
+  Alcotest.(check bool)
+    "bounds similarity" true
+    (let a = parse {|{"a":1,"b":2,"c":3}|} and b = parse {|{"a":1}|} in
+     Diff.similarity a b
+     <= float_of_int (Diff.leaf_count b) /. float_of_int (Diff.leaf_count a))
+
 let performance () =
   let arr other =
     Canon.list
@@ -143,6 +155,7 @@ let () =
           Alcotest.test_case "kind mismatch and order" `Quick kind_mismatch;
         ] );
       ("similarity", [ Alcotest.test_case "values" `Quick similarity_values ]);
+      ("leaves", [ Alcotest.test_case "leaf count" `Quick leaf_counts ]);
       ("performance", [ Alcotest.test_case "10k arrays" `Quick performance ]);
       ( "properties",
         List.map

@@ -169,10 +169,12 @@ module Make (C : Config) = struct
             | None -> false
           in
           let findings = if reordered then [ "reordered" ] else [] in
+          let wrong_shape = not (shape_equal (shape_of_exchange e) r.shape) in
           if reordered && strict && not C.allow_reorder then
-            (Refuse_tag "reordered", [], st)
-          else if not (shape_equal (shape_of_exchange e) r.shape) then
-            (Refuse_tag "shape", findings, st)
+            ( Refuse_tag "reordered",
+              (if wrong_shape then [ "shape" ] else []),
+              st )
+          else if wrong_shape then (Refuse_tag "shape", findings, st)
           else
             ( Serve_seq e.seq,
               findings,

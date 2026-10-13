@@ -23,6 +23,11 @@ let key ?(headers = []) ~meth ~path ~query canonical =
     |> List.sort (fun (n1, v1) (n2, v2) ->
         match String.compare n1 n2 with 0 -> String.compare v1 v2 | n -> n)
   in
+  let query =
+    List.filter (fun (name, _) -> not (String.equal name "key")) query
+    |> List.stable_sort (fun (n1, v1) (n2, v2) ->
+        match String.compare n1 n2 with 0 -> String.compare v1 v2 | n -> n)
+  in
   let fields =
     [
       ("method", Canon.string meth);
@@ -89,11 +94,13 @@ end
 
 module Count_map = Map.Make (Count_key)
 
+type candidate = { exchange : Cassette.exchange; leaves : int }
+
 type state = {
   mode : mode;
   allow_reorder : bool;
   by_occurrence : Cassette.exchange Occ_map.t;  (** Fixed after [start]. *)
-  pending : Cassette.exchange Seq_map.t;  (** Unconsumed, by channel and seq. *)
+  pending : candidate Seq_map.t;  (** Unconsumed, by channel and seq. *)
   seen : int Count_map.t;  (** Requests so far per channel and key. *)
   switched : bool;
 }
@@ -103,7 +110,9 @@ let seq_key (e : Cassette.exchange) = (channel_rank e.channel, e.seq)
 let start ~mode ~allow_reorder exchanges =
   let add (occ, pending) (e : Cassette.exchange) =
     ( Occ_map.add (channel_rank e.channel, e.key, e.occurrence) e occ,
-      Seq_map.add (seq_key e) e pending )
+      Seq_map.add (seq_key e)
+        { exchange = e; leaves = Diff.leaf_count e.canonical }
+        pending )
   in
   let by_occurrence, pending =
     List.fold_left add (Occ_map.empty, Seq_map.empty) exchanges
@@ -127,6 +136,8 @@ let channel_pending s channel =
   |> Seq.take_while (fun ((r, _), _) -> Int.equal r rank)
   |> Seq.map snd
 
+let window = 64
+
 let shape_of (e : Cassette.exchange) =
   match e.outcome with
   | Response { body = Stream _; _ } -> Some Streamed
@@ -141,15 +152,23 @@ let shape_equal a b =
 let consume s e = { s with pending = Seq_map.remove (seq_key e) s.pending }
 
 let nearest s (r : request) =
+  let r_leaves = Diff.leaf_count r.canonical in
   let best =
     Seq.fold_left
-      (fun best e ->
-        let sim = Diff.similarity e.Cassette.canonical r.canonical in
+      (fun best { exchange; leaves } ->
+        let bound =
+          float_of_int (Int.min leaves r_leaves)
+          /. float_of_int (Int.max leaves r_leaves)
+        in
         match best with
-        | Some (_, best_sim) when best_sim >= sim -> best
-        | Some _ | None -> Some (e, sim))
+        | Some (_, best_sim) when bound <= best_sim -> best
+        | Some _ | None -> (
+            let sim = Diff.similarity exchange.Cassette.canonical r.canonical in
+            match best with
+            | Some (_, best_sim) when best_sim >= sim -> best
+            | Some _ | None -> Some (exchange, sim)))
       None
-      (channel_pending s r.channel)
+      (Seq.take window (channel_pending s r.channel))
   in
   Option.map
     (fun (e, sim) -> (e, Diff.changes e.Cassette.canonical r.canonical, sim))
@@ -180,10 +199,18 @@ let matched s (r : request) (e : Cassette.exchange) =
   | Mcp -> serve s r e ~similarity:None ~findings:[]
   | Model | Http -> (
       match channel_pending s r.channel () with
-      | Seq.Cons (first, _) when not (Int.equal first.Cassette.seq e.seq) -> (
+      | Seq.Cons ({ exchange = first; _ }, _)
+        when not (Int.equal first.Cassette.seq e.seq) -> (
           let reordered = Reordered { request = r; expected = first } in
           match s.mode with
-          | Strict when not s.allow_reorder -> (s, Refuse reordered, [])
+          | Strict when not s.allow_reorder ->
+              let shape_findings =
+                match shape_of e with
+                | Some recorded when not (shape_equal recorded r.shape) ->
+                    [ Shape_mismatch { request = r; recorded = e } ]
+                | Some _ | None -> []
+              in
+              (s, Refuse reordered, shape_findings)
           | Strict | Until_divergence | Fuzzy _ ->
               serve s r e ~similarity:None ~findings:[ reordered ])
       | Seq.Cons _ | Seq.Nil -> serve s r e ~similarity:None ~findings:[])
@@ -203,7 +230,7 @@ let decide s (r : request) =
 
 let finish s =
   Seq_map.fold
-    (fun _ (e : Cassette.exchange) acc ->
+    (fun _ { exchange = e; _ } acc ->
       match e.channel with
       | Model when s.switched -> acc
       | Model | Mcp | Http -> e :: acc)
