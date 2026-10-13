@@ -80,6 +80,19 @@ let test_plan_uneven () =
 let test_full_run =
   with_ctx "full" @@ fun ctx ->
   let s = ok (go ctx) in
+  List.iter
+    (fun (_, st, id) ->
+      (match st with
+      | E.Done o ->
+          Printf.printf "DEBUG reason: %s\n%!"
+            (Option.value (Run.outcome_reason o) ~default:"-")
+      | Pending | Interrupted -> ());
+      Option.iter
+        (fun id ->
+          Printf.printf "DEBUG stderr: %s\n%!"
+            (read ctx (Printf.sprintf ".bactrian/runs/%s/agent.stderr" id)))
+        id)
+    s.runs;
   Alcotest.(check int) "runs" 8 (List.length s.runs);
   Alcotest.(check (list string))
     "all passed"
