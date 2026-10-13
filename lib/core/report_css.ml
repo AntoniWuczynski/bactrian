@@ -50,6 +50,7 @@ h3 { font-size: 1rem; margin: 1.25rem 0 0.25rem; }
 p { margin: 0.5rem 0; }
 .sub { color: var(--muted); margin-top: 0; }
 .note { color: var(--muted); font-size: 0.9rem; }
+.warning { color: var(--warn); background: var(--warn-bg); padding: 0.5rem 0.75rem; font-weight: 600; }
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0; }
 dl.facts dt { color: var(--muted); }
 dl.facts dd { margin: 0; }

@@ -27,6 +27,7 @@ type run = {
   cost : float option;
   latency_ms : float option;
   tokens : int option;
+  unsandboxed : string option;
 }
 
 let model_calls trace =
@@ -655,6 +656,7 @@ let run_json ~detail (r : run) : Yojson.Safe.t =
        ("run_id", opt (fun s -> `String s) r.run_id);
        ("status", `String (status_name r.status));
        ("reason", opt (fun s -> `String s) r.reason);
+       ("unsandboxed", opt (fun s -> `String s) r.unsandboxed);
      ]
     @
     if detail then
@@ -726,6 +728,11 @@ let summary_fields (t : t) =
                ])
            t.missing) );
     ("dropped_scenarios", `List (List.map (fun s -> `String s) t.dropped));
+    ( "unsandboxed_runs",
+      `Int
+        (List.length
+           (List.filter (fun (r : run) -> Option.is_some r.unsandboxed) t.order))
+    );
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));

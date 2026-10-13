@@ -38,6 +38,9 @@ type run = {
   cost : float option;  (** USD. *)
   latency_ms : float option;
   tokens : int option;
+  unsandboxed : string option;
+      (** Why the run ran outside the operating-system sandbox, from its
+          [meta.json]. [None] when it was sandboxed or left no [meta.json]. *)
 }
 
 val latency_ms : Trace.entry list -> float option
@@ -192,6 +195,9 @@ val to_json : t -> Yojson.Safe.t
 (** Deterministic: fixed key order, runs in execution order, scenarios sorted,
     floats shortest-round-trip, [null] for NaN and infinities. Carries
     ["schema_version"]. *)
+
+(** Each run carries ["unsandboxed"] (its reason, or [null]) and the header
+    ["unsandboxed_runs"], the number of runs outside the sandbox. *)
 
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution

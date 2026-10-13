@@ -120,7 +120,9 @@ let test_load =
         (match r.cost with Some c -> c > 0. | None -> false);
       Alcotest.(check bool) "latency" true (Option.is_some r.latency_ms);
       Alcotest.(check bool) "tokens" true (Option.is_some r.tokens);
-      Alcotest.(check int) "two checks" 2 (List.length r.checks))
+      Alcotest.(check int) "two checks" 2 (List.length r.checks);
+      Alcotest.(check (option string))
+        "unsandboxed, from the label" (Some "sandbox: off") r.unsandboxed)
     l.runs;
   List.iter
     (fun v ->

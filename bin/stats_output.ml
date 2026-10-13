@@ -49,6 +49,14 @@ let render_compare_text ~colour (d : D.t) =
   let line fmt = Printf.bprintf b (fmt ^^ "\n") in
   line "experiment %s (%s): candidate %s against baseline %s" d.experiment
     d.experiment_id d.candidate d.baseline;
+  (match List.filter_map (fun (r : D.run) -> r.unsandboxed) d.order with
+  | [] -> ()
+  | reasons ->
+      line "%s"
+        (Output.paint ~colour "31"
+           (Printf.sprintf "warning: %d of %d runs were UNSANDBOXED (%s)"
+              (List.length reasons) (List.length d.order)
+              (String.concat "; " (List.sort_uniq String.compare reasons)))));
   line "estimand %s, confidence %.0f%%, seed %d, %d resamples"
     (match d.population with `Suite -> "suite" | `Scenarios -> "scenarios")
     (d.confidence *. 100.) d.seed d.resamples;

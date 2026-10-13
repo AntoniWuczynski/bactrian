@@ -17,6 +17,7 @@
     { "variant": "b", "runs": 30, "errored": 1, "not_run": 1 }
   ],
   "dropped_scenarios": [],
+  "unsandboxed_runs": 2,
   "exit": 3,
   "metrics": [
     {
@@ -430,6 +431,7 @@
       "run_id": "run-005",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null,
       "cost_usd": 0.01,
       "latency_ms": 930.0,
       "tokens": 410,
@@ -532,6 +534,7 @@
       "run_id": "run-011",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null,
       "cost_usd": 0.01,
       "latency_ms": 960.0,
       "tokens": 410,
@@ -625,6 +628,7 @@
       "run_id": "run-017",
       "status": "failed",
       "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null,
       "cost_usd": 0.01,
       "latency_ms": 990.0,
       "tokens": 410,
@@ -718,6 +722,7 @@
       "run_id": "run-046",
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "unsandboxed": null,
       "cost_usd": 0.011,
       "latency_ms": 640.0,
       "tokens": 210,
@@ -798,6 +803,7 @@
       "run_id": "run-049",
       "status": "errored",
       "reason": "proxy fault",
+      "unsandboxed": null,
       "cost_usd": null,
       "latency_ms": null,
       "tokens": null,
@@ -813,6 +819,7 @@
       "run_id": "run-054",
       "status": "failed",
       "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "unsandboxed": null,
       "cost_usd": 0.012,
       "latency_ms": 680.0,
       "tokens": 210,
@@ -894,7 +901,8 @@
       "repeat": 1,
       "run_id": "run-000",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 1,
@@ -903,7 +911,8 @@
       "repeat": 1,
       "run_id": "run-001",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 2,
@@ -912,7 +921,8 @@
       "repeat": 2,
       "run_id": "run-002",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 3,
@@ -921,7 +931,8 @@
       "repeat": 2,
       "run_id": "run-003",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 4,
@@ -930,7 +941,8 @@
       "repeat": 3,
       "run_id": "run-004",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 5,
@@ -939,7 +951,8 @@
       "repeat": 3,
       "run_id": "run-005",
       "status": "failed",
-      "reason": "assertions[0] tool_sequence: extra notify"
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null
     },
     {
       "index": 6,
@@ -948,7 +961,8 @@
       "repeat": 4,
       "run_id": "run-006",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 7,
@@ -957,7 +971,8 @@
       "repeat": 4,
       "run_id": "run-007",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 8,
@@ -966,7 +981,8 @@
       "repeat": 5,
       "run_id": "run-008",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 9,
@@ -975,7 +991,8 @@
       "repeat": 5,
       "run_id": "run-009",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 10,
@@ -984,7 +1001,8 @@
       "repeat": 6,
       "run_id": "run-010",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 11,
@@ -993,7 +1011,8 @@
       "repeat": 6,
       "run_id": "run-011",
       "status": "failed",
-      "reason": "assertions[0] tool_sequence: extra notify"
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null
     },
     {
       "index": 12,
@@ -1002,7 +1021,8 @@
       "repeat": 7,
       "run_id": "run-012",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 13,
@@ -1011,7 +1031,8 @@
       "repeat": 7,
       "run_id": "run-013",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 14,
@@ -1020,7 +1041,8 @@
       "repeat": 8,
       "run_id": "run-014",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 15,
@@ -1029,7 +1051,8 @@
       "repeat": 8,
       "run_id": "run-015",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 16,
@@ -1038,7 +1061,8 @@
       "repeat": 9,
       "run_id": "run-016",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 17,
@@ -1047,7 +1071,8 @@
       "repeat": 9,
       "run_id": "run-017",
       "status": "failed",
-      "reason": "assertions[0] tool_sequence: extra notify"
+      "reason": "assertions[0] tool_sequence: extra notify",
+      "unsandboxed": null
     },
     {
       "index": 18,
@@ -1056,7 +1081,8 @@
       "repeat": 10,
       "run_id": "run-018",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 19,
@@ -1065,7 +1091,8 @@
       "repeat": 10,
       "run_id": "run-019",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 20,
@@ -1074,7 +1101,8 @@
       "repeat": 1,
       "run_id": "run-020",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed"
     },
     {
       "index": 21,
@@ -1083,7 +1111,8 @@
       "repeat": 1,
       "run_id": "run-021",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed"
     },
     {
       "index": 22,
@@ -1092,7 +1121,8 @@
       "repeat": 2,
       "run_id": "run-022",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 23,
@@ -1101,7 +1131,8 @@
       "repeat": 2,
       "run_id": "run-023",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 24,
@@ -1110,7 +1141,8 @@
       "repeat": 3,
       "run_id": "run-024",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 25,
@@ -1119,7 +1151,8 @@
       "repeat": 3,
       "run_id": "run-025",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 26,
@@ -1128,7 +1161,8 @@
       "repeat": 4,
       "run_id": "run-026",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 27,
@@ -1137,7 +1171,8 @@
       "repeat": 4,
       "run_id": "run-027",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 28,
@@ -1146,7 +1181,8 @@
       "repeat": 5,
       "run_id": "run-028",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 29,
@@ -1155,7 +1191,8 @@
       "repeat": 5,
       "run_id": "run-029",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 30,
@@ -1164,7 +1201,8 @@
       "repeat": 6,
       "run_id": "run-030",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 31,
@@ -1173,7 +1211,8 @@
       "repeat": 6,
       "run_id": "run-031",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 32,
@@ -1182,7 +1221,8 @@
       "repeat": 7,
       "run_id": "run-032",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 33,
@@ -1191,7 +1231,8 @@
       "repeat": 7,
       "run_id": "run-033",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 34,
@@ -1200,7 +1241,8 @@
       "repeat": 8,
       "run_id": "run-034",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 35,
@@ -1209,7 +1251,8 @@
       "repeat": 8,
       "run_id": "run-035",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 36,
@@ -1218,7 +1261,8 @@
       "repeat": 9,
       "run_id": "run-036",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 37,
@@ -1227,7 +1271,8 @@
       "repeat": 9,
       "run_id": "run-037",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 38,
@@ -1236,7 +1281,8 @@
       "repeat": 10,
       "run_id": "run-038",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 39,
@@ -1245,7 +1291,8 @@
       "repeat": 10,
       "run_id": "run-039",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 40,
@@ -1254,7 +1301,8 @@
       "repeat": 1,
       "run_id": "run-040",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 41,
@@ -1263,7 +1311,8 @@
       "repeat": 1,
       "run_id": "run-041",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 42,
@@ -1272,7 +1321,8 @@
       "repeat": 2,
       "run_id": "run-042",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 43,
@@ -1281,7 +1331,8 @@
       "repeat": 2,
       "run_id": "run-043",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 44,
@@ -1290,7 +1341,8 @@
       "repeat": 3,
       "run_id": "run-044",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 45,
@@ -1299,7 +1351,8 @@
       "repeat": 3,
       "run_id": "run-045",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 46,
@@ -1308,7 +1361,8 @@
       "repeat": 4,
       "run_id": "run-046",
       "status": "failed",
-      "reason": "assertions[1] max_steps: 3 model calls, allowed 2"
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "unsandboxed": null
     },
     {
       "index": 47,
@@ -1317,7 +1371,8 @@
       "repeat": 4,
       "run_id": "run-047",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 48,
@@ -1326,7 +1381,8 @@
       "repeat": 5,
       "run_id": "run-048",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 49,
@@ -1335,7 +1391,8 @@
       "repeat": 5,
       "run_id": "run-049",
       "status": "errored",
-      "reason": "proxy fault"
+      "reason": "proxy fault",
+      "unsandboxed": null
     },
     {
       "index": 50,
@@ -1344,7 +1401,8 @@
       "repeat": 6,
       "run_id": "run-050",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 51,
@@ -1353,7 +1411,8 @@
       "repeat": 6,
       "run_id": "run-051",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 52,
@@ -1362,7 +1421,8 @@
       "repeat": 7,
       "run_id": "run-052",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 53,
@@ -1371,7 +1431,8 @@
       "repeat": 7,
       "run_id": "run-053",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 54,
@@ -1380,7 +1441,8 @@
       "repeat": 8,
       "run_id": "run-054",
       "status": "failed",
-      "reason": "assertions[1] max_steps: 3 model calls, allowed 2"
+      "reason": "assertions[1] max_steps: 3 model calls, allowed 2",
+      "unsandboxed": null
     },
     {
       "index": 55,
@@ -1389,7 +1451,8 @@
       "repeat": 8,
       "run_id": "run-055",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 56,
@@ -1398,7 +1461,8 @@
       "repeat": 9,
       "run_id": "run-056",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 57,
@@ -1407,7 +1471,8 @@
       "repeat": 9,
       "run_id": "run-057",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 58,
@@ -1416,7 +1481,8 @@
       "repeat": 10,
       "run_id": "run-058",
       "status": "passed",
-      "reason": null
+      "reason": null,
+      "unsandboxed": null
     },
     {
       "index": 59,
@@ -1425,7 +1491,8 @@
       "repeat": 10,
       "run_id": "run-059",
       "status": "not_run",
-      "reason": "spend cap reached"
+      "reason": "spend cap reached",
+      "unsandboxed": null
     }
   ]
 }

@@ -117,6 +117,10 @@ let make ~index ~scenario ~variant ~repeat : R.run =
        else None);
     latency_ms = (if finished then R.latency_ms tr else None);
     tokens = (if finished then R.tokens tr else None);
+    unsandboxed =
+      (if scenario = "search" && repeat = 1 then
+         Some "unavailable: bubblewrap (bwrap) is not installed"
+       else None);
   }
 
 let runs : R.run list =

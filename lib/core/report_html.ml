@@ -118,6 +118,21 @@ let header (d : D.t) =
            ]);
     ]
 
+(* Runs outside the sandbox are named before anything else (design §5.3). *)
+let unsandboxed_warning (d : D.t) =
+  match List.filter_map (fun (r : D.run) -> r.unsandboxed) d.order with
+  | [] -> []
+  | reasons ->
+      [
+        para ~cls:[ "warning" ]
+          (Printf.sprintf
+             "%d of %d runs ran without the operating-system sandbox, so \
+              nothing stopped their agents from reaching the network or \
+              writing outside their run: %s."
+             (List.length reasons) (List.length d.order)
+             (String.concat "; " (List.sort_uniq String.compare reasons)));
+      ]
+
 let missing_table (d : D.t) =
   table ~caption:"Missing data per arm"
     ~head:[ "Variant"; "Runs"; "Errored"; "Not run or unfinished" ]
@@ -602,7 +617,10 @@ let order_section (d : D.t) =
                      Text r.scenario;
                      Text r.variant;
                      Num (string_of_int r.repeat);
-                     Text (F.status r.status);
+                     Text
+                       (match r.unsandboxed with
+                       | Some _ -> F.status r.status ^ ", unsandboxed"
+                       | None -> F.status r.status);
                      Code (Option.value r.run_id ~default:"");
                    ] ))
                d.order);
@@ -630,21 +648,22 @@ let page (d : D.t) =
     (H.body
        [
          H.main
-           [
-             header d;
-             section "verdicts" "Verdicts"
-               (verdict_table d
-                :: List.concat_map
-                     (fun m -> List.map (para ~cls:[ "note" ]) (F.notes m))
-                     d.metrics
-               @ (missing_table d :: dropped_note d));
-             forest_section d;
-             arms_section d;
-             measures_section d;
-             behaviour_section d;
-             failures_section d;
-             order_section d;
-           ];
+           ([ header d ]
+           @ unsandboxed_warning d
+           @ [
+               section "verdicts" "Verdicts"
+                 (verdict_table d
+                  :: List.concat_map
+                       (fun m -> List.map (para ~cls:[ "note" ]) (F.notes m))
+                       d.metrics
+                 @ (missing_table d :: dropped_note d));
+               forest_section d;
+               arms_section d;
+               measures_section d;
+               behaviour_section d;
+               failures_section d;
+               order_section d;
+             ]);
        ])
 
 (* The printer's own indentation would break lines inside [pre] and the
