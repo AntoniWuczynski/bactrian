@@ -8,8 +8,21 @@ type request = {
   shape : shape;
 }
 
-let key ~meth ~path ~query canonical =
+let behaviour_headers = [ "anthropic-version"; "anthropic-beta"; "openai-beta" ]
+
+let key ?(headers = []) ~meth ~path ~query canonical =
   let pair (k, v) = Canon.list [ Canon.string k; Canon.string v ] in
+  let kept =
+    List.filter_map
+      (fun (name, value) ->
+        let name = String.lowercase_ascii name in
+        if List.exists (String.equal name) behaviour_headers then
+          Some (name, value)
+        else None)
+      headers
+    |> List.sort (fun (n1, v1) (n2, v2) ->
+        match String.compare n1 n2 with 0 -> String.compare v1 v2 | n -> n)
+  in
   let fields =
     [
       ("method", Canon.string meth);
@@ -17,10 +30,14 @@ let key ~meth ~path ~query canonical =
       ("query", Canon.list (List.map pair query));
       ("request", canonical);
     ]
+    @
+    match kept with
+    | [] -> []
+    | _ :: _ -> [ ("headers", Canon.list (List.map pair kept)) ]
   in
   match Canon.obj fields with
   | Ok v -> Canon.digest v
-  | Error _ -> assert false (* the four field names above are distinct *)
+  | Error _ -> assert false (* the field names above are distinct *)
 
 type divergence =
   | Missing_request of {

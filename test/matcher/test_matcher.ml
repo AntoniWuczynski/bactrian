@@ -118,6 +118,37 @@ let test_key () =
   differs "body"
     (M.key ~meth:"POST" ~path:"/p" ~query:[ ("a", "1") ] (doc {|{"a":2}|}))
 
+let test_key_headers () =
+  let c = doc {|{"a":1}|} in
+  let key ?headers () = M.key ?headers ~meth:"POST" ~path:"/p" ~query:[] c in
+  let base = key () in
+  let same name k = Alcotest.(check string) name base k in
+  let differs name k = Alcotest.(check bool) name false (String.equal base k) in
+  same "empty list" (key ~headers:[] ());
+  same "irrelevant headers"
+    (key
+       ~headers:[ ("content-type", "application/json"); ("x-request-id", "1") ]
+       ());
+  differs "anthropic-beta" (key ~headers:[ ("anthropic-beta", "b1") ] ());
+  differs "openai-beta" (key ~headers:[ ("openai-beta", "assistants=v2") ] ());
+  differs "anthropic-version"
+    (key ~headers:[ ("anthropic-version", "2023-06-01") ] ());
+  Alcotest.(check string)
+    "names are case-insensitive"
+    (key ~headers:[ ("anthropic-beta", "b1") ] ())
+    (key ~headers:[ ("Anthropic-Beta", "b1") ] ());
+  Alcotest.(check bool)
+    "values are case-sensitive" false
+    (String.equal
+       (key ~headers:[ ("anthropic-beta", "b1") ] ())
+       (key ~headers:[ ("anthropic-beta", "B1") ] ()));
+  Alcotest.(check string)
+    "order does not matter"
+    (key ~headers:[ ("anthropic-beta", "b"); ("anthropic-version", "v") ] ())
+    (key ~headers:[ ("Anthropic-Version", "v"); ("anthropic-beta", "b") ] ());
+  same "irrelevant next to none"
+    (key ~headers:[ ("Authorization", "Bearer x") ] ())
+
 let test_strict_in_order () =
   let exs =
     [ ex 0 "a"; ex 1 "b"; ex ~channel:Mcp 2 "t"; ex ~channel:Http 3 "h" ]
@@ -319,6 +350,7 @@ let () =
       ( "matcher",
         [
           Alcotest.test_case "key" `Quick test_key;
+          Alcotest.test_case "key headers" `Quick test_key_headers;
           Alcotest.test_case "strict in order" `Quick test_strict_in_order;
           Alcotest.test_case "occurrence" `Quick test_occurrence;
           Alcotest.test_case "reordered" `Quick test_reordered_model;
