@@ -1,0 +1,8 @@
+(test
+ (name test_stats)
+ (package bactrian)
+ (libraries bactrian.core yojson alcotest qcheck-core qcheck-alcotest)
+ (deps
+  (source_tree ../fixtures/stats))
+ (flags
+  (:standard -w -70)))
