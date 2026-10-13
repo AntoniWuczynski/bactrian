@@ -225,6 +225,32 @@ let test_lock =
     (input_line (Unix.in_channel_of_descr stdout_r));
   mentions "already running" (refused (go ~resume:(Some s.experiment_id) ctx))
 
+(* A second run of the same experiment in this process is refused too: the
+   first holds the lock while its [announce] waits. *)
+let test_lock_in_process =
+  with_ctx "lock-in-process" @@ fun ctx ->
+  let s = ok (go ctx) in
+  let resume = Some s.experiment_id in
+  let held, hold = Eio.Promise.create () in
+  let second, got_second = Eio.Promise.create () in
+  let first =
+    Eio.Fiber.pair
+      (fun () ->
+        go ~resume
+          ~announce:(fun _ ->
+            Eio.Promise.resolve hold ();
+            Eio.Promise.await second)
+          ctx)
+      (fun () ->
+        Eio.Promise.await held;
+        let r = go ~resume ctx in
+        Eio.Promise.resolve got_second ();
+        r)
+  in
+  let first, again = first in
+  ignore (ok first : E.summary);
+  mentions "already running (this process" (refused again)
+
 (* A strict sandbox that does not work stops the experiment before any run
    (the probe executable here does not exist). Settings this build parses but
    cannot enforce are listed. *)
@@ -354,6 +380,7 @@ let () =
           Alcotest.test_case "not_run runs are re-run after a cap" `Slow
             test_resume_after_cap;
           Alcotest.test_case "one process at a time" `Slow test_lock;
+          Alcotest.test_case "one job at a time" `Slow test_lock_in_process;
         ] );
       ( "settings",
         [

@@ -104,7 +104,9 @@ val run_experiment :
     the files now: the experiment (except [caps_usd] and [concurrency], which
     may change), the agent, any scenario file or the price file. The message
     names what changed. An exclusive lock on [experiments/<id>/run.lock] keeps a
-    second process from running the same experiment.
+    second process from running the same experiment, and a table of the locks
+    this process holds keeps a second caller in the same process (another job of
+    the MCP server) from doing so.
 
     Before the first run, {!Sandbox.preflight} checks the sandbox once, in the
     experiment's [sandbox] mode or in [sandbox] when given (the command line's

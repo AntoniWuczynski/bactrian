@@ -498,26 +498,47 @@ let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
     faketime = l.experiment.faketime;
   }
 
-(* One process runs an experiment at a time: two would both start the pending
-   runs and overwrite each other's manifest. *)
+(* The lock files this process holds. A [lockf] lock belongs to the process,
+   so a second taker in the same process (another job of the MCP server) would
+   be granted it, and the first one's [close] would release both. *)
+let held = Hashtbl.create 4
+let held_mutex = Mutex.create ()
+
+let claim path =
+  Mutex.protect held_mutex (fun () ->
+      if Hashtbl.mem held path then false
+      else (
+        Hashtbl.replace held path ();
+        true))
+
+let release path = Mutex.protect held_mutex (fun () -> Hashtbl.remove held path)
+
+(* One process runs an experiment at a time, and one job within it: two would
+   both start the pending runs and overwrite each other's manifest. *)
 let with_lock ~experiment_id dir f =
   let path = Eio.Path.native_exn Eio.Path.(dir / "run.lock") in
+  let running holder =
+    Error
+      (Usage
+         (Printf.sprintf "experiment %s is already running (%s holds %s)"
+            experiment_id holder path))
+  in
   match Unix.openfile path [ O_WRONLY; O_CREAT; O_CLOEXEC ] 0o600 with
   | exception Unix.Unix_error (e, _, _) ->
       Error (Environment (Printf.sprintf "%s: %s" path (Unix.error_message e)))
   | fd -> (
       Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
-      match Unix.lockf fd F_TLOCK 0 with
-      | exception Unix.Unix_error ((EAGAIN | EACCES | EWOULDBLOCK), _, _) ->
-          Error
-            (Usage
-               (Printf.sprintf
-                  "experiment %s is already running (another process holds %s)"
-                  experiment_id path))
-      | exception Unix.Unix_error (e, _, _) ->
-          Error
-            (Environment (Printf.sprintf "%s: %s" path (Unix.error_message e)))
-      | () -> f ())
+      let key = Unix.realpath path in
+      if not (claim key) then running "this process"
+      else
+        Fun.protect ~finally:(fun () -> release key) @@ fun () ->
+        match Unix.lockf fd F_TLOCK 0 with
+        | exception Unix.Unix_error ((EAGAIN | EACCES | EWOULDBLOCK), _, _) ->
+            running "another process"
+        | exception Unix.Unix_error (e, _, _) ->
+            Error
+              (Environment (Printf.sprintf "%s: %s" path (Unix.error_message e)))
+        | () -> f ())
 
 (* A resume repeats what has no outcome worth keeping: a run that was lost,
    interrupted, stopped by a cap (missing data) or hit a fault of ours. The
