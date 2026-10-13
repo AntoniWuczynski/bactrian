@@ -2,7 +2,7 @@
 
 This document describes how bactrian is designed. Sections are numbered so that code comments can point at them. Parts of the design that the current build does not implement are marked as planned. The README's Status section says what works today, and [`decisions/`](decisions/) records individual choices with their reasons.
 
-Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), clock enforcement with `libfaketime`, HTTP-mode agents, the `doctor` and `ca` commands, published JSON Schemas, and the MCP server mode (`serve-mcp`).
+Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), clock enforcement with `libfaketime`, HTTPS for HTTP-mode agents, the `doctor` and `ca` commands, published JSON Schemas, and the MCP server mode (`serve-mcp`).
 
 ## 1. Purpose
 
@@ -33,7 +33,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 | Name | `bactrian`, after the two-humped camel, because most of what it does is compare two things. |
 | Licence | Apache-2.0 |
 | Interfaces | Command line first, with `--json` on every command. An MCP server mapping onto the command line is planned. |
-| Agent contract | Two driving protocols, both interactive JSON Lines from the start: command mode (subprocess, standard input and output) and HTTP mode (a long-lived server, one POST per message, run ID and state namespace on every request). HTTP mode is planned. |
+| Agent contract | Two driving protocols, both interactive JSON Lines from the start: command mode (subprocess, standard input and output) and HTTP mode (a long-lived server, one POST per message, run ID and state namespace on every request, the per-run environment in the `start` message; decision 0008). |
 | Model comparison | v1: the agent picks the model from variant environment variables. Later: bactrian translates between protocols to swap models underneath an agent. |
 | Provider protocols | Five adapters: OpenAI Chat Completions (also used for OpenRouter), OpenAI Responses, Anthropic Messages, Gemini `generateContent` and Gemini Interactions. |
 | Tool determinism | Three mechanisms, picked per experiment: MCP interception, fixtures seeded into the state directory, and HTTPS egress interception with a generated certificate authority (planned). Per-host or per-server policy: `record`, `replay`, `passthrough`, `block`. |
@@ -79,7 +79,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Model_proxy` | One HTTP listener. Routes by run token in the path (`/r/<token>/...`). Record, replay and passthrough, including streams. MCP traffic shares the listener and the run registry through `Mcp_proxy` (decision 0006), so one port and one token cover models and tools. |
 | `Mcp_proxy`, `Mcp_shim` | MCP endpoints on the listener for Streamable HTTP servers, and `bactrian mcp-shim <name>` for stdio servers that the agent launches itself. |
 | `Egress_proxy`, `Ca` (planned) | HTTP `CONNECT` proxy. The run ID arrives as the proxy username. Mints a leaf certificate per host from the project certificate authority (CA) and terminates Transport Layer Security (TLS) with a fresh single-certificate configuration per connection. Applies per-host policy. Its own process environment is scrubbed of `SSL_CERT_FILE` so its upstream trust is never replaced by its own CA. |
-| `Agent_driver` | The command protocol (the HTTP protocol is planned), environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. `libfaketime` injection is planned. |
+| `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. `libfaketime` injection is planned. |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
 | `Checker_runner` | Runs external checker commands with the trace on standard input. Checkers will run sandboxed as well. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
@@ -107,7 +107,7 @@ One run:
    - provider key variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) set to a placeholder `bactrian-<run-token>`, never the real key (section 5.3)
    - `HOME` set to the state directory, with `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `npm_config_cache` inside it, `TMPDIR` set to the run's temporary directory, and `PYTHONDONTWRITEBYTECODE=1`, so runtimes keep their caches inside the run. This holds with or without the sandbox, so a run's environment does not depend on the host
    - nothing else from bactrian's own environment except `PATH`, `LANG`, `TERM` and the variables the experiment lists under `agent.env_passthrough`
-3. Start the agent inside the sandbox (section 5.3) and drive it through the wire contract in section 5.1. HTTP-mode runs are labelled "isolation not enforced" in reports, because bactrian cannot reset a long-lived server.
+3. Start the agent inside the sandbox (section 5.3) and drive it through the wire contract in section 5.1. HTTP-mode runs are unsandboxed with the reason `http mode` (section 5.1), because bactrian does not start the server and cannot reset it.
 4. Capture. Every exchange (model, MCP, egress, including 429 responses, retries and stream timing) is appended to the cassette as it happens. Live calls are charged to the ledger at once.
 5. Tear down on `done`, turn timeout or total timeout: kill the process group, collect the sandbox's violations, unregister routes, remove the temporary directory, finalise the cassette, derive the trace, run assertions and checkers, write `verdicts.json` and `meta.json`.
 6. Replay differences: egress defaults to `block`. A strict miss returns a `bactrian_replay_miss` error body to the agent and records the divergence. `until-divergence` switches the run to live and marks the live tail.
@@ -126,7 +126,7 @@ Spend caps are enforced by reservation. Before a live request is forwarded, the 
 Both modes speak version 1 of the same JSON messages. Every message has `"v": 1` and a `"type"`. Unknown types are a protocol violation.
 
 bactrian to agent:
-- `{"v":1,"type":"start","run_id":"…","scenario":"…","variant":"…","sim_now":"…","state_dir":"…"}` once, first.
+- `{"v":1,"type":"start","run_id":"…","scenario":"…","variant":"…","sim_now":"…","state_dir":"…"}` once, first. In HTTP mode it also has `"env":{"NAME":"value",…}`, see below. Command mode never sends `env`.
 - `{"v":1,"type":"turn","turn":<n>,"content":"…"}` for each scripted user turn, `turn` counting from 1. The next turn is sent only after the agent's `reply` for the previous one.
 - `{"v":1,"type":"end"}` after the last reply. The agent must then exit (command mode) or release the run's state (HTTP mode).
 
@@ -137,9 +137,13 @@ Agent to bactrian:
 
 Command mode: one JSON object per line on standard input and output. Standard error is captured to `agent.stderr` and never parsed. End of file on standard output before the final reply, a reply with the wrong `turn`, or a line that is not a valid message ends the run `Failed (protocol_violation)` with the offending line. After `end` the agent has 5 seconds to exit, then the process group gets SIGTERM and, 5 seconds later, SIGKILL. On a turn or total timeout, a protocol violation or an interrupt, SIGTERM goes to the group at once.
 
-HTTP mode (planned): bactrian sends each bactrian-to-agent message as `POST <url>` with `Content-Type: application/json`, header `X-Bactrian-Run: <run-id>` and header `<namespace_header>: <run-id>`. The response body is a JSON array of agent-to-bactrian messages for that step (empty for `start` and `end`). A non-2xx status ends the run `Failed (agent_http_error)`.
+HTTP mode (decision 0008): bactrian sends each bactrian-to-agent message as `POST <url>` with `Content-Type: application/json`, header `X-Bactrian-Run: <run-id>` and header `<namespace_header>: <run-id>`. The response body is a JSON array of agent-to-bactrian messages for that step (empty for `start` and `end`). A non-2xx status ends the run `Failed (agent_http_error)` with the status and the first 2 KiB of the body, and a body that is not an array of valid messages ends it `Failed (protocol_violation)`. The turn timeout bounds each request and the total timeout the whole run, as in command mode. Only `http://` URLs work until the TLS connector is built in, and an `https://` URL exits 69 with the same message as an `https` upstream.
 
-`examples/` contains a conformance agent in TypeScript and one in Python. A multi-turn transcript per mode that the test suite replays against the driver is planned for HTTP mode.
+The server was started by the user, so its process environment cannot carry the per-run values. The `env` object of the `start` message holds the per-run routing and identity variables that a command-mode agent gets in step 2 of section 5: the provider base URLs with the run token, the placeholder keys (never the real ones), `SIM_NOW`, `TZ`, `BACTRIAN_RUN_ID`, `BACTRIAN_STATE_DIR`, the MCP variables, and the variant's own variables. It leaves out what belongs to the agent's own process: `PATH`, `LANG`, `TERM`, the passthrough list, and the variables bactrian redirects into the run for a command agent (`HOME`, the `XDG_*` and npm cache directories, `TMPDIR`, `PYTHONDONTWRITEBYTECODE`). One function builds the values for both modes. The agent must use them for that run's calls and key its state by the run ID, because runs can overlap. `env` is optional when decoding, so agents that predate it keep working.
+
+HTTP-mode runs are unsandboxed whatever `sandbox` says, because bactrian does not start the process. They carry the ordinary sandbox label of section 5.3 with `applied` false and the reason `http mode`, so reports and comparisons flag them like any other unsandboxed run, and the preflight probe is not run for the experiment. The experiment prints a warning once. `sandbox: strict` in any of its forms, or `--sandbox strict`, with `protocol: http` is a configuration error (located at `sandbox`, or at `agent.protocol` for the flag).
+
+`examples/` contains a conformance agent in TypeScript and one in Python. Each runs in either mode (`--http PORT` for HTTP mode, where port 0 picks a free port, printed as the first line of standard output). A multi-turn transcript per mode that the test suite replays against the driver is planned.
 
 ### 5.2 Local security contract
 
@@ -214,7 +218,7 @@ Assertion kinds in v1: `tool_sequence` (`exact`, `in_order`, `contains`), `tool_
 version: 1
 name: luna-vs-flash
 agent:
-  protocol: command            # or: http { url, namespace_header } (planned)
+  protocol: command            # or: http { url, namespace_header }
   command: ["node", "dist/adapter.js"]
   timeouts: { turn: 120s, total: 600s }
 scenarios: ["scenarios/*.yaml"]

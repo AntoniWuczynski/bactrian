@@ -92,6 +92,23 @@ prices:
 
 An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
 
+## HTTP-mode agents
+
+A command agent is a process that bactrian starts for each run. An agent that is already a long-lived server can be driven over HTTP instead, in an experiment (`bactrian record` and `bactrian replay` start command agents only). Give the server's address and the name of the header that carries the run ID:
+
+```yaml
+agent:
+  protocol: http
+  url: http://127.0.0.1:3000/agent
+  namespace_header: X-Agent-Run
+```
+
+You start the server yourself, before `bactrian run`. For each message of the conversation (`start`, one `turn` per user message and `end`, the same JSON as in command mode) bactrian sends `POST <url>` with `Content-Type: application/json`, the message as the body, and the run ID in `X-Bactrian-Run` and in the namespace header. The response body is a JSON array of the agent's messages for that step: `[]` for `start` and `end`, and for a turn any `event` messages followed by the `reply`. A status outside 2xx ends the run as `failed` with `agent_http_error`, the status and the first 2 KiB of the body. The turn and total timeouts apply as in command mode, the turn timeout to each request. Only `http://` URLs work for now. This build has no HTTPS support, so an `https://` URL stops with exit status 69.
+
+A server that is already running cannot be given environment variables, so the `start` message of an HTTP-mode agent carries them in an `env` object. It holds exactly the per-run values a command agent gets as its environment: the provider base URLs with the run token, the placeholder API keys, `SIM_NOW`, `TZ`, `BACTRIAN_RUN_ID`, `BACTRIAN_STATE_DIR`, the MCP variables when the run has MCP servers, and the variant's own variables. Nothing else is included. The server owns its own process, so there is no `PATH`, no passthrough variable and none of the variables bactrian redirects for a command agent (`HOME`, the `XDG_*` and npm cache directories, `TMPDIR` and `PYTHONDONTWRITEBYTECODE`), and the real provider keys never appear. The agent has to use these values for the calls of that run, and not its own process environment, and it has to keep its state per run ID, because several runs can be in flight at once when `concurrency` is above 1. The `env` field is absent from command-mode `start` messages, so existing agents are unaffected. The example agents show the pattern: `--http PORT` serves the same logic as a server (port 0 picks a free one), prints the port it bound as the first line of its output, and reads each run's configuration from its `env`.
+
+Because bactrian does not start the server, it cannot put it in a sandbox, give it a fresh process for each run or reset what it remembers between runs. Every HTTP-mode run is therefore unsandboxed whatever `sandbox` says, and carries the usual label in its `meta.json` with the reason `http mode` (`{"mode": "auto", "applied": false, "reason": "http mode"}`), so reports and comparisons flag it like any other unsandboxed run. No sandbox probe is run for such an experiment, and it prints a warning when it starts, also listed under `unenforced`. `sandbox: strict`, in any of its forms, or `--sandbox strict` with `protocol: http` is a configuration error, because the guarantee cannot be met. The server can also reach the network directly, so only the calls that go through the base URLs in `env` are recorded.
+
 ## MCP tools
 
 Agents often reach their tools through the Model Context Protocol (MCP). bactrian records those calls next to the model calls and replays them, so a replay needs neither the real server nor the network. It handles servers that speak the 2026-07-28 revision (stateless) and the 2025-11-25 one and earlier (which opens with `initialize`), over stdio and over Streamable HTTP.
