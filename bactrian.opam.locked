@@ -43,6 +43,8 @@ depends: [
   "ptime" {= "1.2.0" & with-doc}
   "qcheck-alcotest" {= "0.91" & with-test}
   "qcheck-core" {= "0.91" & with-test}
+  "qcheck-multicoretests-util" {= "0.10" & with-test}
+  "qcheck-stm" {= "0.10" & with-test}
   "re" {= "1.14.0"}
   "seq" {= "base" & with-doc}
   "sexplib0" {= "v0.17.0"}

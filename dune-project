@@ -19,4 +19,5 @@
   (re (>= 1.14.0))
   (alcotest :with-test)
   (qcheck-core :with-test)
-  (qcheck-alcotest :with-test)))
+  (qcheck-alcotest :with-test)
+  (qcheck-stm :with-test)))
