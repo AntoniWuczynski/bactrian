@@ -82,6 +82,18 @@ let key_checks ~keys ~funded =
                    variable provider))
     Run.providers
 
+(* Spend caps *)
+
+let caps_check (t : target) =
+  match t.funded with
+  | [] ->
+      check "caps" Fail
+        (Live_preflight.describe ~set_caps:"caps_usd in the experiment"
+           Live_preflight.No_cap)
+  | _ :: _ ->
+      check "caps" Pass
+        ("a spend cap above 0 for " ^ String.concat ", " (List.map snd t.funded))
+
 (* Upstream overrides *)
 
 let upstream_checks ~upstream =
@@ -297,6 +309,7 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
   in
   let mode = match target with Some t -> t.sandbox | None -> `Auto in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
+  @ (match target with Some t -> [ caps_check t ] | None -> [])
   @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with

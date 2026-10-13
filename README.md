@@ -258,6 +258,7 @@ skip  tls: HTTPS support is not built in
 ```
 
 - `key-<provider>`: whether the provider's key variable is set. Only the variable's name is printed, never any part of its value. A missing key is a `warn`. With `--experiment` it is a `fail` for a provider whose `caps_usd` is above 0, because the experiment calls that provider live, and a `skip` for the others.
+- `caps` (with `--experiment`): some provider has a spend cap above 0 in `caps_usd`. `run` refuses an experiment without one, so this is a `fail`.
 - `loopback`: a port on 127.0.0.1 can be bound.
 - `agent` (with `--experiment`): the agent command is found on `PATH`, or relative to the experiment file's directory. For an HTTP-mode agent the URL is well-formed. It is not contacted.
 - `sandbox`: the sandbox works here. It runs the same probe as a run's preflight and prints the same cause and fix, including the two AppArmor commands on Linux. An unavailable sandbox is a `fail` under `sandbox: strict` in the experiment and a `warn` otherwise. `off` and HTTP-mode agents are `skip`.

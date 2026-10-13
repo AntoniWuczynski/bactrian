@@ -49,7 +49,8 @@ An empty key counts as missing.
   warn  key-openai: OPENAI_API_KEY is not set
 
 An experiment with no spend cap calls no provider live, so a missing key is
-skipped, and the agent command is looked up.
+skipped, and the agent command is looked up. `run` refuses such an
+experiment, so the caps check fails.
 
   $ cat > exp.yaml <<'YAML'
   > version: 1
@@ -61,12 +62,13 @@ skipped, and the agent command is looked up.
   > sandbox: off
   > YAML
   $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment exp.yaml > out.txt; echo "exit $?"
-  exit 0
+  exit 69
   $ grep -v ' clock:' out.txt | sed 's/ resolves to .*/ resolves to FILE/'
   ok    key-openai: OPENAI_API_KEY is set
   skip  key-anthropic: ANTHROPIC_API_KEY is not set, and the experiment has no spend cap for anthropic
   skip  key-gemini: GEMINI_API_KEY is not set, and the experiment has no spend cap for gemini
   skip  key-openrouter: OPENROUTER_API_KEY is not set, and the experiment has no spend cap for openrouter
+  fail  caps: no provider has a spend cap above 0: set caps_usd in the experiment
   ok    loopback: a port on 127.0.0.1 can be bound
   ok    agent: sh resolves to FILE
   skip  sandbox: sandbox: off
@@ -81,11 +83,12 @@ does HTTPS support while this build has none.
   $ echo 'caps_usd: { openai: 1, gemini: 1 }' >> capped.yaml
   $ run GEMINI_API_KEY=sk-SENTINEL-three bactrian doctor --experiment capped.yaml > out.txt; echo "exit $?"
   exit 69
-  $ grep -e key- -e tls: out.txt
+  $ grep -e key- -e caps: -e tls: out.txt
   fail  key-openai: OPENAI_API_KEY is not set, and the experiment has a spend cap for openai
   skip  key-anthropic: ANTHROPIC_API_KEY is not set, and the experiment has no spend cap for anthropic
   ok    key-gemini: GEMINI_API_KEY is set
   skip  key-openrouter: OPENROUTER_API_KEY is not set, and the experiment has no spend cap for openrouter
+  ok    caps: a spend cap above 0 for openai, gemini
   fail  tls: HTTPS support is not built in, but the experiment needs it for openai, gemini
   $ grep -c SENTINEL out.txt
   0
