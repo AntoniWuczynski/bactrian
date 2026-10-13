@@ -113,7 +113,7 @@ let dual_era_probe =
   ignore (result_of (send token_b (initialize (Int_id 12))).body);
   no_divergence (P.unregister ctx.proxy ~token:token_b)
 
-(* Review focus 3: the wrong handshake is a divergence naming it, not a hang. *)
+(* The wrong handshake is a divergence naming it, not a hang. *)
 let handshake_divergence =
   let case name ~recorded_era ~record ~replay ~method_ =
     Alcotest.test_case name `Quick
@@ -160,7 +160,7 @@ let handshake_divergence =
       ~replay:(discover (Int_id 99)) ~method_:"server/discover";
   ]
 
-(* Review focus 2: parallel calls, answered in another order. *)
+(* Parallel calls replay when they arrive in another order. *)
 let parallel =
   Alcotest.test_case "parallel calls record and replay out of order" `Quick
   @@ with_ctx "mcp-parallel"
@@ -184,7 +184,7 @@ let parallel =
   both token_b (Int_id 20, "London") (Int_id 10, "Paris");
   no_divergence (P.unregister ctx.proxy ~token:token_b)
 
-(* Review focus 4: a crash is a JSON-RPC error and a transport error. *)
+(* A crash is a JSON-RPC error and a transport error. *)
 let crash =
   Alcotest.test_case "a crashed server gives errors, not a hang" `Quick
   @@ with_ctx "mcp-crash"
@@ -269,7 +269,11 @@ let policies =
   let _, _, _, data = error_of (send "canned" (call (Int_id 2) "Oslo")).body in
   Alcotest.(check string)
     "no recording" "bactrian_replay_miss" (error_type data);
-  check_status "unknown" 404 (send "nobody" (call (Int_id 3) "Oslo"));
+  let unknown = send "nobody" (call (Int_id 3) "Oslo") in
+  check_status "unknown" 404 unknown;
+  let id, code, _, _ = error_of unknown.body in
+  Alcotest.check id_testable "unknown server's id" (Int_id 3) id;
+  Alcotest.(check int) "unknown server's code" (-32601) code;
   let _, _, message, data =
     error_of (send "missing" (call (Int_id 4) "Oslo")).body
   in
@@ -286,7 +290,7 @@ let policies =
        (fun (e : Cassette.exchange) -> e.path)
        (mcp_exchanges (recording ctx run)))
 
-(* Review focus 5 and teardown. *)
+(* The server gets only its declared environment, and dies with the run. *)
 let environment =
   Alcotest.test_case "the server sees only its declared environment" `Quick
   @@ with_ctx "mcp-env"

@@ -27,7 +27,8 @@ type server =
     }
   | Http of { url : Uri.t }
       (** The server's real endpoint. A request to [.../mcp-http/<name>/x] goes
-          to [url]'s path followed by [/x], with the agent's query. *)
+          to [url]'s path followed by [/x], with [url]'s query followed by the
+          agent's. *)
 
 type policy = Experiment.policy =
   | Record
@@ -92,6 +93,9 @@ type env = {
     on_head:(Upstream.head -> unit) ->
     on_chunk:(dt_ms:int -> string -> unit) ->
     (unit, Upstream.error) result;
+  answer_timeout : float;
+      (** Seconds a stdio server has to take a request on its stdin and answer
+          it. *)
 }
 
 (** {1 Serving} *)
@@ -118,8 +122,23 @@ val stdio : t -> name:string -> string -> reply
     [Transport_error]. A replay miss gives error [-32000] (data [type]
     ["bactrian_replay_miss"] and [divergence]), naming the handshake when the
     request is [initialize] or [server/discover]. A notification or response
-    gets 202 and an empty body. A body that is not one JSON-RPC message gets 400
-    with error [-32700], an unknown server 404. *)
+    gets 202 and an empty body, once it is on a live server's stdin. A body that
+    is not one JSON-RPC message gets 400 with error [-32700]. A server the run
+    does not have gives 404, with error [-32601] and the request's id for a
+    request.
+
+    Requests reach the server renumbered, so that clients never clash. A
+    [notifications/cancelled] is passed on with the id bactrian gave the request
+    it names, and that request is answered with error [-32000] at once and not
+    recorded. A cancellation that names no request in flight, or an id several
+    requests in flight share, is dropped and noted in the run's errors. A
+    request the end of the run cuts off gets error [-32000], is noted and is not
+    recorded, and neither it nor a cancelled one is a transport error. A server
+    that takes no request on its stdin within [answer_timeout] is given up on
+    like a crashed one. An error from the server without an id answers the
+    request in flight if there is exactly one, and is noted otherwise. A request
+    from the server gets error [-32601] on its stdin, since it cannot reach the
+    agent. *)
 
 val http :
   t ->
@@ -135,10 +154,13 @@ val http :
     [accept], [mcp-protocol-version], [mcp-method], [mcp-name], [mcp-session-id]
     and [mcp-param-*], never the agent's key headers. The reply carries the
     server's status, [content-type] and [mcp-session-id]. In replay the recorded
-    reply is served with the live id, in a JSON body or in each [data:] line of
-    an event stream, and the agent's [mcp-session-id] is accepted whatever it
-    is. A transport failure is 502 with a JSON-RPC error, a replay miss 409 with
-    one. *)
+    reply is served with the live id, in a JSON body or in the event of an event
+    stream that answers the recorded request (the server's own requests and
+    notifications on that stream keep their ids), and the agent's
+    [mcp-session-id] is accepted whatever it is. Under [Block] a request gets
+    403 and a notification 202. A transport failure is 502 with a JSON-RPC
+    error, a replay miss 409 with one. A path with a [.] or [..] segment,
+    encoded or not, is refused with 400. *)
 
 val stop : t -> unit
 (** Kills the process group of every stdio server the run started (SIGTERM, then

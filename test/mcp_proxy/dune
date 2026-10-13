@@ -14,8 +14,8 @@
   (:standard -w -70)))
 
 (tests
- (names test_mcp_stdio test_mcp_http test_mcp_shim)
- (modules test_mcp_stdio test_mcp_http test_mcp_shim)
+ (names test_mcp_stdio test_mcp_http test_mcp_shim test_mcp_concurrency)
+ (modules test_mcp_stdio test_mcp_http test_mcp_shim test_mcp_concurrency)
  (package bactrian)
  (deps %{bin:bactrian} ../support/fake_mcp/fake_mcp_server.exe)
  (action

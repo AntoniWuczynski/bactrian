@@ -39,13 +39,23 @@ let failure line reason =
   | Ok (Notification _ | Response _ | Error_response _) | Error _ -> None
 
 (* What goes back to the agent for one line: the reply when it is a JSON-RPC
-   message, nothing for an accepted notification, an error otherwise. *)
+   message, nothing for an accepted notification, an error otherwise. An error
+   without an id would match none of the agent's requests and leave it
+   waiting, so a request gets it with its own id. *)
 let answer line = function
   | Error reason -> failure line reason
   | Ok (status, body) -> (
       let body = String.trim body in
       match Mcp_msg.decode body with
-      | Ok _ -> Some body
+      | Ok (Error_response { id = None; message; _ }) -> (
+          match
+            failure line
+              (Printf.sprintf "bactrian answered %d: %s" status message)
+          with
+          | Some _ as failed -> failed
+          | None -> Some body)
+      | Ok (Request _ | Notification _ | Response _ | Error_response _) ->
+          Some body
       | Error _ when String.equal body "" && status >= 200 && status < 300 ->
           None
       | Error _ -> failure line (Printf.sprintf "bactrian answered %d" status))
@@ -58,6 +68,9 @@ let run ~net ~clock ~stdin ~stdout ~url ~name =
         try Eio.Flow.copy_string (text ^ "\n") stdout
         with Eio.Io _ -> (* the agent stopped reading *) ())
   in
+  let send line =
+    Option.iter emit (answer line (post ~net ~clock ~target line))
+  in
   let input = Eio.Buf_read.of_flow ~max_size:max_line stdin in
   Eio.Switch.run @@ fun sw ->
   let rec loop () =
@@ -65,8 +78,14 @@ let run ~net ~clock ~stdin ~stdout ~url ~name =
     | exception (End_of_file | Eio.Buf_read.Buffer_limit_exceeded) -> ()
     | line when String.equal (String.trim line) "" -> loop ()
     | line ->
-        Eio.Fiber.fork ~sw (fun () ->
-            Option.iter emit (answer line (post ~net ~clock ~target line)));
+        (* bactrian answers a notification or a response only once it is on
+           the server's stdin, so waiting for that answer keeps such a message
+           ahead of every line the agent wrote after it. Requests run in their
+           own fibres, so parallel calls stay parallel. *)
+        (match Mcp_msg.decode line with
+        | Ok (Request _) -> Eio.Fiber.fork ~sw (fun () -> send line)
+        | Ok (Notification _ | Response _ | Error_response _) | Error _ ->
+            send line);
         loop ()
   in
   loop ()

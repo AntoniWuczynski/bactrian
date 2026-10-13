@@ -156,6 +156,7 @@ let test_stdio_legacy () =
       {|{"name":"get_weather","arguments":{"city":"Oslo"}}|}
   in
   let discover = legacy_req ~id:"4" "server/discover" "{}" in
+  let early = legacy_req ~id:"9" "tools/list" "{}" in
   with_stdio ~args:[ "--era"; "legacy"; "--log"; log ] (fun c ->
       let ask line =
         c.send line;
@@ -165,6 +166,9 @@ let test_stdio_legacy () =
       check_int "init id" [ "id" ] 1 r;
       check_str "protocolVersion" [ "result"; "protocolVersion" ] "2025-11-25" r;
       Alcotest.(check bool) "serverInfo" true (has [ "result"; "serverInfo" ] r);
+      (* Strict, as the SDK servers are: no request before the handshake ends. *)
+      check_int "request before initialized" [ "error"; "code" ] (-32600)
+        (ask early);
       c.send initialized;
       let r = ask list in
       check_int "list id" [ "id" ] 2 r;
@@ -182,7 +186,7 @@ let test_stdio_legacy () =
         (ask discover));
   Alcotest.(check (list string))
     "log"
-    [ init; initialized; list; call; discover ]
+    [ init; early; initialized; list; call; discover ]
     (read_lines log)
 
 (* HTTP: a raw cohttp-eio client. *)
@@ -379,6 +383,9 @@ let test_http_legacy () =
   let session = Http.Header.get r.headers "mcp-session-id" in
   Alcotest.(check (option string)) "session id" (Some F.session_id) session;
   let with_session = base @ [ ("mcp-session-id", F.session_id) ] in
+  check_int "request before initialized" [ "error"; "code" ] (-32600)
+    (body_json
+       (post ~headers:with_session (legacy_req ~id:"9" "tools/list" "{}")));
   let r =
     post ~headers:with_session
       {|{"jsonrpc":"2.0","method":"notifications/initialized"}|}
@@ -407,7 +414,7 @@ let test_http_legacy () =
     (body_json
        (post ~headers:with_session (legacy_req ~id:"6" "server/discover" "{}")));
   check_status "GET" 405 (http ~sw e ~headers:[ accept ] `GET url);
-  Alcotest.(check int) "logged" 8 (List.length (F.requests server))
+  Alcotest.(check int) "logged" 9 (List.length (F.requests server))
 
 let () =
   Alcotest.run "fake_mcp"

@@ -23,6 +23,39 @@ let crash_on =
     & info [ "crash-on" ] ~docv:"CITY"
         ~doc:"Exit, unanswered, when asked for $(docv)'s weather.")
 
+let hang_on =
+  Arg.(
+    value & opt_all string []
+    & info [ "hang-on" ] ~docv:"CITY"
+        ~doc:"Never answer a call for $(docv)'s weather. Repeatable.")
+
+let null_id_on =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "null-id-error-on" ] ~docv:"CITY"
+        ~doc:
+          "Answer a call for $(docv)'s weather with an error whose id is null.")
+
+let reverse_pairs =
+  Arg.(
+    value & flag
+    & info [ "reverse-pairs" ]
+        ~doc:"Hold each tools/call for the next and answer the two in reverse.")
+
+let ask_client =
+  Arg.(
+    value & flag
+    & info [ "ask-client" ]
+        ~doc:"Send the client a roots/list request before answering a call.")
+
+let no_read =
+  Arg.(
+    value & flag
+    & info [ "no-read" ]
+        ~doc:
+          "Never read stdin, as a server stuck elsewhere would, until killed.")
+
 let env_log =
   Arg.(
     value
@@ -36,7 +69,8 @@ let pid_file =
     & opt (some string) None
     & info [ "pid-file" ] ~docv:"FILE" ~doc:"Write the server's pid to $(docv).")
 
-let main era log crash_on env_log pid_file =
+let main era log crash_on hang_on null_id_on reverse_pairs ask_client no_read
+    env_log pid_file =
   Option.iter
     (fun path ->
       Out_channel.with_open_text path (fun oc ->
@@ -49,11 +83,20 @@ let main era log crash_on env_log pid_file =
             (fun entry -> output_string oc (entry ^ "\n"))
             (Unix.environment ())))
     env_log;
-  Fake_mcp.serve_stdio ?crash_on ~era ~log stdin stdout
+  if no_read then
+    while true do
+      Unix.sleep 3600
+    done
+  else
+    Fake_mcp.serve_stdio
+      ~options:{ crash_on; hang_on; null_id_on; reverse_pairs; ask_client }
+      ~era ~log stdin stdout
 
 let () =
   exit
     (Cmd.eval
        (Cmd.v
           (Cmd.info "fake_mcp_server" ~doc:"A fake stdio MCP server.")
-          Term.(const main $ era $ log $ crash_on $ env_log $ pid_file)))
+          Term.(
+            const main $ era $ log $ crash_on $ hang_on $ null_id_on
+            $ reverse_pairs $ ask_client $ no_read $ env_log $ pid_file)))

@@ -171,6 +171,87 @@ let event_stream =
     r.body;
   no_divergence (P.unregister ctx.proxy ~token:token_b)
 
+(* A legacy server may send its own requests and notifications on the stream
+   that answers a POST, and an event's JSON may span several data lines. Only
+   the answer to the recorded request takes the live id. *)
+let event_stream_events =
+  Alcotest.test_case "only the answer in a replayed stream takes the live id"
+    `Quick
+  @@ with_ctx "mcp-http-sse-events"
+  @@ fun ctx ->
+  let server_request =
+    "event: message\r\n\
+     data: {\"id\":7,\"jsonrpc\":\"2.0\",\"method\":\"roots/list\"}\r\n\
+     \r\n"
+  in
+  let body =
+    server_request
+    ^ "event: message\r\n\
+       data: {\"id\":7,\"jsonrpc\":\"2.0\",\r\n\
+       data: \"result\":{\"ok\":true}}\r\n\
+       \r\n"
+  in
+  let url =
+    raw_upstream ctx
+      ~reply:
+        (Printf.sprintf
+           "HTTP/1.1 200 OK\r\n\
+            content-type: text/event-stream\r\n\
+            content-length: %d\r\n\
+            \r\n\
+            %s"
+           (String.length body) body)
+  in
+  let run = record_run ctx ~token:token_a [ http "s" url ] in
+  ignore (post_http ctx ~token:token_a ~name:"s" (tools_list (Int_id 7)));
+  ignore (P.unregister ctx.proxy ~token:token_a);
+  let _ = replay_mcp ctx ~token:token_b (recording ctx run) [ http "s" url ] in
+  let r = post_http ctx ~token:token_b ~name:"s" (tools_list (Int_id 99)) in
+  Alcotest.(check string)
+    "replayed body"
+    (server_request
+   ^ "event: message\r\n\
+      data: {\"id\":99,\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true}}\r\n\
+      \r\n")
+    r.body;
+  no_divergence (P.unregister ctx.proxy ~token:token_b)
+
+let target =
+  Alcotest.test_case "the declared query stays and the path cannot climb" `Quick
+  @@ with_ctx "mcp-http-target"
+  @@ fun ctx ->
+  let fake = start_fake ctx Modern in
+  let _ =
+    record_run ctx ~token:token_a
+      [
+        http ~policy:Passthrough "search"
+          (Fake_mcp.base_url fake ^ "/mcp?key=k1");
+      ]
+  in
+  let send ?(query = "") path =
+    send ctx ~seg:"mcp-http" ~token:token_a ~provider:P.Openai ~query
+      ~meth:"POST"
+      ~headers:(modern_headers "server/discover")
+      path (discover (Int_id 5))
+  in
+  check_status "forwarded" 200 (send ~query:"x=1" "/search/sub");
+  (match Fake_mcp.requests fake with
+  | [ seen ] ->
+      Alcotest.(check string) "path" "/mcp/sub" seen.path;
+      Alcotest.(check (option string)) "query" (Some "key=k1&x=1") seen.query
+  | seen -> Alcotest.failf "the server saw %d requests" (List.length seen));
+  List.iter
+    (fun path ->
+      let r = send path in
+      check_status path 400 r;
+      let id, _, _, _ = error_of r.body in
+      Alcotest.check id_testable "id" (Int_id 5) id)
+    [ "/search/../admin"; "/search/%2e%2E/admin"; "/search/./x" ];
+  Alcotest.(check int)
+    "nothing more forwarded" 1
+    (List.length (Fake_mcp.requests fake));
+  ignore (P.unregister ctx.proxy ~token:token_a)
+
 let refusals =
   Alcotest.test_case "block is 403, GET is 405, an unreachable server is 502"
     `Quick
@@ -186,9 +267,15 @@ let refusals =
   in
   check_status "blocked" 403
     (post_http ctx ~token:token_a ~name:"blocked" (discover (Int_id 1)));
+  check_status "blocked notification dropped" 202
+    (post_http ctx ~token:token_a ~name:"blocked" initialized);
   check_status "get" 405
     (send ctx ~seg:"mcp-http" ~token:token_a ~provider:P.Openai ~meth:"GET"
        "/down" "");
+  let r = post_http ctx ~token:token_a ~name:"nobody" (discover (Int_id 3)) in
+  check_status "unknown" 404 r;
+  let id, _, _, _ = error_of r.body in
+  Alcotest.check id_testable "unknown server's id" (Int_id 3) id;
   let r = post_http ctx ~token:token_a ~name:"down" (discover (Int_id 2)) in
   check_status "down" 502 r;
   let id, _, _, data = error_of r.body in
@@ -206,6 +293,8 @@ let refusals =
 let () =
   Alcotest.run "mcp_http"
     [
-      ("record and replay", [ modern_round_trip; legacy_session; event_stream ]);
-      ("refusals", [ refusals ]);
+      ( "record and replay",
+        [ modern_round_trip; legacy_session; event_stream; event_stream_events ]
+      );
+      ("refusals", [ target; refusals ]);
     ]

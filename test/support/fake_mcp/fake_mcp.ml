@@ -97,8 +97,10 @@ let unsupported_version requested =
 
 let method_not_found m = fail (-32601) ("Method not found: " ^ m)
 
-(* [message] is a JSON-RPC object. *)
-let handle era message =
+(* [message] is a JSON-RPC object. [initialized] says whether a legacy client
+   has sent [notifications/initialized]: until then a legacy server refuses
+   every request but [initialize], as the SDK servers do. *)
+let handle era ~initialized message =
   let params =
     Option.value ~default:Canon.empty_object (Canon.member "params" message)
   in
@@ -115,9 +117,17 @@ let handle era message =
               else tools_call era params
           | (Some _ | None) as v -> unsupported_version v)
       | Legacy, "initialize" -> Result initialize
+      | Legacy, ("tools/list" | "tools/call") when not initialized ->
+          fail (-32600) "Received request before initialization was complete"
       | Legacy, "tools/list" -> Result (tools_list era)
       | Legacy, "tools/call" -> tools_call era params
       | Modern, _ | Legacy, _ -> method_not_found m)
+
+let ends_handshake message =
+  Option.equal String.equal
+    (Canon.str_member "method" message)
+    (Some "notifications/initialized")
+  && Option.is_none (Canon.member "id" message)
 
 let envelope ~id outcome =
   let base = set "id" id (literal {|{"jsonrpc":"2.0"}|}) in
@@ -154,11 +164,6 @@ let append_line path line =
   Out_channel.with_open_gen [ Open_append; Open_creat; Open_text ] 0o644 path
     (fun oc -> output_string oc (line ^ "\n"))
 
-let answer era line =
-  match parse line with
-  | Rejected outcome -> envelope ~id:Canon.null outcome
-  | Message m -> envelope ~id:(id_of m) (handle era m)
-
 (* The city of a [tools/call] line, if it is one. *)
 let called_city line =
   match parse line with
@@ -170,23 +175,100 @@ let called_city line =
               Option.bind (Canon.member "arguments" p) (Canon.str_member "city"))
       | Some _ | None -> None)
 
-let serve_stdio ?crash_on ~era ~log ic oc =
-  let rec loop () =
+type stdio_options = {
+  crash_on : string option;
+  hang_on : string list;
+  null_id_on : string option;
+  reverse_pairs : bool;
+  ask_client : bool;
+}
+
+let stdio_defaults =
+  {
+    crash_on = None;
+    hang_on = [];
+    null_id_on = None;
+    reverse_pairs = false;
+    ask_client = false;
+  }
+
+let ask_id = "fake-ask"
+
+(* What the client answered to the server's own [roots/list]. *)
+let client_answer line =
+  match parse line with
+  | Message m
+    when Option.equal String.equal (Canon.str_member "id" m) (Some ask_id) -> (
+      match Option.bind (Canon.member "error" m) (Canon.int_member "code") with
+      | Some code -> Some (Printf.sprintf "roots/list: error %d" code)
+      | None -> Some "roots/list: answered")
+  | Message _ | Rejected _ -> None
+
+let serve_stdio ?(options = stdio_defaults) ~era ~log ic oc =
+  let logged line = Option.iter (fun path -> append_line path line) log in
+  let send doc =
+    output_string oc (Canon.to_string doc ^ "\n");
+    flush oc
+  in
+  (* Every line is logged before it is answered. *)
+  let rec next () =
     match In_channel.input_line ic with
-    | None -> ()
-    | Some line when String.equal (String.trim line) "" -> loop ()
-    | Some line
-      when Option.is_some crash_on
-           && Option.equal String.equal (called_city line) crash_on ->
-        Option.iter (fun path -> append_line path line) log
+    | Some line when String.equal (String.trim line) "" -> next ()
     | Some line ->
-        Option.iter (fun path -> append_line path line) log;
-        Option.iter
-          (fun reply ->
-            output_string oc (Canon.to_string reply ^ "\n");
-            flush oc)
-          (answer era line);
-        loop ()
+        logged line;
+        Some line
+    | None -> None
+  in
+  let rec await_client () =
+    match next () with
+    | None -> "roots/list: no answer"
+    | Some line -> (
+        match client_answer line with
+        | Some text -> text
+        | None -> await_client ())
+  in
+  let initialized = ref false in
+  (* With [reverse_pairs], the first call of a pair waits here for the
+     second. *)
+  let held = ref None in
+  let is city names = List.exists (String.equal city) names in
+  let reply m city =
+    let id = id_of m in
+    match city with
+    | Some c when is c options.hang_on -> None
+    | Some c when is c (Option.to_list options.null_id_on) ->
+        envelope ~id:Canon.null (fail (-32603) "Internal error")
+    | Some _ when options.ask_client ->
+        send
+          (literal
+             (Printf.sprintf {|{"jsonrpc":"2.0","id":%S,"method":"roots/list"}|}
+                ask_id));
+        let text = await_client () in
+        envelope ~id (Result (complete era (text_result ~is_error:false text)))
+    | Some _ | None -> envelope ~id (handle era ~initialized:!initialized m)
+  in
+  let rec loop () =
+    match next () with
+    | None -> ()
+    | Some line -> (
+        let city = called_city line in
+        match city with
+        | Some c when is c (Option.to_list options.crash_on) -> ()
+        | Some _ | None ->
+            (match parse line with
+            | Rejected outcome ->
+                Option.iter send (envelope ~id:Canon.null outcome)
+            | Message m -> (
+                if ends_handshake m then initialized := true;
+                let r = reply m city in
+                match (city, options.reverse_pairs, !held) with
+                | Some _, true, None -> held := Some r
+                | Some _, true, Some first ->
+                    held := None;
+                    Option.iter send r;
+                    Option.iter send first
+                | Some _, false, _ | None, _, _ -> Option.iter send r));
+            loop ())
   in
   loop ()
 
@@ -195,11 +277,13 @@ let serve_stdio ?crash_on ~era ~log ic oc =
 type request = {
   meth : string;
   path : string;
+  query : string option;
   headers : (string * string) list;
   body : string;
 }
 
 type t = { port : int; log : request list ref  (** Newest first. *) }
+type http_state = { mutable initialized : bool }
 
 type http_reply = {
   status : int;
@@ -277,7 +361,7 @@ let legacy_session_error header message =
       | Some _ ->
           Some (error_reply 404 ~id:(id_of message) (-32600) "Unknown session"))
 
-let route era (r : request) =
+let route era state (r : request) =
   let header name = List.assoc_opt name r.headers in
   if not (String.equal r.meth "POST") then
     { (no_body 405) with extra = [ ("allow", "POST") ] }
@@ -295,7 +379,11 @@ let route era (r : request) =
         match check with
         | Some reply -> reply
         | None -> (
-            let reply = reply_of_outcome ~era ~id:(id_of m) (handle era m) in
+            if ends_handshake m then state.initialized <- true;
+            let reply =
+              reply_of_outcome ~era ~id:(id_of m)
+                (handle era ~initialized:state.initialized m)
+            in
             let initialising =
               Option.equal String.equal
                 (Canon.str_member "method" m)
@@ -324,17 +412,19 @@ let write_reply (reply : http_reply) =
       Eio.Buf_write.flush oc )
 
 let start ~sw ~net era =
-  let log = ref [] in
+  let log = ref [] and state = { initialized = false } in
   let callback _conn http_request body =
     let body =
       match Eio.Buf_read.parse ~max_size:max_int Eio.Buf_read.take_all body with
       | Ok s -> s
       | Error (`Msg _) -> ""
     in
+    let resource = Uri.of_string (Http.Request.resource http_request) in
     let r =
       {
         meth = Http.Method.to_string (Http.Request.meth http_request);
-        path = Uri.path (Uri.of_string (Http.Request.resource http_request));
+        path = Uri.path resource;
+        query = Uri.verbatim_query resource;
         headers =
           List.map
             (fun (k, v) -> (String.lowercase_ascii k, v))
@@ -343,7 +433,7 @@ let start ~sw ~net era =
       }
     in
     log := r :: !log;
-    write_reply (route era r)
+    write_reply (route era state r)
   in
   let sock =
     Eio.Net.listen ~sw ~backlog:16 ~reuse_addr:true net

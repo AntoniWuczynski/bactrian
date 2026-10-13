@@ -851,6 +851,7 @@ let start ~sw ~net ~clock ~process_mgr =
                   process_mgr :> Eio_unix.Process.mgr_ty Eio.Resource.t;
                   clock :> float Eio.Time.clock_ty Eio.Resource.t;
                   call;
+                  answer_timeout = upstream_timeout;
                 };
             }
           in
