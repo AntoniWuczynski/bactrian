@@ -102,6 +102,7 @@ let round_trip name e =
       let t = decode [ hl; Cassette.exchange_line e; Cassette.end_line ] in
       Alcotest.check (Alcotest.list exchange_t) name [ e ] t.exchanges)
 
+let stream chunks = Cassette.Stream { chunks; complete = true }
 let whole p = Cassette.Response { status = 200; headers = []; body = Whole p }
 
 let round_trips =
@@ -121,12 +122,22 @@ let round_trips =
               {
                 status = 200;
                 headers = [ ("content-type", "text/event-stream") ];
-                body = Stream [ (0, "data: a\n\n"); (15, "data: \xff\n\n") ];
+                body = stream [ (0, "data: a\n\n"); (15, "data: \xff\n\n") ];
+              })
+         ());
+    round_trip "cut-off stream"
+      (exchange
+         ~outcome:
+           (Response
+              {
+                status = 200;
+                headers = [];
+                body = Stream { chunks = [ (0, "data: a") ]; complete = false };
               })
          ());
     round_trip "empty stream"
       (exchange
-         ~outcome:(Response { status = 204; headers = []; body = Stream [] })
+         ~outcome:(Response { status = 204; headers = []; body = stream [] })
          ());
     round_trip "transport error"
       (exchange ~outcome:(Transport_error "refused") ());
@@ -307,7 +318,7 @@ let test_binary_encoding () =
           (exchange
              ~outcome:
                (Response
-                  { status = 200; headers = []; body = Stream [ (3, raw) ] })
+                  { status = 200; headers = []; body = stream [ (3, raw) ] })
              ())
       in
       Alcotest.(check bool)
@@ -324,7 +335,7 @@ let test_binary_encoding () =
     Cassette.exchange_line
       (exchange
          ~outcome:
-           (Response { status = 200; headers = []; body = Stream [ (3, "ok") ] })
+           (Response { status = 200; headers = []; body = stream [ (3, "ok") ] })
          ())
   in
   Alcotest.(check bool) "text chunk" true (contains line {|[3,"ok"]|});
@@ -334,6 +345,39 @@ let test_binary_encoding () =
        (Cassette.exchange_line (exchange ~request:(Inline "") ()))
        {|"inline":""|})
 
+let test_stream_complete_wire () =
+  let body complete =
+    Cassette.exchange_line
+      (exchange
+         ~outcome:
+           (Response
+              {
+                status = 200;
+                headers = [];
+                body = Stream { chunks = [ (0, "a") ]; complete };
+              })
+         ())
+  in
+  Alcotest.(check bool)
+    "cut-off marked" true
+    (contains (body false) {|"complete":false,"stream":[[0,"a"]]|});
+  Alcotest.(check bool)
+    "complete is implicit" false
+    (contains (body true) "complete");
+  let t = decode [ hl; body true ] in
+  Alcotest.check (Alcotest.list exchange_t) "absence decodes as complete"
+    [
+      exchange
+        ~outcome:
+          (Response { status = 200; headers = []; body = stream [ (0, "a") ] })
+        ();
+    ]
+    t.exchanges;
+  Alcotest.(check bool)
+    "completeness is part of equality" false
+    (List.equal Cassette.equal_exchange (decode [ hl; body true ]).exchanges
+       (decode [ hl; body false ]).exchanges)
+
 let test_split_multibyte () =
   let e =
     exchange
@@ -342,7 +386,7 @@ let test_split_multibyte () =
            {
              status = 200;
              headers = [];
-             body = Stream [ (0, "data: \xe2\x82"); (1, "\xacx\n\n") ];
+             body = stream [ (0, "data: \xe2\x82"); (1, "\xacx\n\n") ];
            })
       ()
   in
@@ -371,7 +415,7 @@ let test_equal_chunk_timing () =
   let stream ms =
     exchange
       ~outcome:
-        (Response { status = 200; headers = []; body = Stream [ (ms, "a") ] })
+        (Response { status = 200; headers = []; body = stream [ (ms, "a") ] })
       ()
   in
   Alcotest.(check bool)
@@ -449,8 +493,10 @@ let gen_outcome =
            [
              map (fun p -> Cassette.Whole p) gen_payload;
              map
-               (fun l -> Cassette.Stream l)
-               (list_size (int_range 0 3) (pair gen_nat gen_small_string));
+               (fun (chunks, complete) -> Cassette.Stream { chunks; complete })
+               (pair
+                  (list_size (int_range 0 3) (pair gen_nat gen_small_string))
+                  bool);
            ]
        in
        return (Cassette.Response { status; headers; body }));
@@ -566,7 +612,7 @@ let prop_binary =
           | Ok _ | Error _ -> false)
         [
           mk (whole (Inline whole_body));
-          mk (Response { status = 200; headers = []; body = Stream chunks });
+          mk (Response { status = 200; headers = []; body = stream chunks });
         ])
 
 let () =
@@ -593,6 +639,8 @@ let () =
         [
           Alcotest.test_case "encoding" `Quick test_encoding;
           Alcotest.test_case "binary encoding" `Quick test_binary_encoding;
+          Alcotest.test_case "stream completeness" `Quick
+            test_stream_complete_wire;
           Alcotest.test_case "split multibyte" `Quick test_split_multibyte;
           Alcotest.test_case "chunk timing equality" `Quick
             test_equal_chunk_timing;

@@ -71,6 +71,7 @@ type findings = {
   usage_gaps : int;
   refused_keys : int;
   cap_refusals : Ledger.refusal list;
+  errors : string list;
 }
 
 module Counts = Map.Make (String)
@@ -93,11 +94,13 @@ type state = {
   mutable usage_gaps : int;
   mutable refused_keys : int;
   mutable cap_refusals : Ledger.refusal list;  (** Newest first. *)
+  mutable errors : string list;  (** Newest first. *)
 }
 
 type t = {
   port : int;
   runs : state Runs.t;
+  mutable unattributed : int;
   now : unit -> float;
   sleep : float -> unit;
   call :
@@ -111,6 +114,10 @@ type t = {
 
 let locked st f = Eio.Mutex.use_rw ~protect:true st.lock f
 
+(* [add_error] runs with the lock held, [note] takes it. *)
+let add_error st message = st.errors <- message :: st.errors
+let note st message = locked st (fun () -> add_error st message)
+
 (* Ten minutes covers the slowest long generation. *)
 let upstream_timeout = 600.
 
@@ -123,15 +130,25 @@ type item = Chunk of string | Finished | Dropped
 
 exception Upstream_dropped
 
+(* A failure of the agent's connection, already noted in its run's errors. *)
+exception Attributed of exn
+
 type response = Http.Response.t * (Eio.Buf_read.t -> Eio.Buf_write.t -> unit)
 
-let respond ~status ~headers (next : unit -> item) : response =
+let respond ?on_exn ~status ~headers (next : unit -> item) : response =
   let headers =
     Http.Header.add (Http.Header.of_list headers) "transfer-encoding" "chunked"
   in
   ( Http.Response.make ~status:(Http.Status.of_int status) ~headers (),
     fun _ic oc ->
       Eio.Buf_write.flush oc;
+      let attribute ex =
+        match on_exn with
+        | None -> ex
+        | Some note_it ->
+            note_it ex;
+            Attributed ex
+      in
       let rec loop () =
         match next () with
         | Chunk "" -> loop ()
@@ -146,7 +163,12 @@ let respond ~status ~headers (next : unit -> item) : response =
             Eio.Buf_write.flush oc
         | Dropped -> raise Upstream_dropped
       in
-      loop () )
+      try loop () with
+      | (Eio.Cancel.Cancelled _ | Upstream_dropped) as ex -> raise ex
+      | ex -> raise (attribute ex) )
+
+let agent_failed st ex =
+  note st ("connection to the agent failed: " ^ Printexc.to_string ex)
 
 let of_list pieces =
   let rest = ref pieces in
@@ -172,6 +194,11 @@ let error_response ?(extra = []) ~status ~type_ message =
   respond ~status
     ~headers:[ ("content-type", "application/json") ]
     (of_list [ Canon.to_string (obj [ ("error", error) ]) ])
+
+(* An error response for a request that belongs to a run: noted in its errors. *)
+let refusal_response st ?extra ~status ~type_ message =
+  note st message;
+  error_response ?extra ~status ~type_ message
 
 let divergence_json : Matcher.divergence -> Canon.t = function
   | Missing_request { nearest = None; _ } ->
@@ -367,16 +394,30 @@ let actual_cost x ~model ~date (head : Upstream.head) chunks =
 
 (* Live calls *)
 
-let record_live st x ~head ~chunks result =
+type finish = Upstream of (unit, Upstream.error) result | Agent_gone
+
+let record_live st x ~head ~chunks finish =
   let outcome : Cassette.outcome =
-    match (head, result) with
-    | None, Error e -> Transport_error (describe_upstream_error e)
-    | None, Ok () -> Transport_error "no response head"
-    | Some (h : Upstream.head), (Ok () | Error _) ->
+    match (head, finish) with
+    | None, Upstream (Error e) -> Transport_error (describe_upstream_error e)
+    | None, Upstream (Ok ()) -> Transport_error "no response head"
+    | None, Agent_gone ->
+        Transport_error "the agent disconnected before the response head"
+    | Some (h : Upstream.head), (Upstream _ | Agent_gone) ->
+        let complete =
+          match finish with
+          | Upstream (Ok ()) -> true
+          | Upstream (Error _) | Agent_gone -> false
+        in
         let body : Cassette.response_body =
           match x.request.shape with
           | Streamed ->
-              Stream (List.map (fun (dt, piece) -> (dt, scrub st piece)) chunks)
+              Stream
+                {
+                  chunks =
+                    List.map (fun (dt, piece) -> (dt, scrub st piece)) chunks;
+                  complete;
+                }
           | Whole_body ->
               Whole
                 (Store.payload st.run.store
@@ -402,35 +443,45 @@ let record_live st x ~head ~chunks result =
 
 (* Settle the ledger and record the exchange. Runs before the agent sees the
    end of the response, so findings are complete when the agent's call returns.
-*)
-let finish_live st x ~record ~model ~date ~reservation ~head ~chunks result =
+   An agent that went away leaves its reservation charged, like a cut-off
+   upstream. *)
+let finish_live st x ~record ~model ~date ~reservation ~head ~chunks finish =
   let actual =
-    match (result, head) with
-    | Error (Upstream.Connect_failed _), _ -> Some 0.
-    | Error (Timed_out | Truncated _), _ | Ok (), None -> None
-    | Ok (), Some h -> actual_cost x ~model ~date h (List.map snd chunks)
+    match (finish, head) with
+    | Upstream (Error (Connect_failed _)), _ -> Some 0.
+    | Upstream (Error (Timed_out | Truncated _)), _
+    | Agent_gone, _
+    | Upstream (Ok ()), None ->
+        None
+    | Upstream (Ok ()), Some h ->
+        actual_cost x ~model ~date h (List.map snd chunks)
   in
   Ledger.settle st.run.ledger reservation ~actual;
   locked st (fun () ->
       if Option.is_none actual then st.usage_gaps <- st.usage_gaps + 1;
-      (match result with
-      | Error _ -> st.transport_errors <- st.transport_errors + 1
-      | Ok () -> ());
+      (match finish with
+      | Upstream (Error e) ->
+          st.transport_errors <- st.transport_errors + 1;
+          add_error st (describe_upstream_error e)
+      | Agent_gone ->
+          add_error st "the agent disconnected before the response ended"
+      | Upstream (Ok ()) -> ());
       st.exchanges <- st.exchanges + 1;
       match st.run.cassette with
       | Some writer when record ->
-          Store.append writer (record_live st x ~head ~chunks result);
+          Store.append writer (record_live st x ~head ~chunks finish);
           st.next_seq <- st.next_seq + 1
       | Some _ | None -> ())
 
 let refuse_spend st (refusal : Ledger.refusal) =
-  locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
   match refusal with
   | Unknown_model model ->
-      error_response ~status:402 ~type_:"bactrian_unknown_model"
+      locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
+      refusal_response st ~status:402 ~type_:"bactrian_unknown_model"
         (Printf.sprintf "no price is known for model %S" model)
   | Cap_reached { provider; cap; spent; requested } ->
-      error_response ~status:402 ~type_:"bactrian_cap_reached"
+      locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
+      refusal_response st ~status:402 ~type_:"bactrian_cap_reached"
         (Printf.sprintf
            "the %s spend cap of $%.2f would be exceeded ($%.4f spent or \
             reserved, $%.4f requested)"
@@ -452,7 +503,7 @@ let live t ~conn_sw st x ~record =
       run.keys
   with
   | None ->
-      error_response ~status:502 ~type_:"bactrian_no_key"
+      refusal_response st ~status:502 ~type_:"bactrian_no_key"
         ("no API key is configured for " ^ segment x.provider)
   | Some real_key -> (
       let reservation =
@@ -478,28 +529,38 @@ let live t ~conn_sw st x ~record =
           let head_p, head_r = Eio.Promise.create () in
           let items = Eio.Stream.create 16 in
           Eio.Fiber.fork_daemon ~sw:conn_sw (fun () ->
-              Eio.Switch.run (fun sw ->
-                  let head = ref None and chunks = ref [] in
-                  let result =
-                    t.call ~sw run.connector request
-                      ~on_head:(fun h ->
-                        head := Some h;
-                        Eio.Promise.resolve head_r (Ok h))
-                      ~on_chunk:(fun ~dt_ms piece ->
-                        chunks := (dt_ms, piece) :: !chunks;
-                        Eio.Stream.add items (Chunk piece))
-                  in
-                  finish_live st x ~record ~model ~date ~reservation ~head:!head
-                    ~chunks:(List.rev !chunks) result;
-                  match (result, !head) with
-                  | Ok (), _ -> Eio.Stream.add items Finished
-                  | Error _, Some _ -> Eio.Stream.add items Dropped
-                  | Error e, None -> Eio.Promise.resolve head_r (Error e));
+              let head = ref None and chunks = ref [] and settled = ref false in
+              let settle finish =
+                settled := true;
+                Eio.Cancel.protect (fun () ->
+                    finish_live st x ~record ~model ~date ~reservation
+                      ~head:!head ~chunks:(List.rev !chunks) finish)
+              in
+              (try
+                 Eio.Switch.run (fun sw ->
+                     let result =
+                       t.call ~sw run.connector request
+                         ~on_head:(fun h ->
+                           head := Some h;
+                           Eio.Promise.resolve head_r (Ok h))
+                         ~on_chunk:(fun ~dt_ms piece ->
+                           chunks := (dt_ms, piece) :: !chunks;
+                           Eio.Stream.add items (Chunk piece))
+                     in
+                     settle (Upstream result);
+                     match (result, !head) with
+                     | Ok (), _ -> Eio.Stream.add items Finished
+                     | Error _, Some _ -> Eio.Stream.add items Dropped
+                     | Error e, None -> Eio.Promise.resolve head_r (Error e))
+               with Eio.Cancel.Cancelled _ as ex ->
+                 (* The agent's connection ended while the copy was running. *)
+                 if not !settled then settle Agent_gone;
+                 raise ex);
               `Stop_daemon);
           match Eio.Promise.await head_p with
           | Ok (h : Upstream.head) ->
-              respond ~status:h.status ~headers:h.headers (fun () ->
-                  Eio.Stream.take items)
+              respond ~on_exn:(agent_failed st) ~status:h.status
+                ~headers:h.headers (fun () -> Eio.Stream.take items)
           | Error e ->
               error_response ~status:502 ~type_:"bactrian_upstream_error"
                 (describe_upstream_error e)))
@@ -512,15 +573,16 @@ let serve_recorded t st ~timing (e : Cassette.exchange) =
       error_response ~status:502 ~type_:"bactrian_upstream_error" reason
   | Response { status; headers; body = Whole payload } -> (
       match Store.read_payload st.run.store payload with
-      | Ok bytes -> respond ~status ~headers (of_list [ bytes ])
+      | Ok bytes ->
+          respond ~on_exn:(agent_failed st) ~status ~headers (of_list [ bytes ])
       | Error err ->
           error_response ~status:500 ~type_:"bactrian_internal_error"
             (Format.asprintf "%a" Store.pp_error err))
-  | Response { status; headers; body = Stream chunks } ->
+  | Response { status; headers; body = Stream { chunks; complete } } ->
       let rest = ref chunks in
-      respond ~status ~headers (fun () ->
+      respond ~on_exn:(agent_failed st) ~status ~headers (fun () ->
           match !rest with
-          | [] -> Finished
+          | [] -> if complete then Finished else Dropped
           | (dt_ms, piece) :: tl ->
               rest := tl;
               (match timing with
@@ -544,7 +606,7 @@ let replay t ~conn_sw st x (r : replaying) =
   | Serve { exchange; _ } -> serve_recorded t st ~timing:r.timing exchange
   | Go_live -> live t ~conn_sw st x ~record:true
   | Refuse d ->
-      error_response ~status:409 ~type_:"bactrian_replay_miss"
+      refusal_response st ~status:409 ~type_:"bactrian_replay_miss"
         ~extra:[ ("divergence", divergence_json d) ]
         (describe_divergence d)
 
@@ -553,7 +615,7 @@ let replay t ~conn_sw st x (r : replaying) =
 let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
   match Protocols.find ~meth ~path with
   | None ->
-      error_response ~status:404 ~type_:"bactrian_unknown_endpoint"
+      refusal_response st ~status:404 ~type_:"bactrian_unknown_endpoint"
         (Printf.sprintf "%s %s is not a model endpoint bactrian knows" meth path)
   | Some ((module A : Protocol.S) as adapter) -> (
       let scrubbed = locked st (fun () -> scrub st body) in
@@ -567,9 +629,11 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
       in
       match parsed with
       | Error reason ->
-          error_response ~status:400 ~type_:"bactrian_bad_request" reason
+          refusal_response st ~status:400 ~type_:"bactrian_bad_request" reason
       | Ok (parsed, canonical) -> (
-          let raw_query = Uri.verbatim_query uri in
+          let raw_query =
+            match Uri.verbatim_query uri with Some "" -> None | q -> q
+          in
           let query = normalised_query uri in
           let key = Matcher.key ~headers ~meth ~path ~query canonical in
           let shape : Matcher.shape =
@@ -613,6 +677,13 @@ let route path =
       Some (token, provider, "/" ^ String.concat "/" rest)
   | _ -> None
 
+let unattributed_response t ~status ~type_ message =
+  t.unattributed <- t.unattributed + 1;
+  error_response ~status ~type_ message
+
+(* The placeholder key may arrive in the provider's key header and, for Gemini,
+   also in the [key] query parameter. Each one present must be right, and at
+   least one must be present. *)
 (* The body is read before any check, so a refused request leaves a keep-alive
    connection ready for the next one. *)
 let handle t ((conn_sw, _), _) request body : response =
@@ -623,37 +694,58 @@ let handle t ((conn_sw, _), _) request body : response =
       route (Uri.path uri) )
   with
   | Error (`Msg reason), _ ->
-      error_response ~status:400 ~type_:"bactrian_bad_request" reason
+      unattributed_response t ~status:400 ~type_:"bactrian_bad_request" reason
   | Ok _, None ->
-      error_response ~status:404 ~type_:"bactrian_not_found"
+      unattributed_response t ~status:404 ~type_:"bactrian_not_found"
         "expected /r/<token>/<provider>/<path>"
   | Ok body, Some (token, provider, path) -> (
       match Runs.find_opt t.runs token with
       | None ->
-          error_response ~status:403 ~type_:"bactrian_forbidden"
+          unattributed_response t ~status:403 ~type_:"bactrian_forbidden"
             "unknown or ended run"
       | Some st -> (
           match provider_of_segment provider with
           | None ->
-              error_response ~status:404 ~type_:"bactrian_unknown_provider"
+              unattributed_response t ~status:404
+                ~type_:"bactrian_unknown_provider"
                 ("unknown provider " ^ provider)
           | Some p -> (
-              let expected = key_value p ("bactrian-" ^ st.run.token) in
-              match Http.Header.get headers (key_header p) with
-              | Some v when String.equal v expected ->
+              let placeholder = "bactrian-" ^ st.run.token in
+              let in_header =
+                Option.map
+                  (String.equal (key_value p placeholder))
+                  (Http.Header.get headers (key_header p))
+              and in_query =
+                match p with
+                | Gemini ->
+                    Option.map (String.equal placeholder)
+                      (Uri.get_query_param uri "key")
+                | Openai | Anthropic | Openrouter -> None
+              in
+              match Option.to_list in_header @ Option.to_list in_query with
+              | _ :: _ as checks when List.for_all Fun.id checks ->
+                  let uri =
+                    match p with
+                    | Gemini -> Uri.remove_query_param uri "key"
+                    | Openai | Anthropic | Openrouter -> uri
+                  in
                   model_request t ~conn_sw st p
                     ~meth:(Http.Method.to_string (Http.Request.meth request))
                     ~uri ~path
                     ~headers:(Http.Header.to_list headers)
                     ~body
-              | Some _ | None ->
+              | [] | _ :: _ ->
                   locked st (fun () -> st.refused_keys <- st.refused_keys + 1);
-                  error_response ~status:403 ~type_:"bactrian_forbidden"
+                  refusal_response st ~status:403 ~type_:"bactrian_forbidden"
                     ("missing or wrong placeholder key in " ^ key_header p))))
 
-let on_error = function
-  | Upstream_dropped | Eio.Io _ -> ()
-  | ex -> Printf.eprintf "bactrian model proxy: %s\n%!" (Printexc.to_string ex)
+(* Exceptions that reach here could not be attributed to a run. *)
+let on_error t = function
+  | Upstream_dropped | Attributed _ -> ()
+  | Eio.Io _ -> t.unattributed <- t.unattributed + 1
+  | ex ->
+      t.unattributed <- t.unattributed + 1;
+      Printf.eprintf "bactrian model proxy: %s\n%!" (Printexc.to_string ex)
 
 let start ~sw ~net ~clock =
   match
@@ -668,6 +760,7 @@ let start ~sw ~net ~clock =
           let t =
             {
               port;
+              unattributed = 0;
               runs = Runs.create 8;
               now = (fun () -> Eio.Time.now clock);
               sleep = Eio.Time.sleep clock;
@@ -683,10 +776,11 @@ let start ~sw ~net ~clock =
               ()
           in
           Eio.Fiber.fork_daemon ~sw (fun () ->
-              Cohttp_eio.Server.run sock server ~on_error);
+              Cohttp_eio.Server.run sock server ~on_error:(on_error t));
           Ok t)
 
 let port t = t.port
+let unattributed t = t.unattributed
 
 let register t run =
   if Runs.mem t.runs run.token then
@@ -717,6 +811,7 @@ let register t run =
       usage_gaps = 0;
       refused_keys = 0;
       cap_refusals = [];
+      errors = [];
     }
 
 let unregister t ~token =
@@ -737,6 +832,7 @@ let unregister t ~token =
             usage_gaps = st.usage_gaps;
             refused_keys = st.refused_keys;
             cap_refusals = List.rev st.cap_refusals;
+            errors = List.rev st.errors;
           })
 
 let base_url t ~token p =

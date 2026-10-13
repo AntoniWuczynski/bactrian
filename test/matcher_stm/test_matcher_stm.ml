@@ -297,7 +297,7 @@ let gen_recording rand =
       in
       let body =
         if Random.State.bool rand then Cassette.Whole (Cassette.Inline "b")
-        else Cassette.Stream [ (0, "a") ]
+        else Cassette.Stream { chunks = [ (0, "a") ]; complete = true }
       in
       let e : Cassette.exchange =
         {

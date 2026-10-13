@@ -7,7 +7,8 @@ let doc s =
   | Error _ -> Alcotest.fail "bad canon"
 
 let body ~stream =
-  if stream then Cassette.Stream [ (0, "a") ] else Cassette.Whole (Inline "ok")
+  if stream then Cassette.Stream { chunks = [ (0, "a") ]; complete = true }
+  else Cassette.Whole (Inline "ok")
 
 let ex ?(channel = Cassette.Model) ?(occ = 0) ?(stream = false) ?canon seq key =
   let canonical =

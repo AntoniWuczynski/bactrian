@@ -294,7 +294,7 @@ let response_of (e : Cassette.exchange) =
 
 let stream_bytes (r : Cassette.response) =
   match r.body with
-  | Stream chunks -> String.concat "" (List.map snd chunks)
+  | Stream { chunks; _ } -> String.concat "" (List.map snd chunks)
   | Whole (Inline s) -> s
   | Whole (Blob _) -> Alcotest.fail "unexpected blob"
 
@@ -398,21 +398,8 @@ let slow_upstream ctx ~chunks ~gap =
           Eio.Flow.copy_string "0\r\n\r\n" flow));
   Printf.sprintf "http://127.0.0.1:%d" port
 
-let streaming =
-  Alcotest.test_case "stream reaches the agent event by event" `Quick
-  @@ with_ctx "timing"
-  @@ fun ctx ->
-  let f = fixture "openai_chat" "luna_stream" in
-  let events =
-    List.init 5 (fun i -> Printf.sprintf "data: event-%d\n\n" (i + 1))
-  in
-  let base = slow_upstream ctx ~chunks:events ~gap:0.1 in
-  let run = make_run ctx ~token:token_a ~upstream:base in
-  P.register ctx.proxy run;
-  let r = send_fixture ctx ~token:token_a f in
-  check_ok r;
-  Alcotest.(check string) "bytes" (String.concat "" events) r.body;
-  (* Time at which each event was complete at the agent. *)
+(* Seconds between the moments each event was complete at the agent. *)
+let event_gaps r events =
   let ends =
     List.fold_left_map
       (fun acc e ->
@@ -430,13 +417,30 @@ let streaming =
     | a :: (b :: _ as rest) -> (b -. a) :: gaps rest
     | [ _ ] | [] -> []
   in
+  gaps times
+
+let streaming =
+  Alcotest.test_case "stream reaches the agent event by event" `Quick
+  @@ with_ctx "timing"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_stream" in
+  let events =
+    List.init 5 (fun i -> Printf.sprintf "data: event-%d\n\n" (i + 1))
+  in
+  let base = slow_upstream ctx ~chunks:events ~gap:0.1 in
+  let run = make_run ctx ~token:token_a ~upstream:base in
+  P.register ctx.proxy run;
+  let r = send_fixture ctx ~token:token_a f in
+  check_ok r;
+  Alcotest.(check string) "bytes" (String.concat "" events) r.body;
   List.iter
     (fun g ->
       if g < 0.06 then Alcotest.failf "events arrived %.0f ms apart" (g *. 1000.))
-    (gaps times);
+    (event_gaps r events);
   ignore (P.unregister ctx.proxy ~token:token_a);
   match (response_of (only (recording ctx run).exchanges)).body with
-  | Stream chunks ->
+  | Stream { chunks; complete } ->
+      Alcotest.(check bool) "complete" true complete;
       Alcotest.(check int) "recorded chunks" 5 (List.length chunks);
       List.iteri
         (fun i (dt, _) ->
@@ -486,11 +490,10 @@ let record_all ctx ~token fixtures =
   ignore (P.unregister ctx.proxy ~token);
   recording ctx run
 
-let replay_run ?(record = false) ?(matcher = Matcher.Strict) ctx ~token
-    ~upstream recording =
+let replay_run ?(record = false) ?(matcher = Matcher.Strict) ?(timing = P.Fast)
+    ctx ~token ~upstream recording =
   make_run ctx ~token ~upstream ~record
-    ~mode:
-      (P.Replay { recording; matcher; allow_reorder = false; timing = P.Fast })
+    ~mode:(P.Replay { recording; matcher; allow_reorder = false; timing })
 
 let replay_strict =
   Alcotest.test_case "strict replay serves the recording" `Quick
@@ -582,6 +585,215 @@ let until_divergence =
   let e = only (recording ctx run).exchanges in
   Alcotest.(check string) "tail key" (expected_key live) e.key
 
+let drop_script chunks : F.source =
+  F.Script
+    [
+      {
+        status = 200;
+        headers = [ ("content-type", "text/event-stream") ];
+        chunks;
+        ending = Drop;
+      };
+    ]
+
+let replay_truncated =
+  Alcotest.test_case "a recorded cut-off stream replays cut off" `Quick
+  @@ with_ctx "replay-drop"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_stream" in
+  let chunks =
+    [ "data: {\"id\":\"x\",\"choices\":[]}\n\n"; "data: {\"id\":" ]
+  in
+  let up = fake ctx (drop_script chunks) in
+  let run = make_run ctx ~token:token_a ~upstream:(F.base_url up) in
+  P.register ctx.proxy run;
+  let live = send_fixture ctx ~token:token_a f in
+  ignore (P.unregister ctx.proxy ~token:token_a);
+  let rec_ = recording ctx run in
+  let up2 = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy
+    (replay_run ctx ~token:token_b ~upstream:(F.base_url up2) rec_);
+  let r = send_fixture ctx ~token:token_b f in
+  let partial = String.concat "" chunks in
+  (match (live.result, r.result) with
+  | Error (Truncated a), Error (Truncated b) ->
+      Alcotest.(check int) "live bytes" (String.length partial) a.bytes;
+      Alcotest.(check int) "replayed bytes" a.bytes b.bytes
+  | ( (Ok () | Error (Connect_failed _ | Timed_out)),
+      (Ok () | Error (Connect_failed _ | Timed_out | Truncated _)) )
+  | Error (Truncated _), (Ok () | Error (Connect_failed _ | Timed_out)) ->
+      Alcotest.fail "expected truncated bodies live and in replay");
+  Alcotest.(check string) "partial body" partial r.body;
+  let findings = P.unregister ctx.proxy ~token:token_b in
+  Alcotest.(check int) "exchanges" 1 findings.exchanges;
+  Alcotest.(check int) "no divergences" 0 (List.length findings.divergences);
+  Alcotest.(check int) "nothing upstream" 0 (List.length (F.requests up2))
+
+(* A client that reads the first piece of the response and closes its socket. *)
+let read_first_piece_then_close ctx ~token (f : fixture) =
+  let net = Eio.Stdenv.net ctx.env in
+  Eio.Net.with_tcp_connect ~host:"127.0.0.1"
+    ~service:(string_of_int (P.port ctx.proxy))
+    net
+  @@ fun flow ->
+  Eio.Flow.copy_string
+    (Printf.sprintf
+       "%s /r/%s/openai%s HTTP/1.1\r\n\
+        host: x\r\n\
+        authorization: Bearer bactrian-%s\r\n\
+        content-type: application/json\r\n\
+        content-length: %d\r\n\
+        \r\n\
+        %s"
+       f.meth token f.path token (String.length f.request) f.request)
+    flow;
+  let buf = Cstruct.create 4096 in
+  let seen = Buffer.create 256 in
+  let contains_event () =
+    let hay = Buffer.contents seen in
+    let rec at i =
+      i + 7 <= String.length hay
+      && (String.equal (String.sub hay i 7) "event-1" || at (i + 1))
+    in
+    at 0
+  in
+  while not (contains_event ()) do
+    let n = Eio.Flow.single_read flow buf in
+    Buffer.add_string seen (Cstruct.to_string buf ~len:n)
+  done
+
+let agent_disconnect =
+  Alcotest.test_case "an agent that goes away mid-stream is recorded" `Quick
+  @@ with_ctx "agent-gone"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_stream" in
+  let events =
+    List.init 10 (fun i -> Printf.sprintf "data: event-%d\n\n" (i + 1))
+  in
+  let base = slow_upstream ctx ~chunks:events ~gap:0.1 in
+  let run = make_run ctx ~token:token_a ~upstream:base in
+  P.register ctx.proxy run;
+  read_first_piece_then_close ctx ~token:token_a f;
+  Eio.Time.sleep (Eio.Stdenv.clock ctx.env) 0.6;
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check int) "exchanges" 1 findings.exchanges;
+  Alcotest.(check int) "usage gaps" 1 findings.usage_gaps;
+  Alcotest.(check bool) "errors noted" true (findings.errors <> []);
+  (match (response_of (only (recording ctx run).exchanges)).body with
+  | Stream { chunks; complete } ->
+      Alcotest.(check bool) "marked as cut off" false complete;
+      let n = List.length chunks in
+      if n < 1 || n >= 10 then Alcotest.failf "recorded %d chunks" n
+  | Whole _ -> Alcotest.fail "expected a recorded stream");
+  Alcotest.(check bool)
+    "reservation kept" true
+    (Ledger.spent run.ledger ~provider:"openai" > 0.)
+
+(* Replay pacing *)
+
+let replay_timing =
+  Alcotest.test_case "Recorded timing keeps the pacing, Fast does not" `Quick
+  @@ with_ctx "pacing"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_stream" in
+  let events =
+    List.init 4 (fun i -> Printf.sprintf "data: event-%d\n\n" (i + 1))
+  in
+  let base = slow_upstream ctx ~chunks:events ~gap:0.1 in
+  let run = make_run ctx ~token:token_a ~upstream:base in
+  P.register ctx.proxy run;
+  check_ok (send_fixture ctx ~token:token_a f);
+  ignore (P.unregister ctx.proxy ~token:token_a);
+  let rec_ = recording ctx run in
+  let replayed timing token =
+    P.register ctx.proxy (replay_run ctx ~timing ~token ~upstream:base rec_);
+    let r = send_fixture ctx ~token f in
+    check_ok r;
+    Alcotest.(check string) "bytes" (String.concat "" events) r.body;
+    ignore (P.unregister ctx.proxy ~token);
+    event_gaps r events
+  in
+  List.iter
+    (fun g ->
+      if g < 0.06 then
+        Alcotest.failf "recorded pacing lost: %.0f ms" (g *. 1000.))
+    (replayed P.Recorded token_b);
+  List.iter
+    (fun g ->
+      if g > 0.05 then Alcotest.failf "fast replay paced: %.0f ms" (g *. 1000.))
+    (replayed P.Fast token_c)
+
+(* Gemini key in the query *)
+
+let gemini_query_key =
+  Alcotest.test_case "Gemini accepts the placeholder in the key query" `Quick
+  @@ with_ctx "gemini-key"
+  @@ fun ctx ->
+  let f = fixture "gemini_generate" "flash_stream_json" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy (make_run ctx ~token:token_a ~upstream:(F.base_url up));
+  let with_key k =
+    send ctx ~token:token_a ~provider:P.Gemini ~meth:f.meth f.path
+      ~query:
+        (f.query ^ (if String.equal f.query "" then "" else "&") ^ "key=" ^ k)
+      ~headers:f.request_headers f.request
+  in
+  let r = with_key ("bactrian-" ^ token_a) in
+  check_ok r;
+  Alcotest.(check int) "status" f.status r.status;
+  Alcotest.(check string) "bytes" f.raw r.body;
+  let sent = only (F.requests up) in
+  Alcotest.(check (option string))
+    "real key in the header" (Some "real-gemini-key")
+    (List.assoc_opt "x-goog-api-key" sent.headers);
+  Alcotest.(check string) "key removed from the query" f.query sent.query;
+  Alcotest.(check int) "wrong key" 403 (with_key "bactrian-wrong").status;
+  Alcotest.(check int)
+    "still one request upstream" 1
+    (List.length (F.requests up));
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check int) "refused keys" 1 findings.refused_keys
+
+(* Errors in findings *)
+
+let errors_in_findings =
+  Alcotest.test_case "refusals and bad bodies land in the run's errors" `Quick
+  @@ with_ctx "errors"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy (make_run ctx ~token:token_a ~upstream:(F.base_url up));
+  let bad = send_fixture ctx ~token:token_a ~body_of:(fun _ -> "not json") f in
+  Alcotest.(check int) "bad body" 400 bad.status;
+  let refused = send_fixture ctx ~token:token_a ~key:"nope" f in
+  Alcotest.(check int) "wrong key" 403 refused.status;
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  match findings.errors with
+  | [ first; second ] ->
+      Alcotest.(check bool) "bad body first" true (first <> "");
+      Alcotest.(check string)
+        "key refusal second" "missing or wrong placeholder key in authorization"
+        second
+  | l -> Alcotest.failf "expected two errors, got %d" (List.length l)
+
+let unattributed_count =
+  Alcotest.test_case "unknown tokens and providers are counted proxy-wide"
+    `Quick
+  @@ with_ctx "unattributed"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy (make_run ctx ~token:token_a ~upstream:(F.base_url up));
+  Alcotest.(check int) "none yet" 0 (P.unattributed ctx.proxy);
+  ignore (send_fixture ctx ~token:token_b f);
+  Alcotest.(check int) "unknown token" 1 (P.unattributed ctx.proxy);
+  ignore
+    (send ctx ~seg:"nope" ~token:token_a ~provider:P.Openai ~meth:"POST" "/v1/x"
+       "{}");
+  Alcotest.(check int) "unknown provider" 2 (P.unattributed ctx.proxy);
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check (list string)) "not in the run's errors" [] findings.errors
+
 (* Provider errors and dropped streams *)
 
 let scripted_429 =
@@ -655,6 +867,18 @@ let dropped_stream =
   Alcotest.(check int) "transport errors" 1 findings.transport_errors;
   let resp = response_of (only (recording ctx run).exchanges) in
   Alcotest.(check string) "partial recorded" partial (stream_bytes resp);
+  (match resp.body with
+  | Stream { complete; _ } ->
+      Alcotest.(check bool) "marked as cut off" false complete
+  | Whole _ -> Alcotest.fail "expected a recorded stream");
+  (match findings.errors with
+  | [ e ] ->
+      let prefix =
+        Printf.sprintf "upstream body cut off after %d bytes"
+          (String.length partial)
+      in
+      Alcotest.(check bool) ("error " ^ e) true (String.starts_with ~prefix e)
+  | [] | _ :: _ :: _ -> Alcotest.fail "expected one error");
   Alcotest.(check bool)
     "reservation kept" true
     (Ledger.spent run.ledger ~provider:"openai" > 0.)
@@ -764,9 +988,11 @@ let () =
   Alcotest.run "model_proxy"
     [
       ("record", record_cases);
-      ("streaming", [ streaming; dropped_stream ]);
-      ("keys", [ placeholder_keys; unknown_model; routing ]);
-      ("replay", [ replay_strict; replay_miss; until_divergence ]);
-      ("errors", [ scripted_429 ]);
+      ( "streaming",
+        [ streaming; dropped_stream; agent_disconnect; replay_timing ] );
+      ("keys", [ placeholder_keys; gemini_query_key; unknown_model; routing ]);
+      ( "replay",
+        [ replay_strict; replay_miss; until_divergence; replay_truncated ] );
+      ("errors", [ scripted_429; errors_in_findings; unattributed_count ]);
       ("isolation", [ two_runs ]);
     ]

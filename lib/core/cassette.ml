@@ -9,7 +9,10 @@ let schema_version = 1
 
 type channel = Model | Mcp | Http
 type payload = Inline of string | Blob of string
-type response_body = Whole of payload | Stream of (int * string) list
+
+type response_body =
+  | Whole of payload
+  | Stream of { chunks : (int * string) list; complete : bool }
 
 type response = {
   status : int;
@@ -202,14 +205,28 @@ let chunks_of_yojson = function
 
 let response_body_to_yojson = function
   | Whole p -> `Assoc [ ("whole", payload_to_yojson p) ]
-  | Stream chunks -> `Assoc [ ("stream", chunks_to_yojson chunks) ]
+  | Stream { chunks; complete = true } ->
+      `Assoc [ ("stream", chunks_to_yojson chunks) ]
+  | Stream { chunks; complete = false } ->
+      `Assoc [ ("stream", chunks_to_yojson chunks); ("complete", `Bool false) ]
 
-let response_body_of_yojson =
-  tagged_of_yojson ~what:"body"
-    [
-      ("whole", fun j -> Result.map (fun p -> Whole p) (payload_of_yojson j));
-      ("stream", fun j -> Result.map (fun c -> Stream c) (chunks_of_yojson j));
-    ]
+let response_body_of_yojson = function
+  | `Assoc [ ("complete", `Bool false); ("stream", j) ]
+  | `Assoc [ ("stream", j); ("complete", `Bool false) ] ->
+      Result.map
+        (fun chunks -> Stream { chunks; complete = false })
+        (chunks_of_yojson j)
+  | j ->
+      tagged_of_yojson ~what:"body"
+        [
+          ("whole", fun j -> Result.map (fun p -> Whole p) (payload_of_yojson j));
+          ( "stream",
+            fun j ->
+              Result.map
+                (fun chunks -> Stream { chunks; complete = true })
+                (chunks_of_yojson j) );
+        ]
+        j
 
 module Canon_json = struct
   type t = Canon.t
@@ -480,7 +497,9 @@ let string_pairs_equal = List.equal (pair_equal String.equal String.equal)
 let body_equal a b =
   match (a, b) with
   | Whole x, Whole y -> payload_equal x y
-  | Stream x, Stream y -> List.equal (pair_equal Int.equal String.equal) x y
+  | Stream x, Stream y ->
+      Bool.equal x.complete y.complete
+      && List.equal (pair_equal Int.equal String.equal) x.chunks y.chunks
   | Whole _, Stream _ | Stream _, Whole _ -> false
 
 let outcome_equal a b =

@@ -13,9 +13,12 @@ type payload =
 
 type response_body =
   | Whole of payload
-  | Stream of (int * string) list
+  | Stream of { chunks : (int * string) list; complete : bool }
       (** Chunks in arrival order: milliseconds since the previous chunk (or
-          since the request for the first), and the chunk's bytes. *)
+          since the request for the first), and the chunk's bytes. [complete] is
+          false when the stream was cut off (upstream dropped, or the agent went
+          away): written as ["complete": false] beside ["stream"], and absent
+          when true, so older cassettes decode as complete. *)
 
 type response = {
   status : int;
