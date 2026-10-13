@@ -1,0 +1,6 @@
+(test
+ (name test_sandbox_policy)
+ (package bactrian)
+ (libraries bactrian.core re alcotest qcheck-core qcheck-alcotest)
+ (flags
+  (:standard -w -70)))
