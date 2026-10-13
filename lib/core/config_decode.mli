@@ -44,7 +44,7 @@ val duration : float decoder
 (** Seconds, from a positive ["120s"], ["2m"] or ["1.5s"]. *)
 
 val regex : string decoder
-(** A pattern {!Redact.pattern} accepts. *)
+(** A pattern {!Redact.val-pattern} accepts. *)
 
 val enum : what:string -> (string * 'a) list -> 'a decoder
 

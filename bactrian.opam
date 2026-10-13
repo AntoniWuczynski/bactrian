@@ -17,6 +17,8 @@ depends: [
   "re" {>= "1.14.0"}
   "eio" {>= "1.6"}
   "eio_main" {>= "1.6"}
+  "http" {= "dev"}
+  "cohttp" {= "dev"}
   "cohttp-eio" {= "dev"}
   "uri" {>= "4.4.0"}
   "mirage-crypto-rng" {>= "2.4.1"}

@@ -61,7 +61,8 @@ module type S = sig
 
   val tool_results : Canon.t -> tool_result list
   (** Tool results carried in the request history, in order, linked to their
-      calls by {!link_history}. A result that answers no call is left out. *)
+      calls by {!Protocol.link_history}. A result that answers no call is left
+      out. *)
 end
 
 val pp_error : Format.formatter -> error -> unit
