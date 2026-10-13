@@ -12,4 +12,4 @@ Provider request and response bodies are open-ended JSON. Matching needs two doc
 
 ## Consequences
 
-Equality, ordering and hashing on `Canon.t` are structural and meaningful. Duplicate keys and non-finite numbers are rejected at parse time. Code that needs a specific shape still decodes into typed records; `Canon.t` is for payloads whose shape bactrian does not own.
+Equality, ordering and hashing on `Canon.t` are structural and meaningful. Duplicate keys and non-finite numbers are rejected at parse time. Code that needs a specific shape still decodes into typed records. `Canon.t` is for payloads whose shape bactrian does not own.

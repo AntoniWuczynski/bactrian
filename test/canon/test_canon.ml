@@ -90,6 +90,108 @@ let test_to_string_floats () =
     "0.1" "0.10000000000000001"
     (Canon.to_string (get (Canon.float 0.1)))
 
+let json s = get (Canon.of_string s)
+
+let check_json msg expected actual =
+  Alcotest.check canon msg (json expected) actual
+
+let segment =
+  Alcotest.testable
+    (fun ppf -> function
+      | Canon.Key k -> Fmt.pf ppf "Key %S" k | Each -> Fmt.string ppf "Each")
+    ( = )
+
+let test_readers () =
+  Alcotest.(check (option string))
+    "string" (Some "a")
+    (Canon.to_string_opt (Canon.string "a"));
+  Alcotest.(check (option string))
+    "not string" None
+    (Canon.to_string_opt (Canon.int 1));
+  Alcotest.(check (option int)) "int" (Some 3) (Canon.to_int_opt (Canon.int 3));
+  Alcotest.(check (option int))
+    "not int" None
+    (Canon.to_int_opt (Canon.string "3"));
+  Alcotest.(check (option bool))
+    "bool" (Some true)
+    (Canon.to_bool_opt (Canon.bool true));
+  Alcotest.(check (option bool)) "not bool" None (Canon.to_bool_opt Canon.null);
+  Alcotest.(check int)
+    "list" 2
+    (List.length (Option.get (Canon.to_list_opt (json "[1,2]"))));
+  Alcotest.(check bool)
+    "not list" true
+    (Option.is_none (Canon.to_list_opt (json "{}")));
+  Alcotest.(check int)
+    "fields" 1
+    (List.length (Option.get (Canon.to_fields_opt (json "{\"a\":1}"))));
+  Alcotest.(check bool)
+    "not fields" true
+    (Option.is_none (Canon.to_fields_opt (json "[]")));
+  Alcotest.(check bool)
+    "member" true
+    (Option.equal Canon.equal
+       (Some (Canon.int 1))
+       (Canon.member "a" (json "{\"a\":1}")));
+  Alcotest.(check bool)
+    "member missing" true
+    (Option.is_none (Canon.member "b" (json "{\"a\":1}")));
+  Alcotest.(check bool)
+    "member non-object" true
+    (Option.is_none (Canon.member "a" (json "[1]")))
+
+let test_edit () =
+  check_json "insert middle" "{\"a\":1,\"b\":2,\"c\":3}"
+    (Canon.set_member "b" (Canon.int 2) (json "{\"a\":1,\"c\":3}"));
+  check_json "insert first" "{\"a\":0,\"b\":1}"
+    (Canon.set_member "a" (Canon.int 0) (json "{\"b\":1}"));
+  check_json "insert last" "{\"a\":1,\"z\":0}"
+    (Canon.set_member "z" (Canon.int 0) (json "{\"a\":1}"));
+  check_json "replace" "{\"a\":9}"
+    (Canon.set_member "a" (Canon.int 9) (json "{\"a\":1}"));
+  check_json "set on non-object" "[1]"
+    (Canon.set_member "a" (Canon.int 9) (json "[1]"));
+  check_json "remove" "{\"b\":2}"
+    (Canon.remove_member "a" (json "{\"a\":1,\"b\":2}"));
+  check_json "remove missing" "{\"b\":2}"
+    (Canon.remove_member "a" (json "{\"b\":2}"));
+  check_json "remove non-object" "3" (Canon.remove_member "a" (json "3"));
+  check_json "map_fields" "{\"a\":\"a\",\"b\":\"b\"}"
+    (Canon.map_fields (fun k _ -> Canon.string k) (json "{\"a\":1,\"b\":2}"));
+  check_json "map_fields non-object" "[1]"
+    (Canon.map_fields (fun _ _ -> Canon.null) (json "[1]"));
+  check_json "map_items" "[0,0]"
+    (Canon.map_items (fun _ -> Canon.int 0) (json "[1,2]"));
+  check_json "map_items non-list" "{}"
+    (Canon.map_items (fun _ -> Canon.null) (json "{}"))
+
+let test_paths () =
+  Alcotest.(check (list segment))
+    "nested"
+    [ Canon.Key "messages"; Each; Key "content"; Each; Key "signature" ]
+    (Canon.path_of_string "messages[].content[].signature");
+  Alcotest.(check (list segment))
+    "dotted" [ Canon.Key "a"; Key "b" ]
+    (Canon.path_of_string "a.b");
+  Alcotest.(check (list segment))
+    "single" [ Canon.Key "a" ] (Canon.path_of_string "a")
+
+let rm p s = Canon.remove_at (Canon.path_of_string p) (json s)
+
+let test_remove_at () =
+  check_json "prune emptied parent" "{}" (rm "a.b" "{\"a\":{\"b\":1}}");
+  check_json "keep non-empty parent" "{\"a\":{\"c\":2}}"
+    (rm "a.b" "{\"a\":{\"b\":1,\"c\":2}}");
+  check_json "keep pre-existing empty" "{\"a\":{}}" (rm "a.b" "{\"a\":{}}");
+  check_json "top-level key" "{\"b\":2}" (rm "a" "{\"a\":1,\"b\":2}");
+  check_json "each" "{\"xs\":[{\"j\":2},{}]}"
+    (rm "xs[].k" "{\"xs\":[{\"k\":1,\"j\":2},{\"k\":3}]}");
+  check_json "nested each" "{\"m\":[{\"c\":[{\"t\":1},{\"t\":2}]}]}"
+    (rm "m[].c[].s" "{\"m\":[{\"c\":[{\"s\":0,\"t\":1},{\"t\":2}]}]}");
+  check_json "no match" "{\"a\":1}" (rm "b.c" "{\"a\":1}");
+  check_json "each on non-list" "{\"xs\":1}" (rm "xs[].k" "{\"xs\":1}");
+  check_json "descend into scalar" "{\"a\":1}" (rm "a.b" "{\"a\":1}")
+
 (* generators *)
 
 let finite_float =
@@ -200,6 +302,77 @@ let prop_digest =
           && Bool.equal (Canon.equal a b) (Int.equal (Canon.compare a b) 0)
       | Error _, _ | _, Error _ -> false)
 
+let arb_key = QCheck.make ~print:Fun.id key
+
+let valid v =
+  match Canon.of_string (Canon.to_string v) with
+  | Ok v' -> Canon.equal v v'
+  | Error _ -> false
+
+let with_tree f y =
+  match Canon.of_yojson y with Error _ -> false | Ok v -> f v
+
+let prop_set_member =
+  QCheck.Test.make ~name:"set_member then member" ~count:500
+    (QCheck.pair arb_tree arb_key) (fun (y, k) ->
+      with_tree
+        (fun v ->
+          let x = Canon.string "x" in
+          let v' = Canon.set_member k x v in
+          valid v'
+          &&
+          match Canon.to_fields_opt v with
+          | None -> Canon.equal v v'
+          | Some _ -> Option.equal Canon.equal (Canon.member k v') (Some x))
+        y)
+
+let prop_remove_member =
+  QCheck.Test.make ~name:"remove_member then member is None" ~count:500
+    (QCheck.pair arb_tree arb_key) (fun (y, k) ->
+      with_tree
+        (fun v ->
+          let v' = Canon.remove_member k v in
+          valid v' && Option.is_none (Canon.member k v'))
+        y)
+
+let prop_remove_existing =
+  QCheck.Test.make ~name:"remove_member of existing keys" ~count:500 arb_tree
+    (fun y ->
+      with_tree
+        (fun v ->
+          match Canon.to_fields_opt v with
+          | None -> true
+          | Some fs ->
+              List.for_all
+                (fun (k, _) ->
+                  let v' = Canon.remove_member k v in
+                  valid v' && Option.is_none (Canon.member k v'))
+                fs)
+        y)
+
+let arb_path =
+  QCheck.make ~print:(String.concat ".")
+    QCheck.Gen.(list_size (int_range 1 3) key)
+
+let prop_remove_at_valid =
+  QCheck.Test.make ~name:"remove_at keeps the invariant" ~count:500
+    (QCheck.pair arb_tree arb_path) (fun (y, p) ->
+      with_tree
+        (fun v ->
+          valid
+            (Canon.remove_at (Canon.path_of_string (String.concat "[]." p)) v))
+        y)
+
+let prop_remove_at_noop =
+  QCheck.Test.make ~name:"remove_at of an absent path is identity" ~count:500
+    arb_tree (fun y ->
+      with_tree
+        (fun v ->
+          Canon.equal v (Canon.remove_at [ Canon.Key "\000absent"; Key "x" ] v)
+          && Canon.equal v
+               (Canon.remove_at [ Canon.Key "\000absent"; Each; Key "x" ] v))
+        y)
+
 let () =
   Alcotest.run "canon"
     [
@@ -212,10 +385,23 @@ let () =
           Alcotest.test_case "big int" `Quick test_big_int;
           Alcotest.test_case "digest" `Quick test_digest;
           Alcotest.test_case "float printing" `Quick test_to_string_floats;
+          Alcotest.test_case "readers" `Quick test_readers;
+          Alcotest.test_case "edits" `Quick test_edit;
+          Alcotest.test_case "paths" `Quick test_paths;
+          Alcotest.test_case "remove_at" `Quick test_remove_at;
         ] );
       ( "properties",
         List.map
           (fun t -> QCheck_alcotest.to_alcotest t)
-          [ prop_round_trip; prop_yojson_round_trip; prop_shuffle; prop_digest ]
-      );
+          [
+            prop_round_trip;
+            prop_yojson_round_trip;
+            prop_shuffle;
+            prop_digest;
+            prop_set_member;
+            prop_remove_member;
+            prop_remove_existing;
+            prop_remove_at_valid;
+            prop_remove_at_noop;
+          ] );
     ]

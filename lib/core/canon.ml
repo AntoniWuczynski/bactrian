@@ -142,3 +142,89 @@ let pp_error ppf = function
   | Syntax msg -> Format.fprintf ppf "invalid JSON: %s" msg
   | Duplicate_key k -> Format.fprintf ppf "duplicate key %S" k
   | Non_finite_float -> Format.pp_print_string ppf "non-finite float"
+
+let to_string_opt = function
+  | String s -> Some s
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ | Object _ -> None
+
+let to_int_opt = function
+  | Int n -> Some n
+  | Null | Bool _ | Big_int _ | Float _ | String _ | List _ | Object _ -> None
+
+let to_bool_opt = function
+  | Bool b -> Some b
+  | Null | Int _ | Big_int _ | Float _ | String _ | List _ | Object _ -> None
+
+let to_list_opt = function
+  | List xs -> Some xs
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | Object _ -> None
+
+let to_fields_opt = function
+  | Object fs -> Some fs
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ -> None
+
+let member k v = Option.bind (to_fields_opt v) (List.assoc_opt k)
+
+let set_member k x v =
+  match v with
+  | Object fs ->
+      let rec go = function
+        | [] -> [ (k, x) ]
+        | ((k', _) as f) :: rest as all ->
+            let c = String.compare k k' in
+            if c < 0 then (k, x) :: all
+            else if c = 0 then (k, x) :: rest
+            else f :: go rest
+      in
+      Object (go fs)
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ -> v
+
+let remove_member k v =
+  match v with
+  | Object fs ->
+      Object (List.filter (fun (k', _) -> not (String.equal k k')) fs)
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ -> v
+
+let map_fields f v =
+  match v with
+  | Object fs -> Object (List.map (fun (k, x) -> (k, f k x)) fs)
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ -> v
+
+let map_items f v =
+  match v with
+  | List xs -> List (List.map f xs)
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | Object _ -> v
+
+type segment = Key of string | Each
+
+let path_of_string p =
+  String.split_on_char '.' p
+  |> List.concat_map (fun c ->
+      match String.ends_with ~suffix:"[]" c with
+      | true -> [ Key (String.sub c 0 (String.length c - 2)); Each ]
+      | false -> [ Key c ])
+
+let is_empty_object v =
+  match v with
+  | Object [] -> true
+  | Object (_ :: _)
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ ->
+      false
+
+let rec remove_at segs v =
+  match (segs, v) with
+  | [], _ -> v
+  | [ Key k ], _ -> remove_member k v
+  | Key k :: rest, Object _ -> (
+      match member k v with
+      | None -> v
+      | Some child ->
+          let child' = remove_at rest child in
+          if is_empty_object child' && not (is_empty_object child) then
+            remove_member k v
+          else set_member k child' v)
+  | Each :: rest, List _ -> map_items (remove_at rest) v
+  | ( (Key _ | Each) :: _,
+      ( Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _
+      | Object _ ) ) ->
+      v
