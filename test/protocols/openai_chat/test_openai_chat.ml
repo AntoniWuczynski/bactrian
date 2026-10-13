@@ -204,7 +204,7 @@ let prop_ids =
   QCheck.Test.make ~name:"renaming IDs leaves the key unchanged" ~count:200
     QCheck.(pair string_printable string_printable)
     (fun (x, y) ->
-      let x = "call_" ^ x and y = "call_" ^ y ^ "!" in
+      let x = "call_" ^ x ^ "#" and y = "call_" ^ y ^ "!" in
       let two = two_call_request "call_A" "call_B" in
       let one = request "luna_turn2" in
       let tbl2 = [ ("call_A", x); ("call_B", y) ] in
