@@ -53,6 +53,9 @@ val inject : t -> (string * string) list -> (string * string) list
 (** [inject t env] is [env] with the variables that start the clock at [sim_now]
     and let it run: [LD_PRELOAD] (the library first, then whatever [env] already
     preloads, once), [FAKETIME] ([@] and the Unix time of [sim_now], so the
-    agent's [TZ] plays no part), [FAKETIME_FMT=%s], [FAKETIME_DONT_RESET=1] and
-    [FAKETIME_DONT_FAKE_MONOTONIC=1]. [env] unchanged when the clock is
-    contract-only. *)
+    agent's [TZ] plays no part), [FAKETIME_FMT=%s] and [FAKETIME_DONT_RESET=1].
+    The monotonic clock is faked along with the wall clock, as libfaketime does
+    by default: libfaketime 0.9.10 breaks absolute sleeps on [CLOCK_MONOTONIC]
+    (Python 3.11's [time.sleep]) when only the wall clock moves. An [env] that
+    carries [FAKETIME_DONT_FAKE_MONOTONIC] keeps it, for a runtime that needs
+    real monotonic time. [env] unchanged when the clock is contract-only. *)

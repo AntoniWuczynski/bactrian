@@ -136,7 +136,6 @@ let inject t env =
           ("FAKETIME", "@" ^ string_of_int epoch);
           ("FAKETIME_FMT", "%s");
           ("FAKETIME_DONT_RESET", "1");
-          ("FAKETIME_DONT_FAKE_MONOTONIC", "1");
         ]
       in
       List.filter (fun (k, _) -> not (List.mem_assoc k set)) env @ set

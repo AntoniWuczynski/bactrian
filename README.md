@@ -168,7 +168,7 @@ What the sandbox refused goes into the run's trace as `sandbox_violation` events
 
 ## Clock
 
-Every agent gets `SIM_NOW` (the scenario's `now`, an RFC 3339 time, or the current time) and `TZ` (the scenario's `timezone`, or `UTC`) in its environment. That is the contract, and an agent that follows it behaves the same on every run. On Linux, bactrian also makes the agent's own system clock agree. It preloads `libfaketime` (`sudo apt install libfaketime`, or point `BACTRIAN_LIBFAKETIME` at `libfaketimeMT.so.1`) so that the wall clock starts at `SIM_NOW` and then runs at normal speed. Elapsed-time clocks are left real. Set `clock: { faketime: off }` in the experiment to turn this off.
+Every agent gets `SIM_NOW` (the scenario's `now`, an RFC 3339 time, or the current time) and `TZ` (the scenario's `timezone`, or `UTC`) in its environment. That is the contract, and an agent that follows it behaves the same on every run. On Linux, bactrian also makes the agent's own system clock agree. It preloads `libfaketime` (`sudo apt install libfaketime`, or point `BACTRIAN_LIBFAKETIME` at `libfaketimeMT.so.1`) so that the wall clock starts at `SIM_NOW` and then runs at normal speed. The monotonic clock moves with it, so intervals stay true. Set `clock: { faketime: off }` in the experiment to turn this off.
 
 macOS runs are always contract-only. System Integrity Protection removes the variables that preloading depends on from the environment of the system's programs, so bactrian does not try.
 

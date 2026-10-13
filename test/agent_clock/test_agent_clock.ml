@@ -226,7 +226,8 @@ let test_inject () =
     (get "FAKETIME_FMT");
   Alcotest.check option_string "children share the clock" (Some "1")
     (get "FAKETIME_DONT_RESET");
-  Alcotest.check option_string "monotonic time is real" (Some "1")
+  Alcotest.check option_string "monotonic time is faked with the wall clock"
+    None
     (get "FAKETIME_DONT_FAKE_MONOTONIC");
   Alcotest.check option_string "the rest is untouched" (Some "/h") (get "HOME")
 
