@@ -704,9 +704,95 @@ let test_named_paths () =
     (call "report"
        (Some {|{"experiment_id":"x","output":".bactrian/ledger.jsonl"}|}))
 
+(* Without the flags the server refuses whatever runs outside the sandbox,
+   and each refusal names the flag that allows it. *)
+let test_policy () =
+  let names flag result = mentions flag (Canon.to_string result) in
+  let refused_for flag what result =
+    Alcotest.(check bool) (what ^ " refused") true (is_error result);
+    Alcotest.(check bool) (what ^ " names " ^ flag) true (names flag result)
+  in
+  ( with_context @@ fun context call ->
+    write "pol/s.json"
+      {|{"version": 1, "id": "s", "turns": [{"user": "hi"}],
+        "checkers": [{"command": ["true"]}], "golden": {"pass": []}}|};
+    List.iter
+      (fun (tool, args, flag) ->
+        refused_for flag (tool ^ " " ^ args) (call tool (Some args)))
+      [
+        ( "run_start",
+          {|{"experiment":"pol/s.json","sandbox":"off"}|},
+          "--allow-unsandboxed" );
+        ( "run_start",
+          {|{"experiment":"pol/s.json","sandbox":"auto"}|},
+          "--allow-unsandboxed" );
+        ( "record_start",
+          {|{"agent":["true"],"turns":["hi"],"sandbox":"off"}|},
+          "--allow-unsandboxed" );
+        ( "record_start",
+          {|{"agent":["true"],"turns":["hi"],"env":["HOME"]}|},
+          "--trust-project" );
+        ( "record_start",
+          {|{"agent":["true"],"turns":["hi"],"mcp_stdio":["x=[\"true\"]"]}|},
+          "--trust-project" );
+        ( "record_start",
+          {|{"agent":["true"],"turns":["hi"],"mcp_http":["x=http://127.0.0.1:9/"]}|},
+          "--trust-project" );
+        ( "replay_start",
+          {|{"agent":["true"],"run":"r1","env":["HOME"]}|},
+          "--trust-project" );
+      ];
+    let checked = call "check" (Some {|{"scenarios":["pol/s.json"]}|}) in
+    refused_for "--trust-project" "check with checkers" checked;
+    write "pol2/s.json" {|{"version": 1, "id": "s", "turns": [{"user": "hi"}]}|};
+    let experiment (scenarios, agent) =
+      Printf.sprintf
+        {|{"version": 1, "name": "x",
+          "agent": {"protocol": "command", "command": ["true"]%s},
+          "scenarios": [%S], "variants": {"a": {}}, "repeats": 1,
+          "caps_usd": {"openai": 1}}|}
+        agent scenarios
+    in
+    List.iter
+      (fun (name, extra, flag) ->
+        write (Printf.sprintf "polx/%s.json" name) (experiment extra);
+        let status =
+          finished context.env call
+            (call "run_start"
+               (Some (Printf.sprintf {|{"experiment":"polx/%s.json"}|} name)))
+        in
+        Alcotest.(check bool)
+          (name ^ " names " ^ flag)
+          true
+          (mentions flag (Canon.to_string status)))
+      [
+        ("checkers", ("../pol/*.json", ""), "--trust-project");
+        ( "passthrough",
+          ("../pol2/*.json", {|, "env_passthrough": ["HOME"]|}),
+          "--trust-project" );
+      ];
+    let instructions = (Mcp_server.server context.policy).instructions in
+    Alcotest.(check bool)
+      "the instructions state the policy" true
+      (mentions "--allow-unsandboxed" instructions
+      && mentions "--trust-project" instructions) );
+  with_context
+    ~policy:
+      { Policy.default with allow_unsandboxed = true; trust_project = true }
+  @@ fun context _ ->
+  Alcotest.(check (result (option string) string))
+    "the flag leaves the mode to the caller" (Ok (Some "off"))
+    (Result.map
+       (Option.map Bactrian_runtime.Sandbox.mode_name)
+       (Policy.sandbox context.policy (Some `Off)));
+  Alcotest.(check (result unit string))
+    "trusted, env passes" (Ok ())
+    (Policy.env context.policy [ "HOME" ])
+
 (* A job beyond the limit is refused, and names the flag that raises it. *)
 let test_job_limit () =
-  with_context ~policy:{ Policy.max_jobs = 1 } @@ fun context call ->
+  with_context ~policy:{ Policy.default with max_jobs = 1 }
+  @@ fun context call ->
   Out_channel.with_open_text "limit.yaml" (fun oc -> output_string oc "x");
   let first =
     Jobs.start context.jobs ~kind:"run" ~progress:one
@@ -745,6 +831,7 @@ let () =
           Alcotest.test_case "the commands' JSON" `Quick test_same_as_commands;
           Alcotest.test_case "the job limit" `Quick test_job_limit;
           Alcotest.test_case "paths that files name" `Quick test_named_paths;
+          Alcotest.test_case "the policy and its flags" `Quick test_policy;
           Alcotest.test_case "a long plan off the event loop" `Quick
             test_plan_off_loop;
         ] );

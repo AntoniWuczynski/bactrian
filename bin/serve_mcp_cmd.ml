@@ -82,7 +82,10 @@ let cmd ~bactrian_exe =
              $(b,replay) start jobs: $(b,run_start), $(b,record_start) and \
              $(b,replay_start) return a job ID at once, $(b,job_status) polls \
              it and $(b,job_cancel) stops it as Ctrl-C would. Paths must lie \
-             inside the current directory. Spend is capped by the \
+             inside the current directory. Unless the options below allow \
+             more, every job runs its agent in the sandbox in $(b,strict) \
+             mode, and checkers, MCP servers and passed environment variables \
+             are refused. Spend is capped by the \
              $(b,BACTRIAN_CAP_)$(i,PROVIDER) variables of the server's \
              environment, which no tool can change.";
           `P
@@ -102,6 +105,33 @@ let cmd ~bactrian_exe =
              $(b,record_start) or $(b,replay_start) is refused until one \
              finishes.")
   in
+  let allow_unsandboxed =
+    Arg.(
+      value & flag
+      & info [ "allow-unsandboxed" ]
+          ~doc:
+            "Let jobs run their agent outside the operating-system sandbox: \
+             $(b,sandbox) $(b,auto) or $(b,off) in a tool argument or an \
+             experiment, and HTTP-mode agents. Without it every job is \
+             $(b,strict), and fails where the sandbox does not work.")
+  in
+  let trust_project =
+    Arg.(
+      value & flag
+      & info [ "trust-project" ]
+          ~doc:
+            "Let the project's files run commands and reach outside the \
+             sandbox: scenario checkers, MCP servers ($(b,mcp_stdio), \
+             $(b,mcp_http) and an experiment's $(b,mcp)), passing the server's \
+             environment variables to an agent ($(b,env), \
+             $(b,agent.env_passthrough)) and $(b,sandbox.allow_write) paths \
+             outside the working directory. This makes the server as powerful \
+             as a shell in this project: anything that can write a file here \
+             and call a tool can run any program as you.")
+  in
   Cmd.v info
     Term.(
-      const (fun max_jobs -> serve ~bactrian_exe { Policy.max_jobs }) $ max_jobs)
+      const (fun allow_unsandboxed trust_project max_jobs ->
+          serve ~bactrian_exe
+            { Policy.allow_unsandboxed; trust_project; max_jobs })
+      $ allow_unsandboxed $ trust_project $ max_jobs)

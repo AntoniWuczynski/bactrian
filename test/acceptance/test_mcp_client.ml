@@ -17,8 +17,12 @@ let eras = [ C.Modern; C.Legacy ]
 (* A client that has been told what it must not leak. *)
 type conn = { c : C.t; seen : Buffer.t }
 
+(* The tests run agents unsandboxed and pass them variables, which the server
+   allows only with both flags. *)
+let trusting = [ "--allow-unsandboxed"; "--trust-project" ]
+
 let connect ?(env = key_env) ~dir era =
-  let c = C.start ~env ~exe:(exe ()) ~dir era in
+  let c = C.start ~env ~args:trusting ~exe:(exe ()) ~dir era in
   { c; seen = Buffer.create 1024 }
 
 let note conn c = Buffer.add_string conn.seen (Canon.to_string c)

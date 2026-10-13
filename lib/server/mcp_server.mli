@@ -24,6 +24,9 @@ val serve :
     get no reply) and returns once they have unwound. [log] gets a line for
     standard error when a message is too long to read. *)
 
+val server : Policy.t -> Mcp_dispatch.server
+(** bactrian's name, version, tools and instructions, which state the policy. *)
+
 type config = {
   policy : Policy.t;
   bactrian_exe : string;

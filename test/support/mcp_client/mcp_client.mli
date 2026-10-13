@@ -28,14 +28,15 @@ type t
 
 val spawn :
   ?env:(string * string) list ->
+  ?args:string list ->
   ?timeout:float ->
   exe:string ->
   dir:string ->
   unit ->
   t
 (** Starts [exe serve-mcp] with [dir] as its working directory and the test's
-    environment plus [env] (which wins). [timeout] (default 60 seconds) bounds
-    each reply. The connection has no era yet. *)
+    environment plus [env] (which wins), and [args] after [serve-mcp]. [timeout]
+    (default 60 seconds) bounds each reply. The connection has no era yet. *)
 
 val connect : t -> era -> Canon.t
 (** Opens the connection in that era and returns the server's answer, the result
@@ -43,6 +44,7 @@ val connect : t -> era -> Canon.t
 
 val start :
   ?env:(string * string) list ->
+  ?args:string list ->
   ?timeout:float ->
   exe:string ->
   dir:string ->

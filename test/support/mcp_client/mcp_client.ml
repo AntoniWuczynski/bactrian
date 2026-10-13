@@ -66,13 +66,23 @@ let environment overrides =
   in
   Array.of_list (kept @ List.map (fun (k, v) -> k ^ "=" ^ v) overrides)
 
-let spawn ?(env = []) ?(timeout = 60.) ~exe ~dir () =
+let spawn ?(env = []) ?(args = []) ?(timeout = 60.) ~exe ~dir () =
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   let stdin_r, stdin_w = Unix.pipe ~cloexec:true () in
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let pid =
     Unix.create_process_env "/bin/sh"
-      [| "sh"; "-c"; "cd \"$1\" && exec \"$2\" serve-mcp"; "sh"; dir; exe |]
+      (Array.of_list
+         ([
+            "sh";
+            "-c";
+            "cd \"$1\" && exe=\"$2\" && shift 2 && exec \"$exe\" serve-mcp \
+             \"$@\"";
+            "sh";
+            dir;
+            exe;
+          ]
+         @ args))
       (environment env) stdin_r stdout_w Unix.stderr
   in
   Unix.close stdin_r;
@@ -200,8 +210,8 @@ let connect t era =
       notify t "notifications/initialized" Canon.empty_object;
       answer
 
-let start ?env ?timeout ~exe ~dir era =
-  let t = spawn ?env ?timeout ~exe ~dir () in
+let start ?env ?args ?timeout ~exe ~dir era =
+  let t = spawn ?env ?args ?timeout ~exe ~dir () in
   match connect t era with
   | _ -> t
   | exception e ->

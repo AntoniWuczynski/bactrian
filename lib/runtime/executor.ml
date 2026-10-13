@@ -342,7 +342,8 @@ let http_agent_strict ~experiment_file ~find experiment sandbox_override =
       [
         at_key ~experiment_file ~find "agent.protocol"
           "--sandbox strict cannot be met with protocol http: bactrian does \
-           not start the agent, so it cannot sandbox it (use auto or off)";
+           not start the agent, so it cannot sandbox it (use auto or off, \
+           which the MCP server allows when started with --allow-unsandboxed)";
       ]
   | Ok { agent = Command _; _ }, _ | Ok _, (None | Some (`Auto | `Off)) -> []
   | Error _, _ -> []

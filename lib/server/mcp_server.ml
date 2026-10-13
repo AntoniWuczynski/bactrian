@@ -91,7 +91,7 @@ type config = {
   log : string -> unit;
 }
 
-let server : Mcp_dispatch.server =
+let server policy : Mcp_dispatch.server =
   {
     name = "bactrian";
     version = Version.current;
@@ -102,7 +102,7 @@ let server : Mcp_dispatch.server =
        job_id at once: poll job_status until it is no longer running, and stop \
        it with job_cancel. The other tools answer at once. Every result is the \
        JSON that the matching bactrian command prints with --json. Paths must \
-       lie inside this directory.";
+       lie inside this directory. " ^ Policy.describe policy;
     tools = Mcp_tools.definitions;
   }
 
@@ -121,8 +121,8 @@ let run ~env ~root ~stop config ~input ~output =
     }
   in
   let ended =
-    serve ~server ~call:(Mcp_tools.call context) ~stop ~log:config.log ~input
-      ~output
+    serve ~server:(server config.policy) ~call:(Mcp_tools.call context) ~stop
+      ~log:config.log ~input ~output
   in
   Jobs.cancel_all jobs;
   ended

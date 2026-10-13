@@ -167,7 +167,8 @@ let sandbox_property =
     (Enum (names Sandbox.modes))
     "Run the agent in the operating-system sandbox: auto (when the host \
      supports it, otherwise unsandboxed with a warning and a label), strict \
-     (fail when it does not), off."
+     (fail when it does not), off. Unless the server was started with \
+     --allow-unsandboxed, every job is strict and auto and off are refused."
 
 let sandbox_mode = enum ~field:"sandbox" Sandbox.modes
 
@@ -203,6 +204,7 @@ let run_start =
       in
       let* () = usage (each (Confine.id ~field:"resume") a.resume) in
       let* sandbox = usage (sandbox_mode a.sandbox) in
+      let* sandbox = usage (Policy.sandbox context.policy sandbox) in
       let experiment_id = ref a.resume in
       let on_progress (p : Progress.t) =
         (match p with
@@ -250,7 +252,8 @@ let common_properties =
        replay to the recording's.";
     prop "timezone" String "Value of TZ for the agent (default UTC).";
     prop "env" Strings
-      "Names of variables to pass from the server's environment to the agent.";
+      "Names of variables to pass from the server's environment to the agent \
+       (refused unless the server was started with --trust-project).";
     prop "turn_timeout" Number
       "Longest wait for one agent message, in seconds (default 120).";
     prop "total_timeout" Number
@@ -261,6 +264,8 @@ let common_properties =
 let common context (c : common_args) =
   let* cwd = Confine.path context.root ~field:"cwd" c.cwd in
   let* sandbox = sandbox_mode c.sandbox in
+  let* sandbox = Policy.sandbox context.policy sandbox in
+  let* () = Policy.env context.policy c.env in
   Ok
     {
       Single_run.agent = c.agent;
@@ -308,15 +313,20 @@ let record_start =
           "The scripted user turns, in order.";
         prop "mcp_stdio" Strings
           "NAME=JSON declarations of stdio MCP servers, the command as a JSON \
-           array of strings.";
+           array of strings (refused unless the server was started with \
+           --trust-project).";
         prop "mcp_http" Strings
-          "NAME=URL declarations of Streamable HTTP MCP servers.";
+          "NAME=URL declarations of Streamable HTTP MCP servers (refused \
+           unless the server was started with --trust-project).";
         prop "mcp_policy" Strings
           "NAME=POLICY: record (default), passthrough or block.";
       ])
     (with_common record_args_of_yojson)
     (fun context ((c : common_args), (r : record_args)) ->
       let* common = usage (common context c) in
+      let* () =
+        usage (Policy.mcp context.policy ~stdio:r.mcp_stdio ~http:r.mcp_http)
+      in
       let request : Record_command.request =
         {
           common;
@@ -626,7 +636,9 @@ let check =
       "Check scenarios' assertions and checkers against their golden traces: \
        every pass trace must pass them all and every fail trace must fail one, \
        as `bactrian check --json` prints it. This runs each scenario's checker \
-       commands as programs on this machine, outside any sandbox."
+       commands as programs on this machine, outside any sandbox, so a \
+       scenario with checkers is refused unless the server was started with \
+       --trust-project."
     [
       prop ~required:true "scenarios" Nonempty_strings
         "Scenario files (YAML or JSON), inside the working directory.";
@@ -643,7 +655,9 @@ let check =
              a.scenarios (Ok []))
       in
       let* reports =
-        Check_command.run ~files:(files context) ~env:context.env { scenarios }
+        Check_command.run ~files:(files context)
+          ~vet:(Policy.scenario context.policy)
+          ~env:context.env { scenarios }
       in
       of_json (Check_command.to_json reports))
 
