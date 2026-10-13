@@ -32,21 +32,27 @@ val of_seatbelt_ndjson : tag:string -> string -> violation option
     {!of_seatbelt_message}. The closing summary line and lines that are not JSON
     give [None]. *)
 
+type settled =
+  | Settled of violation list  (** Two reads in a row agreed. *)
+  | Unsettled of violation list
+      (** The last read before [deadline], which still differed from the one
+          before it. *)
+  | No_marker  (** The marker was not there by [deadline]. *)
+
 val settle :
   tag:string ->
   read:(unit -> string list) ->
   wait:(float -> unit) ->
   now:(unit -> float) ->
   deadline:float ->
-  violation list option
+  settled
 (** The run's denials from the system log. [read] gives the lines of one
     [log show --style ndjson] call, [wait s] sleeps [s] seconds and [now] is the
     time in seconds. Reads every 0.5 seconds until a read holds the {!end_tag}
     marker. The marker does not mean that other processes' earlier denials have
     reached the log, so it then reads again every second until two reads in a
-    row give the same violations. [None] if the marker is not there by
-    [deadline]. Once it was seen, the last violations read when the next read
-    would pass [deadline]. *)
+    row give the same violations. Neither shows denials that the log dropped,
+    which it does under load, so even [Settled] can miss some. *)
 
 val of_relay_line : string -> (violation, string) result
 (** One line of the Linux forwarder's log:

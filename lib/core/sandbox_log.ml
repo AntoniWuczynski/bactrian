@@ -83,6 +83,11 @@ let settle_interval = 1.
 let equal_violation (a : violation) (b : violation) =
   String.equal a.kind b.kind && String.equal a.detail b.detail
 
+type settled =
+  | Settled of violation list
+  | Unsettled of violation list
+  | No_marker
+
 let settle ~tag ~read ~wait ~now ~deadline =
   let marked =
     List.exists (fun l ->
@@ -92,17 +97,17 @@ let settle ~tag ~read ~wait ~now ~deadline =
   let rec until_marker () =
     let lines = read () in
     if marked lines then until_stable (parse lines)
-    else if now () >= deadline then None
+    else if now () >= deadline then No_marker
     else begin
       wait poll_interval;
       until_marker ()
     end
   and until_stable previous =
-    if now () +. settle_interval > deadline then Some previous
+    if now () +. settle_interval > deadline then Unsettled previous
     else begin
       wait settle_interval;
       let next = parse (read ()) in
-      if List.equal equal_violation previous next then Some next
+      if List.equal equal_violation previous next then Settled next
       else until_stable next
     end
   in

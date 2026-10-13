@@ -108,9 +108,44 @@ type session = {
   fds : (int * Eio_unix.Fd.t) list;  (** Descriptors the command inherits. *)
 }
 
+(** What kinds of denial a run's violations can include. *)
+type coverage =
+  | Seatbelt_log
+      (** macOS: every kind Seatbelt logs, read from the system log, which can
+          drop denials under load. *)
+  | Relay_failures_only
+      (** Linux: only the connections the forwarder could not relay. Denied
+          connections, writes and reads fail inside the agent, unrecorded. *)
+
+val coverage_name : coverage -> string
+(** ["seatbelt-log"] or ["relay-failures-only"]. *)
+
+val coverage_of_name : string -> coverage option
+
 type violations =
-  | Collected of Bactrian_core.Sandbox_log.violation list
+  | Collected of {
+      items : Bactrian_core.Sandbox_log.violation list;
+      coverage : coverage;
+      gaps : string list;
+          (** Why [items] may miss some, empty when they are complete for their
+              [coverage]. On macOS always at least that the system log can drop
+              denials, which makes [items] a lower bound. *)
+    }
   | Not_collected of string  (** Why the denials could not be read. *)
+
+val unsandboxed_violations : violations
+(** [Not_collected "the run was not sandboxed"]. *)
+
+val violations_json : violations -> Yojson.Safe.t
+(** [{"collected": true, "coverage": "seatbelt-log", "complete": false,
+     "reason": "…", "items": [{"kind", "detail"}]}]: [complete] is whether
+    [gaps] is empty, and [reason] joins the gaps. Not collected:
+    [{"collected": false, "reason": "…", "items": []}]. *)
+
+val describe_violations : violations -> string
+(** One line for people, such as
+    ["at least 2 (the system log can drop denials, so this is a lower bound)"]
+    or ["0 relay failures (Linux records no other kind of denial)"]. *)
 
 type started
 
@@ -135,5 +170,7 @@ val collect : env:Eio_unix.Stdenv.base -> started -> violations
 (** After the agent exited: on macOS, the Seatbelt denials logged with the run's
     tag since it started, read with [log show] until the end marker is there and
     two reads a second apart agree (at most about 30 seconds, see
-    {!Bactrian_core.Sandbox_log.settle}); on Linux, the forwarder's relay
-    failures from [sandbox.log]. An unsandboxed run has none. *)
+    {!Bactrian_core.Sandbox_log.settle}), always with the gap that the log can
+    drop denials, and a second one when the reads had not settled by then; on
+    Linux, the forwarder's relay failures from [sandbox.log]. An unsandboxed run
+    gives {!unsandboxed_violations}. *)

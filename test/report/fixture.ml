@@ -123,6 +123,12 @@ let make ~index ~scenario ~variant ~repeat : R.run =
        else None);
     clock_unenforced =
       (if scenario = "search" && repeat <= 2 then Some "static-binary" else None);
+    sandbox_violations =
+      (if scenario = "search" && repeat = 2 then
+         Some
+           "at least 2 (the system log can drop denials, so this is a lower \
+            bound)"
+       else None);
   }
 
 let runs : R.run list =

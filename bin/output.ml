@@ -13,58 +13,40 @@ let exit_code : Run.outcome -> int = function
   | Not_run _ -> exit_not_run
   | Errored _ -> exit_internal
 
-let violations_json : Sandbox.violations -> (string * Yojson.Safe.t) list =
-  function
-  | Collected vs ->
-      [
-        ( "sandbox_violations",
-          `List
-            (List.map
-               (fun (v : Bactrian_core.Sandbox_log.violation) ->
-                 `Assoc
-                   [ ("kind", `String v.kind); ("detail", `String v.detail) ])
-               vs) );
-      ]
-  | Not_collected reason ->
-      [
-        ("sandbox_violations", `Null);
-        ("sandbox_violations_not_collected", `String reason);
-      ]
-
 let render_json (r : Run.result) =
   let f = r.findings in
   Yojson.Safe.to_string
     (`Assoc
-       ([
-          ("run_id", `String r.run_id);
-          ("run_dir", `String r.run_dir);
-          ( "outcome",
-            `Assoc
-              (("kind", `String (Run.outcome_kind r.outcome))
-              ::
-              (match Run.outcome_reason r.outcome with
-              | Some reason -> [ ("reason", `String reason) ]
-              | None -> [])) );
-          ( "divergences",
-            `List
-              (List.map
-                 (fun d -> Divergences.to_json (Divergences.of_matcher d))
-                 f.divergences) );
-          ( "findings",
-            `Assoc
-              [
-                ("exchanges", `Int f.exchanges);
-                ("transport_errors", `Int f.transport_errors);
-                ("usage_gaps", `Int f.usage_gaps);
-                ("refused_keys", `Int f.refused_keys);
-                ("cap_refusals", `Int (List.length f.cap_refusals));
-                ("errors", `List (List.map (fun e -> `String e) f.errors));
-              ] );
-          ("spend_usd", `Float r.spend);
-          ("sandbox", Sandbox.label_json r.sandbox);
-          ("clock", Bactrian_core.Clock_label.to_json r.clock);
-        ]
-       @ violations_json r.violations))
+       [
+         ("run_id", `String r.run_id);
+         ("run_dir", `String r.run_dir);
+         ( "outcome",
+           `Assoc
+             (("kind", `String (Run.outcome_kind r.outcome))
+             ::
+             (match Run.outcome_reason r.outcome with
+             | Some reason -> [ ("reason", `String reason) ]
+             | None -> [])) );
+         ( "divergences",
+           `List
+             (List.map
+                (fun d -> Divergences.to_json (Divergences.of_matcher d))
+                f.divergences) );
+         ( "findings",
+           `Assoc
+             [
+               ("exchanges", `Int f.exchanges);
+               ("transport_errors", `Int f.transport_errors);
+               ("usage_gaps", `Int f.usage_gaps);
+               ("refused_keys", `Int f.refused_keys);
+               ("cap_refusals", `Int (List.length f.cap_refusals));
+               ("errors", `List (List.map (fun e -> `String e) f.errors));
+             ] );
+         ("spend_usd", `Float r.spend);
+         ("sandbox", Sandbox.label_json r.sandbox);
+         ("clock", Bactrian_core.Clock_label.to_json r.clock);
+         ("sandbox_violations", Sandbox.violations_json r.violations);
+       ])
 
 let unsandboxed_line (l : Sandbox.label) =
   Printf.sprintf "warning: UNSANDBOXED (sandbox: %s%s)"
@@ -80,15 +62,20 @@ let render_text (r : Run.result) =
     | Some reason -> " (" ^ reason ^ ")"
     | None -> "");
   line "directory: %s" r.run_dir;
-  if not r.sandbox.applied then line "%s" (unsandboxed_line r.sandbox);
-  (match r.violations with
-  | Collected vs ->
-      List.iter
-        (fun (v : Bactrian_core.Sandbox_log.violation) ->
-          line "sandbox violation: %s %s" v.kind v.detail)
-        vs
-  | Not_collected reason ->
-      line "warning: sandbox violations not collected: %s" reason);
+  if not r.sandbox.applied then line "%s" (unsandboxed_line r.sandbox)
+  else begin
+    (match r.violations with
+    | Collected _ -> line "sandbox violations: %s"
+    | Not_collected _ -> line "warning: sandbox violations %s")
+      (Sandbox.describe_violations r.violations);
+    match r.violations with
+    | Collected { items; _ } ->
+        List.iter
+          (fun (v : Bactrian_core.Sandbox_log.violation) ->
+            line "sandbox violation: %s %s" v.kind v.detail)
+          items
+    | Not_collected _ -> ()
+  end;
   List.iter
     (fun d ->
       line "divergence: %s" (Divergences.describe (Divergences.of_matcher d)))

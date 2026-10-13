@@ -29,6 +29,7 @@ type run = {
   tokens : int option;
   unsandboxed : string option;
   clock_unenforced : string option;
+  sandbox_violations : string option;
 }
 
 let model_calls trace =
@@ -659,6 +660,7 @@ let run_json ~detail (r : run) : Yojson.Safe.t =
        ("reason", opt (fun s -> `String s) r.reason);
        ("unsandboxed", opt (fun s -> `String s) r.unsandboxed);
        ("clock_unenforced", opt (fun s -> `String s) r.clock_unenforced);
+       ("sandbox_violations", opt (fun s -> `String s) r.sandbox_violations);
      ]
     @
     if detail then

@@ -45,6 +45,11 @@ type run = {
       (** Why the run's clock was contract-only, from its [meta.json] (a
           {!Clock_label.reason_name}). [None] when it was enforced or the run
           left no [meta.json]. *)
+  sandbox_violations : string option;
+      (** What the sandbox recorded denying, in one line that says how far it
+          can be trusted ("at least 2 (the system log can drop denials, ...)"),
+          from its [meta.json]. [None] for a run outside the sandbox, or one
+          recorded before the coverage was. *)
 }
 
 val latency_ms : Trace.entry list -> float option
@@ -200,9 +205,10 @@ val to_json : t -> Yojson.Safe.t
     floats shortest-round-trip, [null] for NaN and infinities. Carries
     ["schema_version"]. *)
 
-(** Each run carries ["unsandboxed"] and ["clock_unenforced"] (the reason, or
-    [null]) and the header ["unsandboxed_runs"] and ["clock_unenforced_runs"],
-    the number of runs outside the sandbox and with a contract-only clock. *)
+(** Each run carries ["unsandboxed"], ["clock_unenforced"] and
+    ["sandbox_violations"] (the text, or [null]) and the header
+    ["unsandboxed_runs"] and ["clock_unenforced_runs"], the number of runs
+    outside the sandbox and with a contract-only clock. *)
 
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution

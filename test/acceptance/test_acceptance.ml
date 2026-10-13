@@ -265,8 +265,8 @@ let acceptance agent () =
     (List.length replayed.findings.divergences);
   Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
   (match replayed.violations with
-  | Collected [] -> ()
-  | Collected (v :: _) ->
+  | Collected { items = []; _ } -> ()
+  | Collected { items = v :: _; _ } ->
       Alcotest.failf "unexpected sandbox violation: %s %s" v.kind v.detail
   | Not_collected m -> Alcotest.failf "violations not collected: %s" m);
   (* (c) changed system prompt *)
@@ -594,7 +594,8 @@ let escapes agent () =
     (List.filter (fun f -> contains (read f) real_key) (files_under dir));
   match r.violations with
   | Not_collected m -> Alcotest.failf "violations not collected: %s" m
-  | Collected vs when macos ->
+  | Collected { items = vs; coverage = Seatbelt_log; gaps } ->
+      Alcotest.(check bool) "labelled a lower bound" true (gaps <> []);
       (* Seatbelt logs each denial, with the remote host shown as [*]. *)
       List.iter
         (fun (v : Sandbox_log.violation) ->
@@ -624,7 +625,7 @@ let escapes agent () =
            (List.map
               (fun j -> Yojson.Safe.Util.(to_string (member "type" j)))
               (trace r)))
-  | Collected vs ->
+  | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
       (* Linux reports only relay failures, and the model call makes none. The
          other denials show only as the agent's own errors, checked above. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)

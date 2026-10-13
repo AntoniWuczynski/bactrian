@@ -198,7 +198,8 @@ let test_escapes_fail =
     (Sys.file_exists (Filename.concat secret_dir "new"));
   match r.violations with
   | Not_collected m -> Alcotest.failf "violations not collected: %s" m
-  | Collected vs when macos ->
+  | Collected { items = vs; coverage = Seatbelt_log; gaps } ->
+      Alcotest.(check bool) "labelled a lower bound" true (gaps <> []);
       List.iter
         (fun (v : Sandbox_log.violation) ->
           Printf.printf "violation: %s %s\n" v.kind v.detail)
@@ -222,7 +223,7 @@ let test_escapes_fail =
       Alcotest.(check bool)
         "in the trace" true
         (List.mem "sandbox_violation" (trace_types r))
-  | Collected vs ->
+  | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
       (* Linux reports only relay failures, and these attempts make none. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 

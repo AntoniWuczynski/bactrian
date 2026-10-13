@@ -138,6 +138,11 @@ let clock_warning (d : D.t) =
   | None -> []
   | Some text -> [ para ~cls:[ "warning" ] text ]
 
+let violations_note (d : D.t) =
+  match F.violations_note d with
+  | None -> []
+  | Some text -> [ para ~cls:[ "note" ] text ]
+
 let missing_table (d : D.t) =
   table ~caption:"Missing data per arm"
     ~head:[ "Variant"; "Runs"; "Errored"; "Not run or unfinished" ]
@@ -654,7 +659,7 @@ let page (d : D.t) =
        [
          H.main
            ([ header d ]
-           @ unsandboxed_warning d @ clock_warning d
+           @ unsandboxed_warning d @ clock_warning d @ violations_note d
            @ [
                section "verdicts" "Verdicts"
                  (verdict_table d

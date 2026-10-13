@@ -44,6 +44,12 @@ val trace_line : Trace.entry -> string
 val exit_meaning : int -> string
 (** What a gate exit status means. *)
 
+val violations_note : Report_data.t -> string option
+(** What the sandbox recorded denying, grouped by each run's
+    {!Report_data.run.sandbox_violations} line with the number of runs, so the
+    reader sees which counts are lower bounds and which cover relay failures
+    only. [None] when no run was sandboxed. *)
+
 val clock_warning : Report_data.t -> string option
 (** Names the runs whose clock was only a contract (design §5 step 2), with the
     reasons, and says that an agent reading the system clock saw real time in

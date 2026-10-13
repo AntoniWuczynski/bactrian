@@ -384,27 +384,6 @@ let decide_outcome ~replay (findings : P.findings) failure =
 
 (* Files *)
 
-let violations_json : Sandbox.violations -> Yojson.Safe.t = function
-  | Collected vs ->
-      `Assoc
-        [
-          ("collected", `Bool true);
-          ( "items",
-            `List
-              (List.map
-                 (fun (v : Sandbox_log.violation) ->
-                   `Assoc
-                     [ ("kind", `String v.kind); ("detail", `String v.detail) ])
-                 vs) );
-        ]
-  | Not_collected reason ->
-      `Assoc
-        [
-          ("collected", `Bool false);
-          ("reason", `String reason);
-          ("items", `List []);
-        ]
-
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
     ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock =
   let count l = `Int (List.length l) in
@@ -417,7 +396,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
        ("sim_now", `String sim_now);
        ("clock", Clock_label.to_json clock);
        ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
-       ("sandbox_violations", violations_json violations);
+       ("sandbox_violations", Sandbox.violations_json violations);
        ("outcome", `String (outcome_kind outcome));
        ( "reason",
          match outcome_reason outcome with Some r -> `String r | None -> `Null
@@ -715,13 +694,13 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               let collected = Sandbox.collect ~env sandbox_started in
               violations := Some collected;
               (match collected with
-              | Collected vs ->
+              | Collected { items; _ } ->
                   List.iter
                     (fun (v : Sandbox_log.violation) ->
                       add
                         (Trace_builder.Got_violation
                            { t_ms = t_ms (); kind = v.kind; detail = v.detail }))
-                    vs
+                    items
               | Not_collected _ -> ());
               Ok
                 (match session with
@@ -791,7 +770,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       match (!violations, label.applied) with
       | Some v, _ -> v
       | None, true -> Not_collected "the run stopped before its agent did"
-      | None, false -> Collected []
+      | None, false -> Sandbox.unsandboxed_violations
     in
     (match Eio.Path.rmtree ~missing_ok:true temp_dir with
     | () -> ()

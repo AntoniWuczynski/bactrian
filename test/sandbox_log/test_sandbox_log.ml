@@ -85,20 +85,25 @@ let settle ?(deadline = 30.) reads =
       ~now:(fun () -> !clock)
       ~deadline
   in
-  ( Option.map (List.map (fun (v : L.violation) -> v.detail)) result,
+  let details = List.map (fun (v : L.violation) -> v.detail) in
+  ( (match result with
+    | Settled vs -> Some ("settled", details vs)
+    | Unsettled vs -> Some ("unsettled", details vs)
+    | No_marker -> None),
     !calls,
     !clock )
 
 let test_settle () =
   let check name expected (got, calls, clock) =
-    Alcotest.(check (triple (option (list string)) int (float 0.)))
+    Alcotest.(
+      check (triple (option (pair string (list string))) int (float 0.)))
       name expected (got, calls, clock)
   in
   check "stable at once: the marker read and one more"
-    (Some [ "/a by cat(3)" ], 2, 1.)
+    (Some ("settled", [ "/a by cat(3)" ]), 2, 1.)
     (settle [ ([ "/a" ], true); ([ "/a" ], true) ]);
   check "polls until the marker, then waits for a late denial"
-    (Some [ "/a by cat(3)"; "/b by cat(3)" ], 4, 2.5)
+    (Some ("settled", [ "/a by cat(3)"; "/b by cat(3)" ]), 4, 2.5)
     (settle
        [
          ([], false);
@@ -109,7 +114,7 @@ let test_settle () =
   check "no marker by the deadline" (None, 3, 1.)
     (settle ~deadline:1. [ ([], false); ([], false); ([], false) ]);
   check "still changing at the deadline: the last read"
-    (Some [ "/a by cat(3)"; "/b by cat(3)" ], 2, 1.)
+    (Some ("unsettled", [ "/a by cat(3)"; "/b by cat(3)" ]), 2, 1.)
     (settle ~deadline:1.5 [ ([ "/a" ], true); ([ "/a"; "/b" ], true) ])
 
 let test_relay () =

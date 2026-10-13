@@ -127,6 +127,21 @@ module Clock_meta = struct
         Result.map (fun l -> Label l) (label_of_yojson j)
 end
 
+(* What the sandbox denied (design §5.3). Runs from before the coverage was
+   recorded have no [coverage] and get no summary. [complete] is implied by
+   [reason], which joins the gaps. *)
+module Violations_meta = struct
+  type item = { kind : string; detail : string } [@@deriving of_yojson]
+
+  type t = {
+    collected : bool;
+    coverage : string option; [@default None]
+    reason : string option; [@default None]
+    items : item list; [@default []]
+  }
+  [@@deriving of_yojson { strict = false }]
+end
+
 (* What a run wrote about itself: cost from the ledger's attribution, the
    latency and token totals of its model calls, and its sandbox and clock
    labels. A run
@@ -139,6 +154,7 @@ type meta = {
   tokens : int option; [@default None]
   sandbox : sandbox option; [@default None]
   clock : Clock_meta.t option; [@default None]
+  sandbox_violations : Violations_meta.t option; [@default None]
 }
 [@@deriving of_yojson { strict = false }]
 
@@ -157,6 +173,35 @@ let clock_unenforced (m : meta) =
       Some "recorded before bactrian enforced the clock"
   | Some (Label { mode; reason }) -> Some (Option.value reason ~default:mode)
 
+let sandbox_violations (m : meta) =
+  match (m.sandbox, m.sandbox_violations) with
+  | Some (Label { applied = true; _ }), Some v ->
+      let violations : Sandbox.violations option =
+        match
+          (v.collected, Option.bind v.coverage Sandbox.coverage_of_name)
+        with
+        | false, _ ->
+            Some (Not_collected (Option.value v.reason ~default:"no reason"))
+        | true, Some coverage ->
+            Some
+              (Collected
+                 {
+                   items =
+                     List.map
+                       (fun ({ kind; detail } : Violations_meta.item) ->
+                         ({ kind; detail } : Sandbox_log.violation))
+                       v.items;
+                   coverage;
+                   gaps = Option.to_list v.reason;
+                 })
+        | true, None -> None
+      in
+      Option.map Sandbox.describe_violations violations
+  | Some (Label { applied = true; _ }), None
+  | Some (Label { applied = false; _ } | Before_sandbox), _
+  | None, _ ->
+      None
+
 let read_meta dir =
   match read_opt dir "meta.json" with
   | Error e -> Error e
@@ -168,6 +213,7 @@ let read_meta dir =
           tokens = None;
           sandbox = None;
           clock = None;
+          sandbox_violations = None;
         }
   | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
@@ -228,6 +274,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
       tokens = None;
       unsandboxed = None;
       clock_unenforced = None;
+      sandbox_violations = None;
     }
   in
   match run_id with
@@ -250,6 +297,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
           tokens = meta.tokens;
           unsandboxed = unsandboxed meta;
           clock_unenforced = clock_unenforced meta;
+          sandbox_violations = sandbox_violations meta;
         }
 
 (* Loading *)

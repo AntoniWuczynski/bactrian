@@ -432,9 +432,74 @@ type session = {
   fds : (int * Eio_unix.Fd.t) list;
 }
 
+type coverage = Seatbelt_log | Relay_failures_only
+
+let coverage_name = function
+  | Seatbelt_log -> "seatbelt-log"
+  | Relay_failures_only -> "relay-failures-only"
+
+let coverage_of_name = function
+  | "seatbelt-log" -> Some Seatbelt_log
+  | "relay-failures-only" -> Some Relay_failures_only
+  | _ -> None
+
 type violations =
-  | Collected of Sandbox_log.violation list
+  | Collected of {
+      items : Sandbox_log.violation list;
+      coverage : coverage;
+      gaps : string list;
+    }
   | Not_collected of string
+
+let unsandboxed_violations = Not_collected "the run was not sandboxed"
+let log_drops = "the system log can drop denials, so this is a lower bound"
+
+let violations_json = function
+  | Collected { items; coverage; gaps } ->
+      `Assoc
+        ([
+           ("collected", `Bool true);
+           ("coverage", `String (coverage_name coverage));
+           ("complete", `Bool (List.is_empty gaps));
+         ]
+        @ (match gaps with
+          | [] -> []
+          | _ :: _ -> [ ("reason", `String (String.concat "; " gaps)) ])
+        @ [
+            ( "items",
+              `List
+                (List.map
+                   (fun (v : Sandbox_log.violation) ->
+                     `Assoc
+                       [
+                         ("kind", `String v.kind); ("detail", `String v.detail);
+                       ])
+                   items) );
+          ])
+  | Not_collected reason ->
+      `Assoc
+        [
+          ("collected", `Bool false);
+          ("reason", `String reason);
+          ("items", `List []);
+        ]
+
+let plural n one = Printf.sprintf "%d %s%s" n one (if n = 1 then "" else "s")
+
+let describe_violations = function
+  | Not_collected reason -> "not collected: " ^ reason
+  | Collected { items; coverage; gaps } ->
+      let n = List.length items in
+      let count, scope =
+        match coverage with
+        | Seatbelt_log ->
+            ( (if n = 0 then "none logged" else "at least " ^ string_of_int n),
+              [] )
+        | Relay_failures_only ->
+            ( plural n "relay failure",
+              [ "Linux records no other kind of denial" ] )
+      in
+      Printf.sprintf "%s (%s)" count (String.concat "; " (scope @ gaps))
 
 type started =
   | Nothing
@@ -584,14 +649,25 @@ let seatbelt_violations ~env ~tag ~since ~marker =
       let now () = Eio.Time.now clock in
       (* The deadline is checked between reads, and the outer bound only stops
          a [log show] that hangs. *)
+      let collected ?(gaps = []) items =
+        Collected { items; coverage = Seatbelt_log; gaps = log_drops :: gaps }
+      in
       match
         Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
             Ok
               (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
                  ~deadline:(now () +. log_timeout)))
       with
-      | Ok (Some vs) -> Collected vs
-      | Ok None ->
+      | Ok (Settled vs) -> collected vs
+      | Ok (Unsettled vs) ->
+          collected vs
+            ~gaps:
+              [
+                Printf.sprintf
+                  "the system log was still changing after %.0f seconds"
+                  log_timeout;
+              ]
+      | Ok No_marker ->
           Not_collected
             (Printf.sprintf
                "the system log did not show the run's end marker within %.0f \
@@ -621,11 +697,12 @@ let relay_violations path =
             Ok (v :: rest))
           lines (Ok [])
       with
-      | Ok vs -> Collected vs
+      | Ok items ->
+          Collected { items; coverage = Relay_failures_only; gaps = [] }
       | Error m -> Not_collected ("sandbox.log: " ^ m))
 
 let collect ~env = function
-  | Nothing -> Collected []
+  | Nothing -> unsandboxed_violations
   | Seatbelt_log { tag; since; marker } ->
       seatbelt_violations ~env ~tag ~since ~marker
   | Relay_log path -> relay_violations path

@@ -128,6 +128,21 @@ let clock_warning (d : Report_data.t) =
                come from the clock."
             else ""))
 
+let violations_note (d : Report_data.t) =
+  match
+    List.filter_map (fun (r : Report_data.run) -> r.sandbox_violations) d.order
+  with
+  | [] -> None
+  | summaries ->
+      let counted =
+        List.map
+          (fun s ->
+            let n = List.length (List.filter (String.equal s) summaries) in
+            Printf.sprintf "%d run%s: %s" n (if n = 1 then "" else "s") s)
+          (List.sort_uniq String.compare summaries)
+      in
+      Some ("Sandbox violations. " ^ String.concat ". " counted ^ ".")
+
 let value_estimand_text =
   "Cost and tokens: the ratio of the candidate's mean per run to the \
    baseline's, each mean weighting every scenario equally. Latency: the \

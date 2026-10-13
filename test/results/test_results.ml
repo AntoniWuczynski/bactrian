@@ -234,6 +234,8 @@ let test_reads_what_the_run_wrote =
   write ctx (path "divergences.json")
     {|{"version": 1, "divergences": [{"kind": "missing_request", "seq": 3, "similarity": 0.8, "changes": [{"path": "messages[0].content", "change": "changed"}]}]}|};
   let again = List.hd (load ctx).runs in
+  Alcotest.(check (option string))
+    "no violations line without a sandbox" None again.sandbox_violations;
   Alcotest.(check (option (float 0.))) "cost" (Some 123.5) again.cost;
   Alcotest.(check (option (float 0.))) "latency" (Some 42.) again.latency_ms;
   Alcotest.(check (option int)) "tokens" (Some 7) again.tokens;
@@ -247,6 +249,28 @@ let test_reads_what_the_run_wrote =
                String.equal c.path "messages[0].content")
              d.changes)
   | _ -> Alcotest.fail "one divergence expected");
+  let violations json =
+    write ctx (path "meta.json")
+      ({|{"sandbox": {"mode": "strict", "applied": true}, "sandbox_violations": |}
+     ^ json ^ "}");
+    (List.hd (load ctx).runs).sandbox_violations
+  in
+  Alcotest.(check (option string))
+    "macOS: a lower bound" (Some "at least 1 (the system log can drop denials)")
+    (violations
+       {|{"collected": true, "coverage": "seatbelt-log", "complete": false, "reason": "the system log can drop denials", "items": [{"kind": "network-outbound", "detail": "x"}]}|});
+  Alcotest.(check (option string))
+    "Linux: relay failures only"
+    (Some "0 relay failures (Linux records no other kind of denial)")
+    (violations
+       {|{"collected": true, "coverage": "relay-failures-only", "complete": true, "items": []}|});
+  Alcotest.(check (option string))
+    "not collected" (Some "not collected: log show failed")
+    (violations
+       {|{"collected": false, "reason": "log show failed", "items": []}|});
+  Alcotest.(check (option string))
+    "recorded before the coverage" None
+    (violations {|{"collected": true, "items": []}|});
   write ctx (path "divergences.json") "{";
   match Results.load ~fs:ctx.fs ~root:ctx.root ~experiment_id:ctx.id with
   | Error (Results.Bad_run { file; _ }) ->
