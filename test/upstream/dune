@@ -1,0 +1,6 @@
+(test
+ (name test_upstream)
+ (package bactrian)
+ (libraries bactrian.runtime eio_main cohttp-eio uri alcotest)
+ (flags
+  (:standard -w -70)))
