@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (public_name bactrian)
+ (package bactrian)
+ (libraries bactrian.core cmdliner))

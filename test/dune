@@ -1,0 +1,10 @@
+(test
+ (name test_version)
+ (package bactrian)
+ (libraries bactrian.core alcotest)
+ (flags
+  (:standard -w -70)))
+
+(cram
+ (package bactrian)
+ (deps %{bin:bactrian}))

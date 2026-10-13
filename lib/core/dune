@@ -1,0 +1,3 @@
+(library
+ (name bactrian_core)
+ (public_name bactrian.core))

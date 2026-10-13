@@ -1,0 +1,61 @@
+opam-version: "2.0"
+name: "bactrian"
+version: "dev"
+synopsis: "Record, replay and statistically compare AI agent runs"
+description:
+  "bactrian runs AI agents written in any language as black-box subprocesses, records their model, tool and network traffic, replays it deterministically, and compares agent versions with confidence intervals."
+maintainer: "Antoni Wuczynski <antoni.wuczynski@gmail.com>"
+authors: "Antoni Wuczynski"
+license: "Apache-2.0"
+homepage: "https://github.com/AntoniWuczynski/bactrian"
+bug-reports: "https://github.com/AntoniWuczynski/bactrian/issues"
+depends: [
+  "alcotest" {= "1.9.1" & with-test}
+  "astring" {= "0.8.5" & with-test}
+  "base-bigarray" {= "base"}
+  "base-domains" {= "base"}
+  "base-effects" {= "base"}
+  "base-nnp" {= "base"}
+  "base-threads" {= "base"}
+  "base-unix" {= "base"}
+  "camlp-streams" {= "5.0.1" & with-doc}
+  "cmdliner" {= "2.1.1"}
+  "compiler-cloning" {= "enabled"}
+  "cppo" {= "1.8.0" & with-doc}
+  "crunch" {= "4.1.0" & with-doc}
+  "dune" {= "3.24.2"}
+  "fmt" {= "0.11.0" & with-test}
+  "fpath" {= "0.7.3" & with-doc}
+  "ocaml" {= "5.5.1"}
+  "ocaml-base-compiler" {= "5.5.1"}
+  "ocaml-compiler" {= "5.5.1"}
+  "ocaml-options-vanilla" {= "1"}
+  "ocaml-syntax-shims" {= "1.0.0" & with-test}
+  "ocamlbuild" {= "0.16.1" & with-test}
+  "ocamlfind" {= "1.9.9~preview" & with-test}
+  "odoc" {= "3.2.1" & with-doc}
+  "odoc-parser" {= "3.2.1" & with-doc}
+  "ptime" {= "1.2.0" & with-doc}
+  "re" {= "1.14.0" & with-test}
+  "seq" {= "base" & with-doc}
+  "stdlib-shims" {= "0.3.0" & with-test}
+  "topkg" {= "1.1.1" & with-test}
+  "tyxml" {= "5.0.0" & with-doc}
+  "uutf" {= "1.0.4" & with-test}
+]
+build: [
+  ["dune" "subst"] {dev}
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
+dev-repo: "git+https://github.com/AntoniWuczynski/bactrian.git"
+x-maintenance-intent: ["(latest)"]
