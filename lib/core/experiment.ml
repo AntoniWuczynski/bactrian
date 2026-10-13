@@ -533,7 +533,8 @@ let unenforced t =
       | Command _ -> []);
       (if List.mem `Egress t.intercept then
          [
-           "egress: the agent's network access is neither blocked nor recorded";
+           "egress: the agent's own network traffic is not recorded, and is \
+            blocked only in a sandboxed run";
          ]
        else []);
       (match t.mcp with
