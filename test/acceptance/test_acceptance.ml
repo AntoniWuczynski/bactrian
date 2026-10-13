@@ -137,6 +137,8 @@ let acceptance agent () =
         timezone = "UTC";
         replay;
         env_passthrough = [ prompt_variable ];
+        variant_env = [];
+        checks = None;
         turn_timeout = 60.;
         total_timeout = 90.;
       }

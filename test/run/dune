@@ -13,6 +13,7 @@
   bactrian.core
   bactrian.runtime
   fake_upstream
+  weather_agent
   eio_main
   mirage-crypto-rng.unix
   re

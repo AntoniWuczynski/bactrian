@@ -6,14 +6,24 @@ open Bactrian_core
 val providers : (Model_proxy.provider * string) list
 (** Every provider with its name, which is also its ledger name. *)
 
+val keys_from_environment : unit -> (Model_proxy.provider * string) list
+(** The non-empty real provider keys of bactrian's own environment. *)
+
+val fresh_id : random_bytes:(int -> string) -> float -> string
+(** [YYYYMMDDTHHMMSSZ-xxxxxxxx] for the Unix time given, with 4 random bytes as
+    hex. Used for run and experiment IDs. *)
+
 val key_variable : Model_proxy.provider -> string
 (** The environment variable holding bactrian's real key for the provider, and
     the one that carries the placeholder in the agent's environment. *)
 
 type outcome =
-  | Passed  (** M4 has no assertions yet: a run that completes is Passed. *)
+  | Passed
+      (** The run completed and, when it has {!type-checks}, every assertion and
+          checker passed. *)
   | Failed of string
-      (** Agent failure: exit, timeout, protocol violation, agent error. *)
+      (** Agent failure (exit, timeout, protocol violation, agent error), or the
+          failing assertions and checkers, one per [;]-separated item. *)
   | Diverged
       (** Replay only: at least one refusing divergence (an [Unconsumed]
           recorded exchange counts; a [Reordered] one does not when
@@ -35,6 +45,14 @@ type replay = {
   timing : Model_proxy.timing;
 }
 
+type checks = {
+  assertions : Assertion.t list;
+  checkers : string list list;
+  checks_cwd : string;  (** Where the checker commands run. *)
+  checker_timeout : float;  (** Per checker, seconds. *)
+}
+(** A scenario's assertions and checkers (spec §6). *)
+
 type config = {
   agent : string list;  (** argv *)
   cwd : string;
@@ -48,6 +66,13 @@ type config = {
   timezone : string;
   replay : replay option;  (** None = record. *)
   env_passthrough : string list;
+  variant_env : (string * string) list;
+      (** The variant's variables, given to the agent after the passthrough
+          ones. They cannot replace bactrian's own variables. *)
+  checks : checks option;
+      (** Evaluated over the trace of a run that otherwise passed; the result is
+          written to [verdicts.json] (atomically) in the run directory. [None]
+          for record and replay from the command line. *)
   turn_timeout : float;
   total_timeout : float;  (** Longest the whole run may take. *)
 }
@@ -63,6 +88,7 @@ type result = {
 
 val execute :
   ?random_bytes:(int -> string) ->
+  ?on_start:(string -> unit) ->
   ?keys:(Model_proxy.provider * string) list ->
   ?upstream:(Model_proxy.provider -> Uri.t) ->
   ?connector:Upstream.connector ->
@@ -81,6 +107,10 @@ val execute :
 
     [Error] means the run could not be set up (unreadable recording, store
     failure): no agent was started.
+
+    [on_start] is called with the run ID as soon as it is chosen, before
+    anything can fail or be cancelled, so the caller knows which run directory a
+    cancelled run left behind.
 
     [random_bytes] makes the run ID suffix and the run token (16 bytes, 32 hex
     digits); the default is [Mirage_crypto_rng.generate], so the caller must

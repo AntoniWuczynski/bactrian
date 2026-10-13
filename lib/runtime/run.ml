@@ -27,6 +27,13 @@ type replay = {
   timing : P.timing;
 }
 
+type checks = {
+  assertions : Assertion.t list;
+  checkers : string list list;
+  checks_cwd : string;
+  checker_timeout : float;
+}
+
 type config = {
   agent : string list;
   cwd : string;
@@ -37,6 +44,8 @@ type config = {
   timezone : string;
   replay : replay option;
   env_passthrough : string list;
+  variant_env : (string * string) list;
+  checks : checks option;
   turn_timeout : float;
   total_timeout : float;
 }
@@ -89,7 +98,7 @@ let rfc3339 t =
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
-let run_id_of ~random_bytes now =
+let fresh_id ~random_bytes now =
   let tm = Unix.gmtime now in
   Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ-%s" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
@@ -196,7 +205,7 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~sim_now =
   List.fold_left
     (fun acc (k, v) -> (k, v) :: List.remove_assoc k acc)
     []
-    (base_env @ passthrough @ ours)
+    (base_env @ passthrough @ config.variant_env @ ours)
 
 (* The conversation *)
 
@@ -327,13 +336,14 @@ let kill_grace = 5.
 
 (* One run *)
 
-let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
-    ?(upstream = P.default_upstream) ?(connector = Upstream.plain) ~env ~proxy
-    ~store ~ledger config =
+let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
+    ?(on_start = fun (_ : string) -> ()) ?keys ?(upstream = P.default_upstream)
+    ?(connector = Upstream.plain) ~env ~proxy ~store ~ledger config =
   let clock = Eio.Stdenv.clock env in
   let now = Eio.Time.now clock in
-  let run_id = run_id_of ~random_bytes now in
+  let run_id = fresh_id ~random_bytes now in
   let token = hex (random_bytes 16) in
+  on_start run_id;
   let keys = match keys with Some k -> k | None -> keys_from_environment () in
   let* run_dir =
     Result.map_error store_error (Store.ensure_run_dir store ~run_id)
@@ -519,8 +529,32 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n) ?keys
           resolve = (fun p -> Result.to_option (Store.read_payload store p));
         }
     in
+    let outcome, verdicts =
+      match (outcome, config.checks) with
+      | Passed, Some c -> (
+          let items =
+            Checks.evaluate
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              ~clock ~timeout:c.checker_timeout
+              ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
+              ~date:(String.sub (rfc3339 now) 0 10)
+              ~assertions:c.assertions ~checkers:c.checkers entries
+          in
+          match Checks.problems items with
+          | [] -> (Passed, Some items)
+          | problems -> (Failed (String.concat "; " problems), Some items))
+      | (Passed | Failed _ | Diverged | Errored _ | Not_run _), (Some _ | None)
+        ->
+          (outcome, None)
+    in
     match
       write_trace run_dir entries;
+      Option.iter
+        (fun items ->
+          Store.write_atomic
+            Eio.Path.(run_dir / "verdicts.json")
+            (Yojson.Safe.pretty_to_string (Checks.to_json items) ^ "\n"))
+        verdicts;
       Store.write_atomic
         Eio.Path.(run_dir / "meta.json")
         (Yojson.Safe.pretty_to_string

@@ -8,7 +8,10 @@
   unix
   yaml
   yojson
+  ppx_deriving_yojson.runtime
   cohttp-eio
   uri
   mirage-crypto-rng
-  mirage-crypto-rng.unix))
+  mirage-crypto-rng.unix)
+ (preprocess
+  (pps ppx_deriving_yojson)))
