@@ -107,8 +107,8 @@ export BACTRIAN_CAP_OPENAI=1           # for record; an experiment uses caps_usd
 bactrian run experiment.yaml
 ```
 
-- The value must be an absolute `http` or `https` URL with a host, an optional port and an optional path prefix, for a gateway that mounts the provider under a path. User information, a query and a fragment are refused with exit 64, and the message names the variable.
-- bactrian still requires the provider's key variable when the provider has a spend cap above 0, and the cap itself, whatever the upstream. A server that needs no key is given any placeholder value, as Ollama's documentation does. The key is sent to the upstream, so use a placeholder, or a real key only over HTTPS or to your own machine: `bactrian doctor` warns about plain `http` to another machine.
+- The value must be an absolute `http` or `https` URL with a host, an optional port and an optional path prefix, for a gateway that mounts the provider under a path. User information, a query and a fragment are refused with exit 64, and the message names the variable. The path prefix is shown by `doctor` and recorded in `meta.json` as written, so do not put a key in it.
+- bactrian still requires the provider's key variable when the provider has a spend cap above 0, and the cap itself, whatever the upstream. A server that needs no key is given any placeholder value, as Ollama's documentation does. The key is sent to the upstream, so use a placeholder, or a real key only over HTTPS or to your own machine: `record`, `replay`, `run` and `bactrian doctor` warn about plain `http` to another machine (anything but `localhost`, 127.0.0.0/8 and `::1`).
 - The "no TLS support" refusal (exit 69) applies only when a provider the run calls has an `https` upstream.
 - A model with no price is refused, not treated as free: the agent gets a 402, and the run is `errored` with "no price for model llama3.2". Give the model a price in the experiment's price file, with zero rates for a local model. `record` and `replay` use the built-in prices only, so use an experiment for a local model.
 

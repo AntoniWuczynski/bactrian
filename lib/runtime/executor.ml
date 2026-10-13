@@ -186,11 +186,7 @@ let read_manifest path =
 
 (* Preflight *)
 
-let funded caps =
-  List.filter
-    (fun (_, name) ->
-      match List.assoc_opt name caps with Some usd -> usd > 0. | None -> false)
-    Run.providers
+let funded = Live_preflight.funded
 
 let no_tls what =
   Environment
@@ -207,33 +203,20 @@ let agent_preflight ~connector : Run.agent -> (unit, error) result = function
         Error (no_tls ("the agent at " ^ url))
       else Ok ()
 
-let preflight ~caps ~keys ~upstream ~connector =
-  match funded caps with
-  | [] ->
+let preflight ~caps ~keys ~upstream ~connector ~warn =
+  match
+    Live_preflight.problem ~caps
+      ~has_key:(fun p -> List.mem_assoc p keys)
+      ~upstream ~tls_available:(Option.is_some connector)
+  with
+  | Some problem ->
       Error
         (Environment
-           "no provider has a spend cap above 0: set caps_usd in the experiment")
-  | funded -> (
-      match
-        List.find_opt
-          (fun (p, _) -> Option.is_none (List.assoc_opt p keys))
-          funded
-      with
-      | Some (p, name) ->
-          Error
-            (Environment
-               (Printf.sprintf "%s has a spend cap but %s is not set" name
-                  (Run.key_variable p)))
-      | None -> (
-          match
-            List.filter (fun (p, _) -> Upstream.is_https (upstream p)) funded
-          with
-          | _ :: _ as https when Option.is_none connector ->
-              Error
-                (no_tls
-                   (Printf.sprintf "providers (%s)"
-                      (String.concat ", " (List.map snd https))))
-          | _ :: _ | [] -> Ok ()))
+           (Live_preflight.describe ~set_caps:"caps_usd in the experiment"
+              problem))
+  | None ->
+      List.iter warn (Live_preflight.cleartext caps upstream);
+      Ok ()
 
 (* Loading *)
 
@@ -636,7 +619,9 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume l planned
   in
   let* () = agent_preflight ~connector l.agent in
-  let* () = preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector in
+  let* () =
+    preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector ~warn
+  in
   let in_dir path =
     if Filename.is_relative path then Filename.concat l.dir path else path
   in

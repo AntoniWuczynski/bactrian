@@ -85,46 +85,18 @@ let read_caps () =
 (* A live call needs a spend cap above zero, the key behind it and, for an
    https upstream, TLS. *)
 let live_problem ~upstream caps =
-  let funded =
-    List.filter
-      (fun (_, name) ->
-        match List.assoc_opt name caps with
-        | Some usd -> usd > 0.
-        | None -> false)
-      Run.providers
-  in
-  match funded with
-  | [] ->
-      Some
-        (Printf.sprintf
-           "no provider has a spend cap above 0: set %s (USD) for the \
-            providers this run calls"
-           (String.concat ", "
-              (List.map (fun (_, n) -> cap_variable n) Run.providers)))
-  | _ -> (
-      match
-        List.find_opt
-          (fun (p, _) ->
-            match Sys.getenv_opt (Run.key_variable p) with
-            | None | Some "" -> true
-            | Some _ -> false)
-          funded
-      with
-      | Some (p, name) ->
-          Some
-            (Printf.sprintf "%s has a spend cap but %s is not set" name
-               (Run.key_variable p))
-      | None -> (
-          match
-            List.filter (fun (p, _) -> Upstream.is_https (upstream p)) funded
-          with
-          | _ :: _ as https when not Features.tls_available ->
-              Some
-                (Printf.sprintf
-                   "this build has no TLS support (bactrian.tls), so it cannot \
-                    call providers (%s) over HTTPS"
-                   (String.concat ", " (List.map snd https)))
-          | _ :: _ | [] -> None))
+  Option.map
+    (Live_preflight.describe
+       ~set_caps:
+         (Printf.sprintf "%s (USD) for the providers this run calls"
+            (String.concat ", "
+               (List.map (fun (_, n) -> cap_variable n) Run.providers))))
+    (Live_preflight.problem ~caps
+       ~has_key:(fun p ->
+         match Sys.getenv_opt (Run.key_variable p) with
+         | None | Some "" -> false
+         | Some _ -> true)
+       ~upstream ~tls_available:Features.tls_available)
 
 let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   let warn w = on_progress (Progress.Warning w) in
@@ -134,6 +106,7 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
       match if live then live_problem ~upstream caps else None with
       | Some m -> Error (Command_error.Environment m)
       | None -> (
+          if live then List.iter warn (Live_preflight.cleartext caps upstream);
           Mirage_crypto_rng_unix.use_default ();
           Eio.Switch.run @@ fun sw ->
           let root = Eio.Path.(Eio.Stdenv.cwd env / ".bactrian") in

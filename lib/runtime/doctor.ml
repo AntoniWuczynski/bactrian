@@ -53,7 +53,7 @@ let target ~dir (e : Experiment.t) =
     dir;
     sandbox = e.sandbox;
     faketime = e.faketime;
-    funded = Executor.funded e.caps_usd;
+    funded = Live_preflight.funded e.caps_usd;
   }
 
 let check name status message = { name; status; message }
@@ -84,20 +84,12 @@ let key_checks ~keys ~funded =
 
 (* Upstream overrides *)
 
-let on_this_machine uri =
-  match Uri.host uri with
-  | Some host ->
-      String.equal host "localhost"
-      || String.equal host "::1"
-      || String.starts_with ~prefix:"127." host
-  | None -> false
-
 let upstream_checks ~upstream =
   List.map
     (fun (name, url) ->
       let shown = Uri.to_string url in
       let check_name = "upstream-" ^ name in
-      if Upstream.is_https url || on_this_machine url then
+      if Upstream.is_https url || Live_preflight.is_loopback url then
         check check_name Pass shown
       else
         check check_name Warn

@@ -69,16 +69,29 @@ let check_authority authority =
   in
   let* host, port = host_and_port in
   let literal = String.starts_with ~prefix:"[" authority in
+  (* Each label of a name: not empty, and no hyphen at either end. *)
+  let label l =
+    l <> ""
+    && (not (String.starts_with ~prefix:"-" l))
+    && not (String.ends_with ~suffix:"-" l)
+  in
   let* () =
     if host = "" then Error "has no host"
-    else if (not literal) && not (all_chars name_char host) then
-      Error "has an invalid host"
+    else if
+      (not literal)
+      && not
+           (all_chars name_char host
+           && List.for_all label (String.split_on_char '.' host))
+    then Error "has an invalid host"
     else Ok ()
   in
   match port with
-  | Some p when not (valid_port p) ->
-      Error "has a port that is not a number from 1 to 65535"
-  | Some _ | None -> Ok ()
+  | Some p -> (
+      match (valid_port p, int_of_string_opt p) with
+      | true, Some n -> Ok (host, Some n)
+      | (true | false), (Some _ | None) ->
+          Error "has a port that is not a number from 1 to 65535")
+  | None -> Ok (host, None)
 
 let check raw =
   if String.exists (fun c -> c <= ' ' || c = '\127') raw then
@@ -98,12 +111,24 @@ let check raw =
         if String.contains authority '@' then
           Error "has user information (credentials) before the host"
         else
-          let* () = check_authority authority in
-          Ok (scheme ^ "://" ^ authority ^ path)
+          let* host, port = check_authority authority in
+          (* Built from the parts that were checked, and kept only if it
+             parses back to them: the proxy re-parses the URL with the request
+             path appended, and a name such as 127.0.0.1.nip.io would
+             otherwise be read as the address 127.0.0.1 with a path. *)
+          let host = String.lowercase_ascii host in
+          let url = Uri.make ~scheme ~host ?port ~path () in
+          let again = Uri.of_string (Uri.to_string url) in
+          if
+            Option.equal String.equal (Uri.host again) (Some host)
+            && Option.equal Int.equal (Uri.port again) port
+            && String.equal (Uri.path again) path
+          then Ok url
+          else Error "has a host that does not read back as itself"
 
 let parse ~variable raw =
   match check raw with
-  | Ok url -> Ok (Uri.of_string url)
+  | Ok url -> Ok url
   | Error reason ->
       Error
         (Printf.sprintf

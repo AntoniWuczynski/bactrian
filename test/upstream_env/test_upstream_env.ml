@@ -69,7 +69,52 @@ let refusals =
     ("a newline", "http://host\n", "whitespace");
     ("a host with a bad character", "http://ho$t", "invalid host");
     ("an unterminated IPv6 address", "http://[::1", "IPv6");
+    ( "a name that begins with an address",
+      "http://127.0.0.1.nip.io",
+      "does not read back as itself" );
+    ("a hyphen for a host", "http://-:80", "invalid host");
+    ("a label ending in a hyphen", "http://a-.example", "invalid host");
+    ("an empty label", "http://a..example", "invalid host");
   ]
+
+(* record, replay and run warn before the real key goes out in clear text. *)
+let test_cleartext () =
+  let upstream url (_ : P.provider) = Uri.of_string url in
+  let warnings caps url = Live_preflight.cleartext caps (upstream url) in
+  Alcotest.(check int)
+    "plain http to another machine" 1
+    (List.length (warnings [ ("openai", 1.) ] "http://10.0.0.5:8000"));
+  Alcotest.(check bool)
+    "names the key variable" true
+    (List.for_all
+       (contains ~sub:"OPENAI_API_KEY")
+       (warnings [ ("openai", 1.) ] "http://10.0.0.5:8000"));
+  List.iter
+    (fun (what, caps, url) ->
+      Alcotest.(check (list string)) what [] (warnings caps url))
+    [
+      ("loopback", [ ("openai", 1.) ], "http://127.0.0.1:11434");
+      ("https", [ ("openai", 1.) ], "https://gateway.example");
+      ("no cap, no call", [ ("openai", 0.) ], "http://10.0.0.5");
+    ]
+
+let test_loopback () =
+  List.iter
+    (fun (url, expected) ->
+      Alcotest.(check bool)
+        url expected
+        (Live_preflight.is_loopback (Uri.of_string url)))
+    [
+      ("http://localhost:1", true);
+      ("http://127.0.0.1:1", true);
+      ("http://127.9.8.7", true);
+      ("http://[::1]:8080", true);
+      ("http://[::ffff:127.0.0.1]:1", true);
+      ("http://127.evil.example", false);
+      ("http://localhost.evil.example", false);
+      ("http://10.0.0.5", false);
+      ("http://[::2]", false);
+    ]
 
 let test_variables () =
   Alcotest.(check (list string))
@@ -150,5 +195,7 @@ let () =
         [
           Alcotest.test_case "the variables" `Quick test_variables;
           Alcotest.test_case "read" `Quick test_read;
+          Alcotest.test_case "this machine" `Quick test_loopback;
+          Alcotest.test_case "a key in clear text" `Quick test_cleartext;
         ] );
     ]
