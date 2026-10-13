@@ -35,6 +35,11 @@ let create ~sw = { sw; jobs = Hashtbl.create 8 }
 let find t id = Hashtbl.find_opt t.jobs id
 let state job = match job.finished with Some f -> f.state | None -> Running
 
+let running t =
+  Hashtbl.fold
+    (fun _ job n -> if Option.is_none job.finished then n + 1 else n)
+    t.jobs 0
+
 (* A rendered command output that is not canonical JSON (a non-finite number)
    is a fault of ours. *)
 let canonical json =

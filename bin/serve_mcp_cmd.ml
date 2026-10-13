@@ -20,35 +20,41 @@ let fail m =
   prerr_endline ("bactrian serve-mcp: " ^ m);
   Exit_code.internal
 
-let serve ~bactrian_exe =
-  match Launch_env.scrub ~exe:bactrian_exe with
-  | Error m -> fail m
-  | Ok () -> (
-      match (Confine.create (Sys.getcwd ()), private_channel ()) with
-      | exception Unix.Unix_error (e, _, _) -> fail (Unix.error_message e)
-      | Error m, _ -> fail m
-      | Ok root, (input, output) -> (
-          Eio_main.run @@ fun env ->
-          Eio.Switch.run @@ fun sw ->
-          (* A plain read and write flow over each descriptor, pipe or not. *)
-          let flow fd =
-            Eio_unix.Net.import_socket_stream ~sw ~close_unix:true fd
-          in
-          let stop = Interrupt.trigger () in
-          match
-            Interrupt.with_handlers
-              (List.map (fun s -> (s, Interrupt.fire stop)) Interrupt.signals)
-              (fun () ->
-                Mcp_server.run ~env ~root ~stop
-                  {
-                    bactrian_exe;
-                    on_progress = Cli.print_progress;
-                    log = (fun m -> prerr_endline ("bactrian serve-mcp: " ^ m));
-                  }
-                  ~input:(flow input) ~output:(flow output))
-          with
-          | Input_closed -> Exit_code.ok
-          | Stopped _ -> Interrupt.exit_status))
+let serve ~bactrian_exe (policy : Policy.t) =
+  if policy.max_jobs < 1 then (
+    prerr_endline "bactrian serve-mcp: --max-jobs must be at least 1";
+    Exit_code.usage)
+  else
+    match Launch_env.scrub ~exe:bactrian_exe with
+    | Error m -> fail m
+    | Ok () -> (
+        match (Confine.create (Sys.getcwd ()), private_channel ()) with
+        | exception Unix.Unix_error (e, _, _) -> fail (Unix.error_message e)
+        | Error m, _ -> fail m
+        | Ok root, (input, output) -> (
+            Eio_main.run @@ fun env ->
+            Eio.Switch.run @@ fun sw ->
+            (* A plain read and write flow over each descriptor, pipe or not. *)
+            let flow fd =
+              Eio_unix.Net.import_socket_stream ~sw ~close_unix:true fd
+            in
+            let stop = Interrupt.trigger () in
+            match
+              Interrupt.with_handlers
+                (List.map (fun s -> (s, Interrupt.fire stop)) Interrupt.signals)
+                (fun () ->
+                  Mcp_server.run ~env ~root ~stop
+                    {
+                      policy;
+                      bactrian_exe;
+                      on_progress = Cli.print_progress;
+                      log =
+                        (fun m -> prerr_endline ("bactrian serve-mcp: " ^ m));
+                    }
+                    ~input:(flow input) ~output:(flow output))
+            with
+            | Input_closed -> Exit_code.ok
+            | Stopped _ -> Interrupt.exit_status))
 
 let cmd ~bactrian_exe =
   let info =
@@ -57,6 +63,7 @@ let cmd ~bactrian_exe =
         [
           Cmd.Exit.info Exit_code.ok
             ~doc:"when the client closed standard input.";
+          Cmd.Exit.info Exit_code.usage ~doc:"when an option is invalid.";
           Cmd.Exit.info Exit_code.internal
             ~doc:"when the server could not start.";
           Cmd.Exit.info Interrupt.exit_status
@@ -85,4 +92,16 @@ let cmd ~bactrian_exe =
              do the same and exit 130.";
         ]
   in
-  Cmd.v info Term.(const (fun () -> serve ~bactrian_exe) $ const ())
+  let max_jobs =
+    Arg.(
+      value
+      & opt int Policy.default.max_jobs
+      & info [ "max-jobs" ] ~docv:"N"
+          ~doc:
+            "Run at most $(docv) jobs at once. A further $(b,run_start), \
+             $(b,record_start) or $(b,replay_start) is refused until one \
+             finishes.")
+  in
+  Cmd.v info
+    Term.(
+      const (fun max_jobs -> serve ~bactrian_exe { Policy.max_jobs }) $ max_jobs)

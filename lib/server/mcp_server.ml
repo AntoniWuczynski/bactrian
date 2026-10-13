@@ -85,6 +85,7 @@ let serve ~server ~call ~stop ~log ~input ~output =
   ended
 
 type config = {
+  policy : Policy.t;
   bactrian_exe : string;
   on_progress : Bactrian_app.Progress.t -> unit;
   log : string -> unit;
@@ -113,6 +114,7 @@ let run ~env ~root ~stop config ~input ~output =
     {
       env;
       root;
+      policy = config.policy;
       jobs;
       bactrian_exe = config.bactrian_exe;
       on_progress = config.on_progress;

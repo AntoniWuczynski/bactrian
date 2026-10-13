@@ -345,7 +345,7 @@ let test_confine () =
 
 (* Tools, called as the server calls them *)
 
-let with_tools f =
+let with_context ?(policy = Policy.default) f =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
@@ -353,12 +353,24 @@ let with_tools f =
     {
       env;
       root = root ();
+      policy;
       jobs = Jobs.create ~sw;
       bactrian_exe = Sys.executable_name;
       on_progress = ignore;
     }
   in
-  f env (fun name args -> Mcp_tools.call context name (Option.map canon args))
+  f context (fun name args ->
+      Mcp_tools.call context name (Option.map canon args))
+
+let with_tools ?policy f =
+  with_context ?policy (fun context call -> f context.Mcp_tools.env call)
+
+let mentions needle haystack =
+  let n = String.length needle and h = String.length haystack in
+  let rec at i =
+    i + n <= h && (String.equal (String.sub haystack i n) needle || at (i + 1))
+  in
+  at 0
 
 let is_error result =
   Option.value ~default:false
@@ -524,6 +536,23 @@ let test_same_as_commands () =
   check_refused "no such run" {|no run "r2"|}
     (call "divergences" (Some {|{"run":"r2"}|}))
 
+(* A job beyond the limit is refused, and names the flag that raises it. *)
+let test_job_limit () =
+  with_context ~policy:{ Policy.max_jobs = 1 } @@ fun context call ->
+  Out_channel.with_open_text "limit.yaml" (fun oc -> output_string oc "x");
+  let first =
+    Jobs.start context.jobs ~kind:"run" ~progress:one
+      (until_stopped ~during:ignore)
+  in
+  let result = call "run_start" (Some {|{"experiment":"limit.yaml"}|}) in
+  Alcotest.(check bool) "refused" true (is_error result);
+  Alcotest.(check bool)
+    "names --max-jobs" true
+    (match error_text result with
+    | Some m -> mentions "--max-jobs" m
+    | None -> false);
+  Option.iter Jobs.cancel (Jobs.find context.jobs first)
+
 let () =
   let dir = Filename.temp_dir ~temp_dir:(Sys.getcwd ()) "mcp-server" "" in
   Sys.chdir dir;
@@ -546,5 +575,6 @@ let () =
           Alcotest.test_case "definitions" `Quick test_definitions;
           Alcotest.test_case "argument errors" `Quick test_arguments;
           Alcotest.test_case "the commands' JSON" `Quick test_same_as_commands;
+          Alcotest.test_case "the job limit" `Quick test_job_limit;
         ] );
     ]

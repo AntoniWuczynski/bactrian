@@ -8,6 +8,7 @@ let ( let* ) = Result.bind
 type context = {
   env : Eio_unix.Stdenv.base;
   root : Confine.t;
+  policy : Policy.t;
   jobs : Jobs.t;
   bactrian_exe : string;
   on_progress : Progress.t -> unit;
@@ -95,8 +96,20 @@ let each check = function None -> Ok () | Some v -> check v
 
 (* Jobs *)
 
-let started id =
-  of_canon (Canon.set_member "job_id" (Canon.string id) Canon.empty_object)
+(* Starts a job unless the server already runs as many as it may. *)
+let start_job context ~kind ~progress command =
+  let running = Jobs.running context.jobs in
+  if running >= context.policy.max_jobs then
+    Error
+      (Command_error.Usage
+         (Printf.sprintf
+            "%d jobs are running, the most this server allows: wait for one to \
+             finish or cancel it with job_cancel (serve-mcp --max-jobs sets \
+             the limit)"
+            running))
+  else
+    let id = Jobs.start context.jobs ~kind ~progress command in
+    of_canon (Canon.set_member "job_id" (Canon.string id) Canon.empty_object)
 
 let one_run ~finished =
   { Jobs.done_ = (if finished then 1 else 0); total = Some 1 }
@@ -176,14 +189,13 @@ let run_start =
         | Warning _ -> ());
         context.on_progress p
       in
-      started
-        (Jobs.start context.jobs ~kind:"run"
-           ~progress:(experiment_progress context experiment_id) (fun stop ->
-             Run_command.run ~stop ~on_progress
-               ~bactrian_exe:context.bactrian_exe ~env:context.env
-               { experiment = a.experiment; resume = a.resume; sandbox }
-             |> Result.map (fun r ->
-                 (Run_command.to_json r, Run_command.exit_code r)))))
+      start_job context ~kind:"run"
+        ~progress:(experiment_progress context experiment_id) (fun stop ->
+          Run_command.run ~stop ~on_progress ~bactrian_exe:context.bactrian_exe
+            ~env:context.env
+            { experiment = a.experiment; resume = a.resume; sandbox }
+          |> Result.map (fun r ->
+              (Run_command.to_json r, Run_command.exit_code r))))
 
 (* The arguments [record_start] and [replay_start] share. Decoded leniently
    beside each tool's own part, after the whole object was checked. *)
@@ -247,11 +259,10 @@ let with_common own json =
   Ok (c, o)
 
 let single_run context ~kind run =
-  started
-    (Jobs.start context.jobs ~kind ~progress:one_run (fun stop ->
-         run ~stop ~on_progress:context.on_progress
-           ~bactrian_exe:context.bactrian_exe ~env:context.env
-         |> Result.map (fun r -> (Single_run.to_json r, Single_run.exit_code r))))
+  start_job context ~kind ~progress:one_run (fun stop ->
+      run ~stop ~on_progress:context.on_progress
+        ~bactrian_exe:context.bactrian_exe ~env:context.env
+      |> Result.map (fun r -> (Single_run.to_json r, Single_run.exit_code r)))
 
 type record_args = {
   turns : string list;

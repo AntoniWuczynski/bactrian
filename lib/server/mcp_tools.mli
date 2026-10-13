@@ -9,6 +9,7 @@ open Bactrian_core
 type context = {
   env : Eio_unix.Stdenv.base;
   root : Confine.t;  (** The server's working directory. *)
+  policy : Policy.t;
   jobs : Jobs.t;
   bactrian_exe : string;
   on_progress : Bactrian_app.Progress.t -> unit;

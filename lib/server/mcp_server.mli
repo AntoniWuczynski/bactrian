@@ -25,6 +25,7 @@ val serve :
     standard error when a message is too long to read. *)
 
 type config = {
+  policy : Policy.t;
   bactrian_exe : string;
   on_progress : Bactrian_app.Progress.t -> unit;
   log : string -> unit;

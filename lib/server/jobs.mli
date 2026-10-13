@@ -43,6 +43,9 @@ val start :
 val find : t -> string -> job option
 val state : job -> state
 
+val running : t -> int
+(** The number of jobs still running. *)
+
 val status : job -> Canon.t
 (** [{"job_id", "kind", "state", "progress": {"done", "total"}}], with the
     ["exit"] status of a finished job and ["result"] (the command's [--json]

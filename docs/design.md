@@ -106,6 +106,7 @@ The MCP server (decision record 0011), kept apart from the command library so th
 | `Mcp_tools` | The tools: argument decoding, root confinement, the call into `bactrian.app`, and the result as `structuredContent` with the same JSON in a text block. |
 | `Jobs` | The job table of `run_start`, `record_start` and `replay_start`: state, progress, result or error, and a stop trigger per job, in the server's switch. |
 | `Confine` | Path arguments resolved, symbolic links included, under the server's working directory, and IDs that cannot climb. |
+| `Policy` | What the user allowed when registering the server: the most jobs at once (`--max-jobs`). |
 | `Mcp_server` | The stdio transport: one writer, a fibre per tool call, `notifications/cancelled`, and teardown at the end of input or on a signal. |
 
 ### `bin/`
