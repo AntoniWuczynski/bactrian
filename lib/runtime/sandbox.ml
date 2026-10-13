@@ -139,6 +139,15 @@ let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
       | Bubblewrap path, _ :: args -> Ok (path :: args)
       | Bubblewrap _, [] | Seatbelt, ([] | _ :: _) -> Ok argv)
 
+(* The helper commands bactrian runs (bwrap --version, the end marker, log
+   show) get only PATH: after the launch environment is restored, inheriting
+   bactrian's would put the provider keys in their launch environment, where
+   another process of the user can read them (decision 0010). *)
+let path_var () =
+  "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin"
+
+let tool_env () = [| path_var () |]
+
 (* Linux tools *)
 
 let on_path name =
@@ -174,7 +183,7 @@ let bubblewrap ~env =
       match
         Eio.Process.parse_out
           (Eio.Stdenv.process_mgr env)
-          Eio.Buf_read.take_all [ path; "--version" ]
+          ~env:(tool_env ()) Eio.Buf_read.take_all [ path; "--version" ]
       with
       | exception Eio.Io _ -> Error (Printf.sprintf "%s --version failed" path)
       | text -> (
@@ -322,13 +331,7 @@ let probe ~env (host : host) =
         Filename.concat (resolved state_dir) "inside";
       ]
   in
-  let vars =
-    [|
-      "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
-      "HOME=" ^ state_dir;
-      "TMPDIR=" ^ temp_dir;
-    |]
-  in
+  let vars = [| path_var (); "HOME=" ^ state_dir; "TMPDIR=" ^ temp_dir |] in
   let* line = run_probe_command ~sw ~env ~vars argv in
   let* report =
     Result.map_error
@@ -515,7 +518,7 @@ let seatbelt_violations ~env ~tag ~since ~marker =
   match
     Eio.Process.run mgr
       ~is_success:(fun (_ : int) -> true)
-      ~stdout:discard ~stderr:discard
+      ~stdout:discard ~stderr:discard ~env:(tool_env ())
       [
         "/usr/bin/sandbox-exec";
         "-p";
@@ -543,7 +546,8 @@ let seatbelt_violations ~env ~tag ~since ~marker =
       let rec poll () =
         let lines =
           String.split_on_char '\n'
-            (Eio.Process.parse_out mgr Eio.Buf_read.take_all argv)
+            (Eio.Process.parse_out mgr ~env:(tool_env ()) Eio.Buf_read.take_all
+               argv)
         in
         if
           List.exists
