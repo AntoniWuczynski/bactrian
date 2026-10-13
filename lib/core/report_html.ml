@@ -178,21 +178,40 @@ let pass_rate_delta (d : D.t) =
   |> Option.value ~default:0.
 
 let forest_section (d : D.t) =
-  let suite =
+  let pass_rate =
     List.find_map
       (fun (m : D.metric_row) ->
         match m.result.metric with
-        | Pass_rate when not (Float.is_nan m.result.estimate) ->
-            Some
-              {
-                Report_charts.label = "All scenarios";
-                estimate = m.result.estimate;
-                interval = m.result.interval;
-                verdict = m.result.verdict;
-                emphasis = true;
-              }
+        | Pass_rate when not (Float.is_nan m.result.estimate) -> Some m.result
         | Pass_rate | Cost | Latency_p50 | Tokens -> None)
       d.metrics
+  in
+  let suite =
+    Option.map
+      (fun (r : Compare.metric_result) ->
+        {
+          Report_charts.label =
+            Printf.sprintf "All scenarios (level %.4f)" r.level;
+          estimate = r.estimate;
+          interval = r.interval;
+          verdict = r.verdict;
+          emphasis = true;
+        })
+      pass_rate
+  in
+  let suite_note =
+    match pass_rate with
+    | None -> ""
+    | Some r ->
+        Printf.sprintf
+          " The first row, all scenarios, is the %sinterval at level %.4f: %s."
+          (if r.in_gate then "gate's " else "")
+          r.level
+          (match d.population with
+          | `Suite -> "the stratified Newcombe interval"
+          | `Scenarios ->
+              "the hull of the hierarchical bootstrap and the stratified \
+               Newcombe interval")
   in
   let rows =
     Option.to_list suite
@@ -218,9 +237,9 @@ let forest_section (d : D.t) =
     [
       para ~cls:[ "note" ]
         (Printf.sprintf
-           "Newcombe intervals at level %.4f (Bonferroni across %d scenarios). \
-            Per-scenario results never fail the gate."
-           level (List.length d.scenarios));
+           "Per-scenario Newcombe intervals at level %.4f (Bonferroni across \
+            %d scenarios). Per-scenario results never fail the gate.%s"
+           level (List.length d.scenarios) suite_note);
       H.figure
         ~figcaption:
           (`Bottom
