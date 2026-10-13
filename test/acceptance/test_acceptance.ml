@@ -629,8 +629,15 @@ let escapes agent () =
               (trace r)))
   | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
       (* Linux reports only relay failures, and the model call makes none. The
-         other denials show only as the agent's own errors, checked above. *)
-      Alcotest.(check int) "no relay failures" 0 (List.length vs)
+         other denials show only as the agent's own errors, checked above. The
+         forwarder is not dumpable, so its descriptors are refused, not
+         missing. *)
+      Alcotest.(check int) "no relay failures" 0 (List.length vs);
+      Alcotest.(check bool)
+        "the forwarder's descriptors are refused" true
+        (contains
+           (String.lowercase_ascii (detail "forwarder_log"))
+           "permission denied")
 
 (* HTTP mode: the agent is a server the test starts (--http 0 prints its port
    as the first line of its standard output), and stops by its recorded pid. *)
