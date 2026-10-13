@@ -33,6 +33,17 @@ type summary = {
       (** In plan order, with the run ID where a run was started. *)
 }
 
+type manifest = {
+  name : string;  (** The experiment's name. *)
+  experiment_file : string;  (** As given to {!run_experiment}. *)
+  seed : int;
+  summary : summary;
+}
+
+val read_manifest : _ Eio.Path.t -> (manifest, string option) result
+(** Reads an experiment's [manifest.json]. [Error None] when the file does not
+    exist, [Error (Some reason)] when it cannot be decoded. *)
+
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string

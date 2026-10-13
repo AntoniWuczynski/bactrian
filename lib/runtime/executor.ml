@@ -15,6 +15,13 @@ type summary = {
   runs : (planned * status * string option) list;
 }
 
+type manifest = {
+  name : string;
+  experiment_file : string;
+  seed : int;
+  summary : summary;
+}
+
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string
@@ -147,7 +154,18 @@ let read_manifest path =
                     Ok (x :: l))
                   (Ok []) w.runs
               with
-              | Ok runs -> Ok (List.rev runs)
+              | Ok runs ->
+                  Ok
+                    {
+                      name = w.experiment;
+                      experiment_file = w.experiment_file;
+                      seed = w.seed;
+                      summary =
+                        {
+                          experiment_id = w.experiment_id;
+                          runs = List.rev runs;
+                        };
+                    }
               | Error m -> bad m)))
 
 (* Preflight *)
@@ -364,7 +382,8 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         match read_manifest path with
         | Error None -> Error (Usage (Printf.sprintf "no experiment %S" id))
         | Error (Some m) -> Error (Usage m)
-        | Ok runs when same_plan (List.map (fun (p, _, _) -> p) runs) planned ->
+        | Ok { summary = { runs; _ }; _ }
+          when same_plan (List.map (fun (p, _, _) -> p) runs) planned ->
             Ok (id, runs)
         | Ok _ ->
             Error

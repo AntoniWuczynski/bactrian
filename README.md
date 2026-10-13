@@ -6,7 +6,7 @@ The name comes from the two-humped camel. Most of what bactrian does is compare 
 
 ## Status
 
-Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Comparing variants with statistics, MCP interception, the sandbox and the MCP server are also still to come.
+Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. MCP interception, the sandbox and the MCP server are also still to come.
 
 ## Recording and replaying an agent
 
@@ -89,6 +89,45 @@ prices:
 ```
 
 An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
+
+## Comparing variants
+
+Once an experiment has run, `compare` turns its runs into a verdict per metric, with confidence intervals rather than bare averages:
+
+```sh
+bactrian compare <experiment-id> --baseline luna --candidate flash --gate
+```
+
+The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required and the gate is the pass rate with a threshold of 0.
+
+```yaml
+compare:
+  baseline: luna
+  confidence: 0.95
+  population: suite          # or scenarios, which needs at least 10 scenarios
+  gate: [pass_rate, cost]    # default: [pass_rate]
+  thresholds: { pass_rate: 0.05, cost: 0.20, latency_p50: 0.25 }
+```
+
+Each metric is a `regression`, an `improvement`, `no-change` or `inconclusive`, depending on whether its whole interval lies beyond, within or across the threshold. Intervals for gate metrics are widened (Bonferroni) so the chance of any false regression stays within the confidence level. The report also lists new tool-call sequences, meaning ones in at least 10% of the candidate's runs and none of the baseline's.
+
+Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed, 2 that one is inconclusive (only with `--fail-on-inconclusive`), and 3 that missing data could bias the result, because more than 5% of an arm errored or the share of errored and unrun runs differs between the arms by more than 5 percentage points. `--json` prints the verdicts as one JSON object with a schema version.
+
+`plan` says how many repeats are needed before you run anything, by simulating the same decision rule:
+
+```sh
+bactrian plan --baseline-rate 0.9 --threshold 0.05 --scenarios 12
+```
+
+The assumed effect defaults to twice the threshold and the power to 0.8. It answers `unreachable` if no repeat count up to `--max-repeats` (200) gets there. `--population scenarios` also needs `--between-sd`.
+
+`report` writes everything as one HTML file with inline styles and charts and no scripts or external assets, so it works offline and follows the system's light or dark theme:
+
+```sh
+bactrian report <experiment-id> -o report.html
+```
+
+It holds the estimand, gate and missing data per arm, the verdicts, a forest plot per scenario, cost and latency charts, the signature comparison, and each failure with its assertion messages and a collapsible trace.
 
 ## Building from source
 

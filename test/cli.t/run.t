@@ -146,3 +146,75 @@ experiment cannot be resumed.
   $ OPENAI_API_KEY=k bactrian run capped.yaml --resume nope
   bactrian: no experiment "nope"
   [64]
+
+The compare command documents the gate's statuses, and plan and report the usual
+ones.
+
+  $ bactrian compare --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -E '^ +[0-9]+ +(on|with|when)' | cut -c1-30
+         0   on success, or when
+         1   with --gate, when a
+         2   with --gate and --f
+         3   with --gate, when m
+         64  on a usage or confi
+         70  on an internal erro
+  $ bactrian plan --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -cE '^ +[0-9]+ +(on|when)'
+  7
+  $ bactrian report --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -cE '^ +[0-9]+ +(on|when)'
+  7
+
+Missing arguments are usage errors.
+
+  $ bactrian compare 2> /dev/null
+  [64]
+  $ bactrian report some-experiment 2> /dev/null
+  [64]
+  $ bactrian plan --baseline-rate 0.9 2> /dev/null
+  [64]
+
+An unknown experiment is a usage error, in text and in JSON.
+
+  $ bactrian compare nope --baseline a --candidate b
+  bactrian: no experiment "nope"
+  [64]
+  $ bactrian compare nope --baseline a --candidate b --json
+  {"error":"no experiment \"nope\"","exit":64}
+  [64]
+  $ bactrian report nope --baseline a --candidate b -o out.html
+  bactrian: no experiment "nope"
+  [64]
+
+Planning checks its assumptions before simulating.
+
+  $ bactrian plan --threshold 0.1 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: plan needs at least one --baseline-rate
+  $ bactrian plan --baseline-rate 1.5 --threshold 0.1 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --baseline-rate must be between 0 and 1
+  $ bactrian plan --baseline-rate 0.9 --baseline-rate 0.8 --scenarios 3 --threshold 0.1 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: give one --baseline-rate for every scenario, or a single one for
+            all of them
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --power 2 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --power must be strictly between 0 and 1
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --population scenarios 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --population scenarios needs --between-sd
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --population scenarios --between-sd 0.1 --scenarios 3 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --population scenarios needs at least 10 --scenarios
+
+A plan names the repeats, or says that none is enough.
+
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --scenarios 2 --simulations 100
+  115 repeats per scenario and variant (2 scenarios, 230 runs per variant)
+  simulated power 0.870, Monte Carlo standard error 0.034
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --effect 0.1 --max-repeats 5 --simulations 50 --json | grep -o '"result":"[a-z]*"'
+  "result":"unreachable"
