@@ -37,6 +37,26 @@ val scrub :
     first replacement within [state] (literals, then each pattern in order), not
     by position in the text. *)
 
+val scrub_json_strings :
+  patterns:pattern list -> state -> string -> state * string
+(** Like {!scrub} without literals, but only inside the string literals of the
+    JSON [text], each decoded and scrubbed on its own and written back only if
+    it changed. A pattern such as [Bearer .+] therefore stops at the end of its
+    string instead of swallowing the closing quote and brace, and the result is
+    valid JSON whenever the input was. Everything outside string literals, and
+    every literal that no pattern touched, keeps its bytes. *)
+
+val scrub_structured :
+  patterns:pattern list -> state -> string -> state * string
+(** For user patterns on a request or response body, or one piece of a stream.
+    JSON goes through {!scrub_json_strings}. Otherwise each line is scrubbed on
+    its own, except that the payload of a [data:] line holding JSON (a
+    server-sent event) is treated as JSON. Anything else is plain text. *)
+
+val fold_plain : ('a -> string -> 'a * string) -> 'a -> string -> 'a * string
+(** Applies the function to each span of the text outside existing placeholders,
+    in order, and puts the results back between the untouched placeholders. *)
+
 val placeholder : int -> string
 (** [placeholder 3] is ["<secret:3>"]. *)
 

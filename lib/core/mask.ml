@@ -1,12 +1,19 @@
 let marker = "<normalised>"
 
+(* Placeholders such as [<secret:1>] are left alone, or a pattern like [\d+]
+   would turn two different secrets into one marker and so one key. *)
 let text patterns s =
-  List.fold_left
-    (fun (n, s) re ->
-      match List.length (Re.all re s) with
-      | 0 -> (n, s)
-      | k -> (n + k, Re.replace_string re ~by:marker s))
-    (0, s) patterns
+  let mask re n span =
+    match List.length (Re.all re span) with
+    | 0 -> (n, span)
+    | k -> (n + k, Re.replace_string re ~by:marker span)
+  in
+  let n, s =
+    List.fold_left
+      (fun (n, s) re -> Redact.fold_plain (mask re) n s)
+      (0, s) patterns
+  in
+  (n, s)
 
 let rec canon patterns (v : Canon.t) =
   match v with

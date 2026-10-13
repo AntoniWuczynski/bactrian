@@ -65,26 +65,38 @@ let replace_matches { re; group } text st =
   Buffer.add_substring buf text pos (String.length text - pos);
   (Buffer.contents buf, st)
 
-(* Apply [re] to the plain spans of [text], leaving existing placeholders. *)
-let pass re text st =
+(* Applies [f] to the spans of [text] outside existing placeholders, which stay
+   as they are. *)
+let fold_plain f acc text =
   let buf = Buffer.create (String.length text) in
-  let plain s st =
-    let out, st = replace_matches re s st in
+  let plain acc s =
+    let acc, out = f acc s in
     Buffer.add_string buf out;
-    st
+    acc
   in
-  let pos, st =
+  let pos, acc =
     List.fold_left
-      (fun (pos, st) g ->
+      (fun (pos, acc) g ->
         let start, stop = Re.Group.offset g 0 in
-        let st = plain (String.sub text pos (start - pos)) st in
+        let acc = plain acc (String.sub text pos (start - pos)) in
         Buffer.add_string buf (Re.Group.get g 0);
-        (stop, st))
-      (0, st)
+        (stop, acc))
+      (0, acc)
       (Re.all placeholder_re text)
   in
-  let st = plain (String.sub text pos (String.length text - pos)) st in
-  (Buffer.contents buf, st)
+  let acc = plain acc (String.sub text pos (String.length text - pos)) in
+  (acc, Buffer.contents buf)
+
+(* Apply [re] to the plain spans of [text], leaving existing placeholders. *)
+let pass re text st =
+  let st, out =
+    fold_plain
+      (fun st s ->
+        let out, st = replace_matches re s st in
+        (st, out))
+      st text
+  in
+  (out, st)
 
 (* Passes repeat until the text stops changing: a span that follows a new
    placeholder is a fresh string, so context-dependent patterns can match on
@@ -108,6 +120,75 @@ let scrub ~patterns ~known st text =
   in
   let st, text = fix text st in
   (st, text)
+
+(* The end (exclusive) of the JSON string literal starting at [i]. *)
+let literal_end text i =
+  let n = String.length text in
+  let rec go j =
+    if j >= n then None
+    else
+      match text.[j] with
+      | '\\' -> go (j + 2)
+      | '"' -> Some (j + 1)
+      | _ -> go (j + 1)
+  in
+  go (i + 1)
+
+let scrub_json_strings ~patterns st text =
+  let n = String.length text in
+  let buf = Buffer.create n in
+  let rec go pos st =
+    match String.index_from_opt text pos '"' with
+    | None ->
+        Buffer.add_substring buf text pos (n - pos);
+        st
+    | Some i -> (
+        Buffer.add_substring buf text pos (i - pos);
+        match literal_end text i with
+        | None ->
+            Buffer.add_substring buf text i (n - i);
+            st
+        | Some j ->
+            let literal = String.sub text i (j - i) in
+            let st =
+              match Yojson.Safe.from_string literal with
+              | `String s ->
+                  let st, s' = scrub ~patterns ~known:[] st s in
+                  Buffer.add_string buf
+                    (if String.equal s s' then literal
+                     else Yojson.Safe.to_string (`String s'));
+                  st
+              | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _
+              | `Assoc _
+              | (exception Yojson.Json_error _) ->
+                  Buffer.add_string buf literal;
+                  st
+            in
+            go j st)
+  in
+  let st = go 0 st in
+  (st, Buffer.contents buf)
+
+let is_json text = Result.is_ok (Canon.of_string text)
+
+let scrub_structured ~patterns st text =
+  if is_json text then scrub_json_strings ~patterns st text
+  else
+    let st, lines =
+      List.fold_left_map
+        (fun st line ->
+          match String.starts_with ~prefix:"data:" line with
+          | true when is_json (String.sub line 5 (String.length line - 5)) ->
+              let st, payload =
+                scrub_json_strings ~patterns st
+                  (String.sub line 5 (String.length line - 5))
+              in
+              (st, "data:" ^ payload)
+          | true | false -> scrub ~patterns ~known:[] st line)
+        st
+        (String.split_on_char '\n' text)
+    in
+    (st, String.concat "\n" lines)
 
 let pp_error ppf (Invalid_pattern { source; reason }) =
   Format.fprintf ppf "invalid pattern %S: %s" source reason

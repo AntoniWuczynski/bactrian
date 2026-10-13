@@ -261,6 +261,72 @@ let test_provider_patterns_compile () =
     "all six provider patterns compile" 6
     (List.length Bactrian_core.Redact.provider_key_patterns)
 
+(* Review M5: user patterns only see the strings of a JSON document. *)
+
+let user pattern = [ pat pattern ]
+
+let scrub_json ?(st = Redact.empty) pattern s =
+  Redact.scrub_json_strings ~patterns:(user pattern) st s
+
+let test_json_strings () =
+  let _, out =
+    scrub_json "Bearer .+" {|{"a":"Bearer abc.def and more","b":1}|}
+  in
+  Alcotest.(check string)
+    "stops at the end of the string" {|{"a":"<secret:1>","b":1}|} out;
+  Alcotest.(check bool) "still JSON" true (Result.is_ok (Canon.of_string out));
+  let _, out =
+    scrub_json "tok_[a-z]{6}"
+      {|{"a":"say \"hi\" tok_abcdef\n","u":"caf\u00e9"}|}
+  in
+  Alcotest.(check string)
+    "escapes kept, untouched strings keep their bytes"
+    {|{"a":"say \"hi\" <secret:1>\n","u":"caf\u00e9"}|} out;
+  let _, out = scrub_json {|\\.|} {|{"a":"x\\y"}|} in
+  Alcotest.(check bool)
+    "a match over a backslash cannot break the escaping" true
+    (Result.is_ok (Canon.of_string out));
+  let st, out =
+    scrub_json "tok_[a-z]{6}" {|{"tok_abcdef":"tok_abcdef tok_ghijkl"}|}
+  in
+  Alcotest.(check string)
+    "keys are strings too, same secret same placeholder"
+    {|{"<secret:1>":"<secret:1> <secret:2>"}|} out;
+  Alcotest.(check int) "count" 2 (Redact.count st)
+
+let test_structured () =
+  let scrub_s pattern s =
+    snd (Redact.scrub_structured ~patterns:(user pattern) Redact.empty s)
+  in
+  Alcotest.(check string)
+    "json" {|{"a":"<secret:1>"}|}
+    (scrub_s "Bearer .+" {|{"a":"Bearer x"}|});
+  Alcotest.(check string)
+    "server-sent events"
+    "event: message\ndata: {\"a\":\"<secret:1>\"}\n\ndata: [DONE]\n\n"
+    (scrub_s "Bearer .+"
+       "event: message\ndata: {\"a\":\"Bearer x\"}\n\ndata: [DONE]\n\n");
+  Alcotest.(check string)
+    "other lines are text, one line at a time" "<secret:1>\nnext line stays\n"
+    (scrub_s "token .+" "token abc\nnext line stays\n");
+  Alcotest.(check string)
+    "plain data lines are text" "data: <secret:1>\n"
+    (scrub_s "tok_[a-z]{6}" "data: tok_abcdef\n")
+
+(* Review m19: normalise leaves the placeholders alone. *)
+let test_mask_skips_placeholders () =
+  let re source = Result.get_ok (Regex.compile source) in
+  let n, out = Mask.text [ re {|\d+|} ] "<secret:1> and <secret:12> on 2026" in
+  Alcotest.(check (pair int string))
+    "placeholders kept"
+    (1, "<secret:1> and <secret:12> on <normalised>")
+    (n, out);
+  let n, out = Mask.text [ re "secret" ] "a secret <secret:1>" in
+  Alcotest.(check (pair int string))
+    "a pattern cannot reach inside"
+    (1, "a <normalised> <secret:1>")
+    (n, out)
+
 (* Mask *)
 
 let test_mask () =
@@ -289,6 +355,10 @@ let () =
           Alcotest.test_case "provider patterns compile" `Quick
             test_provider_patterns_compile;
           Alcotest.test_case "mask" `Quick test_mask;
+          Alcotest.test_case "mask skips placeholders" `Quick
+            test_mask_skips_placeholders;
+          Alcotest.test_case "json strings" `Quick test_json_strings;
+          Alcotest.test_case "structured bodies" `Quick test_structured;
           Alcotest.test_case "two keys" `Quick test_two_keys;
           Alcotest.test_case "same key" `Quick test_same_key_same_placeholder;
           Alcotest.test_case "known" `Quick test_known;
