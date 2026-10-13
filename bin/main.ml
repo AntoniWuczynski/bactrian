@@ -5,6 +5,7 @@ module P = Model_proxy
 (* Whether this build can call a provider over HTTPS. The TLS connector is a
    separate library (bactrian.tls) that is not part of this build yet. *)
 let tls_available = false
+let ( let* ) = Result.bind
 
 (* Configuration *)
 
@@ -67,9 +68,14 @@ let live_problem caps =
 
 (* Running *)
 
+(* The executable the sandbox re-runs as its probe and its Linux forwarder. *)
+let bactrian_exe = Sys.executable_name
+let sandbox_warning w = prerr_endline ("bactrian: warning: " ^ w)
+
 (* [config] gets the store, because a replay reads the recording's MCP servers
-   from it. *)
-let run_command ~json ~live (config : Store.t -> (Run.config, string) result) =
+   from it, and what the sandbox preflight decided. *)
+let run_command ~json ~live ~sandbox
+    (config : Store.t -> Sandbox.t -> (Run.config, string) result) =
   match read_caps () with
   | Error m -> Cli.fail ~json Output.exit_usage m
   | Ok caps -> (
@@ -89,16 +95,29 @@ let run_command ~json ~live (config : Store.t -> (Run.config, string) result) =
                    line reason)
           | ledger -> (
               match
-                P.start ~sw ~net:(Eio.Stdenv.net env)
-                  ~clock:(Eio.Stdenv.clock env)
-                  ~process_mgr:(Eio.Stdenv.process_mgr env)
+                let* sandbox =
+                  Sandbox.preflight ~env ~warn:sandbox_warning
+                    {
+                      mode = sandbox;
+                      allow_write = [];
+                      deny_read = [];
+                      bactrian_exe;
+                      bactrian_dir = Eio.Path.native_exn root;
+                    }
+                in
+                let* proxy =
+                  P.start ~sw ~net:(Eio.Stdenv.net env)
+                    ~clock:(Eio.Stdenv.clock env)
+                    ~process_mgr:(Eio.Stdenv.process_mgr env)
+                in
+                Ok (sandbox, proxy)
               with
               | Error m -> Cli.fail ~json Output.exit_environment m
-              | Ok proxy -> (
+              | Ok (sandbox, proxy) -> (
                   let store = Store.create ~root in
                   match
                     Interrupt.run (fun () ->
-                        Result.bind (config store) (fun config ->
+                        Result.bind (config store sandbox) (fun config ->
                             Run.execute ~env ~proxy ~store ~ledger config))
                   with
                   | Error signal ->
@@ -115,13 +134,16 @@ let run_command ~json ~live (config : Store.t -> (Run.config, string) result) =
 
 (* Experiments *)
 
-let experiment_command ~json ~experiment ~resume =
+let experiment_command ~json ~experiment ~resume ~sandbox =
   Mirage_crypto_rng_unix.use_default ();
   Eio_main.run @@ fun env ->
   let announced = ref None in
+  let label = ref None in
   match
     Interrupt.run (fun () ->
-        Executor.run_experiment ~env ~experiment_file:experiment ~resume
+        Executor.run_experiment ?sandbox
+          ~on_sandbox:(fun l -> label := Some l)
+          ~bactrian_exe ~env ~experiment_file:experiment ~resume
           ~announce:(fun id ->
             announced := Some id;
             prerr_endline ("bactrian: experiment " ^ id))
@@ -142,9 +164,10 @@ let experiment_command ~json ~experiment ~resume =
   | Ok (Error (Environment m)) -> Cli.fail ~json Output.exit_environment m
   | Ok (Ok summary) ->
       print_string
-        (if json then Output.render_summary_json summary ^ "\n"
+        (if json then Output.render_summary_json ?sandbox:!label summary ^ "\n"
          else
-           Output.render_summary_text ~colour:(Lazy.force Output.colour) summary);
+           Output.render_summary_text ?sandbox:!label
+             ~colour:(Lazy.force Output.colour) summary);
       Output.summary_exit_code summary
 
 let check_command scenarios =
@@ -216,6 +239,25 @@ let total_timeout =
     & info [ "total-timeout" ] ~docv:"SECONDS"
         ~doc:"Longest the whole run may take.")
 
+let sandbox_doc =
+  "Run the agent inside the operating-system sandbox: $(b,auto) when the host \
+   supports it (otherwise unsandboxed, with a warning and a label), \
+   $(b,strict) to stop with exit status 69 when it does not, $(b,off) to skip \
+   it."
+
+let sandbox_mode =
+  Arg.(
+    value
+    & opt (enum Sandbox.modes) `Auto
+    & info [ "sandbox" ] ~docv:"MODE" ~doc:(sandbox_doc ^ " Default $(b,auto)."))
+
+let sandbox_override =
+  Arg.(
+    value
+    & opt (some (enum Sandbox.modes)) None
+    & info [ "sandbox" ] ~docv:"MODE"
+        ~doc:(sandbox_doc ^ " Overrides the experiment's $(b,sandbox) setting."))
+
 let mcp_flag name ~docv ~doc =
   Arg.(value & opt_all string [] & info [ name ] ~docv ~doc)
 
@@ -250,7 +292,8 @@ let agent_argv ~pos_after =
       Arg.(non_empty & pos_right (n - 1) string [] & info [] ~docv ~doc)
 
 let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
-    ~replay ~env_passthrough ~turn_timeout ~total_timeout ~mcp : Run.config =
+    ~replay ~env_passthrough ~turn_timeout ~total_timeout ~mcp ~sandbox :
+    Run.config =
   {
     agent;
     cwd;
@@ -271,9 +314,8 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     turn_timeout;
     total_timeout;
     mcp;
+    sandbox;
   }
-
-let ( let* ) = Result.bind
 
 let positive name v =
   if Float.is_finite v && v > 0. then Ok ()
@@ -287,7 +329,7 @@ let record_cmd =
           ~doc:"A scripted user turn. Repeat for several turns, in order.")
   in
   let run json agent cwd turns scenario variant sim_now timezone env_passthrough
-      turn_timeout total_timeout mcp_stdio mcp_http mcp_policy =
+      turn_timeout total_timeout mcp_stdio mcp_http mcp_policy sandbox =
     match
       let* () =
         match turns with
@@ -301,11 +343,11 @@ let record_cmd =
     | Error m -> `Error (false, m)
     | Ok mcp ->
         `Ok
-          (run_command ~json ~live:true (fun _ ->
+          (run_command ~json ~live:true ~sandbox (fun _ sandbox ->
                Ok
                  (build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now
                     ~timezone ~replay:None ~env_passthrough ~turn_timeout
-                    ~total_timeout ~mcp)))
+                    ~total_timeout ~mcp ~sandbox)))
   in
   let info =
     Cmd.info "record" ~exits:Cli.exits
@@ -337,7 +379,7 @@ let record_cmd =
         $ agent_argv ~pos_after:`Start
         $ cwd $ turns $ scenario $ variant $ sim_now $ timezone
         $ env_passthrough $ turn_timeout $ total_timeout $ mcp_stdio $ mcp_http
-        $ mcp_policy))
+        $ mcp_policy $ sandbox_mode))
 
 type matcher_choice = Strict | Until_divergence | Fuzzy
 
@@ -386,7 +428,8 @@ let replay_cmd =
           ~doc:"Serve streams $(b,fast), or with their $(b,recorded) pacing.")
   in
   let run json from agent mode threshold allow_reorder timing cwd scenario
-      variant sim_now timezone env_passthrough turn_timeout total_timeout =
+      variant sim_now timezone env_passthrough turn_timeout total_timeout
+      sandbox =
     let matcher : (Bactrian_core.Matcher.mode, string) result =
       match (mode, threshold) with
       | Strict, None -> Ok Strict
@@ -413,13 +456,13 @@ let replay_cmd =
           | Strict | Fuzzy _ -> false
         in
         `Ok
-          (run_command ~json ~live (fun store ->
+          (run_command ~json ~live ~sandbox (fun store sandbox ->
                let* mcp = Run.recorded_mcp store ~from in
                Ok
                  (build_config ~agent ~cwd ~turns:[] ~scenario ~variant ~sim_now
                     ~timezone
                     ~replay:(Some { Run.from; matcher; allow_reorder; timing })
-                    ~env_passthrough ~turn_timeout ~total_timeout ~mcp)))
+                    ~env_passthrough ~turn_timeout ~total_timeout ~mcp ~sandbox)))
   in
   let info =
     Cmd.info "replay" ~exits:Cli.exits
@@ -441,7 +484,8 @@ let replay_cmd =
         (const run $ Cli.json $ from
         $ agent_argv ~pos_after:(`After 1)
         $ mode $ threshold $ allow_reorder $ timing $ cwd $ scenario $ variant
-        $ sim_now $ timezone $ env_passthrough $ turn_timeout $ total_timeout))
+        $ sim_now $ timezone $ env_passthrough $ turn_timeout $ total_timeout
+        $ sandbox_mode))
 
 let run_cmd =
   let experiment =
@@ -459,8 +503,8 @@ let run_cmd =
             "Continue the experiment $(docv) (see ./.bactrian/experiments): \
              runs that finished are not repeated.")
   in
-  let run json experiment resume =
-    experiment_command ~json ~experiment ~resume
+  let run json experiment resume sandbox =
+    experiment_command ~json ~experiment ~resume ~sandbox
   in
   let info =
     Cmd.info "run" ~exits:Cli.exits
@@ -480,7 +524,8 @@ let run_cmd =
              else 0.";
         ]
   in
-  Cmd.v info Term.(const run $ Cli.json $ experiment $ resume)
+  Cmd.v info
+    Term.(const run $ Cli.json $ experiment $ resume $ sandbox_override)
 
 let check_cmd =
   let scenarios =
@@ -565,13 +610,33 @@ let sandbox_init_cmd =
         Output.exit_usage
     | Ok config -> (
         Eio_main.run @@ fun env ->
+        Eio.Switch.run @@ fun sw ->
+        (* Standard input, output and error are the agent's own. *)
+        let fd_number =
+          Option.bind (Sys.getenv_opt Sandbox_init.log_variable) (fun v ->
+              match int_of_string_opt v with
+              | Some n when n > 2 -> Some n
+              | Some _ | None -> None)
+        in
+        (* Reopened through /dev/fd with close-on-exec, because OCaml cannot
+           name an inherited descriptor by its number. *)
         let log =
-          match Sys.getenv_opt Sandbox_init.log_variable with
-          | None | Some "" -> None
-          | Some path -> Some Eio.Path.(Eio.Stdenv.fs env / path)
+          Option.bind fd_number (fun n ->
+              match
+                Unix.openfile
+                  (Printf.sprintf "/dev/fd/%d" n)
+                  [ O_WRONLY; O_APPEND; O_CLOEXEC ]
+                  0
+              with
+              | fd -> Some (Eio_unix.Fd.of_unix ~sw ~close_unix:true fd)
+              | exception Unix.Unix_error (e, _, _) ->
+                  prerr_endline
+                    ("bactrian __sandbox-init: no violation log: "
+                   ^ Unix.error_message e);
+                  None)
         in
         match
-          Sandbox_init.run ?log ~net:(Eio.Stdenv.net env)
+          Sandbox_init.run ?log ?hidden_fd:fd_number ~net:(Eio.Stdenv.net env)
             ~process_mgr:(Eio.Stdenv.process_mgr env)
             config
         with
@@ -586,6 +651,26 @@ let sandbox_init_cmd =
       ~doc:"Internal: the forwarder bactrian runs inside the Linux sandbox"
   in
   Cmd.v info Term.(const run $ args)
+
+let sandbox_probe_cmd =
+  let required name docv =
+    Arg.(required & opt (some string) None & info [ name ] ~docv)
+  in
+  let port =
+    Arg.(required & opt (some int) None & info [ "port" ] ~docv:"PORT")
+  in
+  let run port outside inside =
+    print_endline
+      (Sandbox_probe.to_line (Sandbox_probe.run ~port ~outside ~inside));
+    Output.exit_ok
+  in
+  let info =
+    Cmd.info "__sandbox-probe" ~docs:Manpage.s_none ~exits:Cli.exits
+      ~doc:"Internal: the check bactrian runs inside a new sandbox"
+  in
+  Cmd.v info
+    Term.(
+      const run $ port $ required "outside" "PATH" $ required "inside" "PATH")
 
 let cmd =
   let info =
@@ -604,6 +689,7 @@ let cmd =
       Report_cmd.cmd;
       mcp_shim_cmd;
       sandbox_init_cmd;
+      sandbox_probe_cmd;
     ]
 
 let () =

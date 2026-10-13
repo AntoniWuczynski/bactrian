@@ -42,9 +42,12 @@ let agents =
         (fun () ->
           require "uv";
           let project = in_repo "examples/agents/python" in
+          (* uv run would lock the project's virtual environment, a write
+             outside the run that the sandbox refuses. *)
           [
             "uv";
             "run";
+            "--no-sync";
             "--project";
             project;
             Filename.concat project "agent.py";
@@ -96,6 +99,52 @@ let outcome_name (r : Run.result) =
 
 let ok = function Ok v -> v | Error e -> Alcotest.failf "execute: %s" e
 
+(* dune gives the paths of the executables relative to the test's directory. *)
+let executable variable =
+  match Sys.getenv_opt variable with
+  | Some p when Filename.is_relative p -> Filename.concat (Sys.getcwd ()) p
+  | Some p -> p
+  | None -> Alcotest.failf "%s is not set (run through dune)" variable
+
+(* Every run here is sandboxed where the host has a sandbox (design §5.3), with
+   strict, so a sandbox that does not work fails the test. *)
+let on_path name =
+  List.exists
+    (fun dir ->
+      (not (String.equal dir "")) && Sys.file_exists (Filename.concat dir name))
+    (String.split_on_char ':'
+       (Option.value (Sys.getenv_opt "PATH") ~default:""))
+
+let sandbox_available =
+  Sys.file_exists "/usr/bin/sandbox-exec" || on_path "bwrap"
+
+let () =
+  if not sandbox_available then
+    print_endline
+      "no sandbox-exec or bwrap on this host: runs are not sandboxed"
+
+let sandbox_flag = if sandbox_available then "strict" else "off"
+
+let sandbox ~env ~dir =
+  if not sandbox_available then Sandbox.off
+  else
+    match
+      Sandbox.preflight ~env
+        ~warn:(fun w -> Alcotest.failf "warning: %s" w)
+        {
+          mode = `Strict;
+          allow_write = [];
+          deny_read = [];
+          bactrian_exe = executable "BACTRIAN_EXE";
+          bactrian_dir = Filename.concat dir ".bactrian";
+        }
+    with
+    | Ok t -> t
+    | Error m -> Alcotest.failf "sandbox preflight: %s" m
+
+let check_sandboxed (r : Run.result) =
+  Alcotest.(check bool) "sandboxed" sandbox_available r.sandbox.applied
+
 type world = {
   up : F.t;
   dir : string;  (** The world's directory, with its [.bactrian] store. *)
@@ -133,6 +182,10 @@ let with_world name f =
     | Error e -> Alcotest.failf "fake upstream: %a" F.pp_error e
   in
   let store = Store.create ~root:Eio.Path.(dir / ".bactrian") in
+  let sandbox =
+    sandbox ~env
+      ~dir:(Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn dir))
+  in
   let execute ~argv ?replay ?(mcp = []) ?(variant_env = []) () =
     incr counter;
     let ledger =
@@ -161,6 +214,7 @@ let with_world name f =
         turn_timeout = 60.;
         total_timeout = 90.;
         mcp;
+        sandbox;
       }
     in
     ok
@@ -181,6 +235,7 @@ let acceptance agent () =
   (* (a) record *)
   let recorded = execute () in
   Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  check_sandboxed recorded;
   Alcotest.(check int) "model exchanges" 2 recorded.findings.exchanges;
   Alcotest.(check int) "upstream requests" 2 (List.length (F.requests up));
   Alcotest.(check (list string))
@@ -192,10 +247,16 @@ let acceptance agent () =
   (* (b) strict replay *)
   let replayed = execute ~replay:(strict recorded.run_dir) () in
   Alcotest.(check string) "replay outcome" "passed" (outcome_name replayed);
+  check_sandboxed replayed;
   Alcotest.(check int)
     "no divergences" 0
     (List.length replayed.findings.divergences);
   Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
+  (match replayed.violations with
+  | Collected [] -> ()
+  | Collected (v :: _) ->
+      Alcotest.failf "unexpected sandbox violation: %s %s" v.kind v.detail
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m);
   (* (c) changed system prompt *)
   Unix.putenv prompt_variable "You are a terse assistant.";
   Fun.protect ~finally:(fun () -> Unix.putenv prompt_variable "") @@ fun () ->
@@ -220,13 +281,6 @@ let acceptance agent () =
 
 (* MCP: the agent reaches a stdio server through [bactrian mcp-shim]. The
    recording is replayed with the server unavailable. *)
-
-(* dune gives the paths of the executables relative to the test's directory. *)
-let executable variable =
-  match Sys.getenv_opt variable with
-  | Some p when Filename.is_relative p -> Filename.concat (Sys.getcwd ()) p
-  | Some p -> p
-  | None -> Alcotest.failf "%s is not set (run through dune)" variable
 
 type era = { label : string; fake : string; protocol : string; requests : int }
 
@@ -347,12 +401,12 @@ let mcp_flags_acceptance agent era () =
   let out = Filename.concat dir "replay-out.json" in
   let command =
     Printf.sprintf
-      "cd %s && %s replay %s --json --env AGENT_MCP_COMMAND --env \
+      "cd %s && %s replay %s --json --sandbox %s --env AGENT_MCP_COMMAND --env \
        AGENT_MCP_PROTOCOL --env %s -- %s > %s"
       (Filename.quote dir)
       (Filename.quote (executable "BACTRIAN_EXE"))
       (Filename.quote (Filename.basename recorded.run_dir))
-      prompt_variable
+      sandbox_flag prompt_variable
       (String.concat " " (List.map Filename.quote argv))
       (Filename.quote out)
   in
@@ -371,6 +425,9 @@ let mcp_flags_acceptance agent era () =
     Yojson.Safe.from_file
       (Filename.concat (to_string (member "run_dir" json)) "meta.json")
   in
+  Alcotest.(check bool)
+    "the replay was sandboxed" sandbox_available
+    (to_bool (member "applied" (member "sandbox" meta)));
   Alcotest.(check string)
     "the replay's meta.json lists the server, without its command"
     {|[{"name":"weather","transport":"stdio","policy":"replay"}]|}

@@ -47,6 +47,10 @@ type t = {
   normalise : string list;  (** Regexes masked before hashing. *)
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
+  sandbox_allow_write : string list;
+      (** More writable paths, relative to the experiment file. *)
+  sandbox_deny_read : string list;
+      (** More unreadable paths, relative to the experiment file. *)
   faketime : bool;
   caps_usd : (string * float) list;
   pricing : string option;  (** Price file, relative to the experiment file. *)
@@ -76,17 +80,21 @@ val decode : Canon.t -> (t, error list) result
       [policy] (default [record], never [replay]). Names are letters, digits,
       ['_'] and ['-'], and no two HTTP servers may share a {!mcp_http_variable}.
     - [normalise], [redact]: lists of regular expressions
-    - [sandbox: auto|strict|off] (default auto), [clock: {faketime: auto|off}]
-      (default auto), [caps_usd: {provider: n}] ([provider] is one of
-      {!Pricing.providers}), [pricing] (a price file, see {!Price_file})
+    - [sandbox: auto|strict|off] (default auto) or
+      [sandbox: {mode, allow_write, deny_read}] (design §5.3),
+      [clock: {faketime: auto|off}] (default auto), [caps_usd: {provider: n}]
+      ([provider] is one of {!Pricing.providers}), [pricing] (a price file, see
+      {!Price_file})
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
 
 val reserved_env : string list
 (** The variables bactrian sets in a run's environment: [SIM_NOW], [TZ],
     [BACTRIAN_RUN_ID], [BACTRIAN_STATE_DIR], the four provider base URLs and the
-    four provider key placeholders, and, in a run with MCP servers,
-    [BACTRIAN_MCP_URL]. See also {!reserved_env_prefixes}. *)
+    four provider key placeholders, [HOME], [XDG_CACHE_HOME], [XDG_CONFIG_HOME],
+    [XDG_DATA_HOME], [npm_config_cache], [TMPDIR], [PYTHONDONTWRITEBYTECODE]
+    and, in a run with MCP servers, [BACTRIAN_MCP_URL]. See also
+    {!reserved_env_prefixes}. *)
 
 val reserved_env_prefixes : string list
 (** Prefixes of further variables bactrian sets: [BACTRIAN_MCP_HTTP_]. *)
@@ -123,8 +131,7 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce (design §5.3:
-    the sandbox under [auto], egress and faketime, and [mcp] servers when
-    [intercept] leaves out [mcp]), each starting with the setting's name and a
-    colon. [sandbox: strict] is not listed: it is refused outright where the run
-    starts. *)
+(** One line per setting this build accepts but does not enforce (egress and
+    faketime, and [mcp] servers when [intercept] leaves out [mcp]), each
+    starting with the setting's name and a colon. The sandbox is enforced, and a
+    run it could not cover is labelled instead (design §5.3). *)

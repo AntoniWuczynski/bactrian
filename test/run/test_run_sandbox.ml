@@ -1,0 +1,346 @@
+(* Runs inside the real operating-system sandbox (design §5.3): sandbox-exec on
+   macOS, bubblewrap on Linux. Skipped, with a message, on a host that has
+   neither. *)
+
+open Bactrian_core
+open Bactrian_runtime
+open Run_support
+module F = Fake_upstream
+
+let on_path name =
+  List.exists
+    (fun dir ->
+      (not (String.equal dir "")) && Sys.file_exists (Filename.concat dir name))
+    (String.split_on_char ':'
+       (Option.value (Sys.getenv_opt "PATH") ~default:""))
+
+let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+let available = macos || on_path "bwrap"
+
+let sandboxed name f () =
+  if available then with_ctx name f ()
+  else begin
+    print_endline "no sandbox-exec or bwrap on this host: skipped";
+    Alcotest.skip ()
+  end
+
+let root ctx = Filename.concat (Eio.Path.native_exn ctx.dir) ".bactrian"
+
+let strict ?(deny_read = []) ctx =
+  match
+    Sandbox.preflight ~env:ctx.env
+      ~warn:(fun w -> Alcotest.failf "unexpected warning: %s" w)
+      {
+        mode = `Strict;
+        allow_write = [];
+        deny_read;
+        bactrian_exe = bactrian_bin;
+        bactrian_dir = root ctx;
+      }
+  with
+  | Ok s -> s
+  | Error m -> Alcotest.failf "preflight: %s" m
+
+let meta (r : Run.result) = Yojson.Safe.from_file (file r "meta.json")
+
+let test_record_and_replay =
+  sandboxed "sandbox-cycle" @@ fun ctx ->
+  let sandbox = strict ctx in
+  let recorded = ok (execute ctx { (config ()) with sandbox }) in
+  Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  Alcotest.(check string)
+    "labelled" {|{"mode":"strict","applied":true}|}
+    (Yojson.Safe.to_string (Yojson.Safe.Util.member "sandbox" (meta recorded)));
+  let env = read (file recorded "state/env.json") in
+  Alcotest.(check bool)
+    "real key never inside" false
+    (contains env real_openai_key);
+  let replay : Run.replay =
+    {
+      from = recorded.run_id;
+      matcher = Strict;
+      allow_reorder = false;
+      timing = Fast;
+    }
+  in
+  let replayed =
+    ok (execute ctx { (config ~replay ~turns:[] ()) with sandbox })
+  in
+  Alcotest.(check string) "replay outcome" "passed" (outcome_name replayed);
+  Alcotest.(check int)
+    "no divergences" 0
+    (List.length replayed.findings.divergences);
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests ctx.up))
+
+(* An agent that tries to leave: each attempt's result is its reply. *)
+let escape_agent =
+  {|
+import json, os, socket, sys
+
+def send(m):
+    sys.stdout.write(json.dumps(m) + "\n")
+    sys.stdout.flush()
+
+def attempt(f):
+    try:
+        f()
+        return "ok"
+    except OSError:
+        return "denied"
+
+def public():
+    socket.create_connection(("1.1.1.1", 443), timeout=5).close()
+
+def home():
+    open(os.environ["REAL_HOME_FILE"], "w").close()
+
+def secret():
+    open(os.environ["SECRET_FILE"]).read()
+
+def masked():
+    open(os.path.join(os.path.dirname(os.environ["SECRET_FILE"]), "new"), "w").close()
+
+def state():
+    open(os.path.join(os.environ["BACTRIAN_STATE_DIR"], "ok"), "w").close()
+
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        result = {"public": attempt(public), "home": attempt(home),
+                  "secret": attempt(secret), "masked": attempt(masked),
+                  "state": attempt(state)}
+        send({"v": 1, "type": "reply", "turn": m["turn"],
+              "content": json.dumps(result, sort_keys=True)})
+    elif m["type"] == "end":
+        break
+|}
+
+let real_home () =
+  match Sys.getenv_opt "HOME" with Some h -> h | None -> Alcotest.fail "HOME"
+
+let test_escapes_fail =
+  sandboxed "sandbox-escape" @@ fun ctx ->
+  let secret_dir =
+    Filename.concat
+      (Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn ctx.dir))
+      "secret"
+  in
+  Unix.mkdir secret_dir 0o700;
+  let secret = Filename.concat secret_dir "key" in
+  Out_channel.with_open_bin secret (fun oc -> output_string oc "s3cret");
+  let home_file =
+    Filename.concat (real_home ())
+      (Printf.sprintf ".bactrian-sandbox-test-%d" (Unix.getpid ()))
+  in
+  Fun.protect ~finally:(fun () ->
+      if Sys.file_exists home_file then Sys.remove home_file)
+  @@ fun () ->
+  let sandbox = strict ~deny_read:[ secret_dir ] ctx in
+  let r =
+    ok
+      (execute ctx
+         {
+           (config ~agent:[ "python3"; "-I"; "-c"; escape_agent ] ()) with
+           sandbox;
+           variant_env =
+             [ ("REAL_HOME_FILE", home_file); ("SECRET_FILE", secret) ];
+         })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  let reply =
+    List.find_map
+      (fun l ->
+        let j = Yojson.Safe.from_string l in
+        match Yojson.Safe.Util.(to_string (member "type" j)) with
+        | "reply" -> Some Yojson.Safe.Util.(to_string (member "content" j))
+        | _ -> None)
+      (lines (file r "trace.jsonl"))
+  in
+  Alcotest.(check (option string))
+    "every escape denied, the state dir writable"
+    (Some
+       {|{"home": "denied", "masked": "denied", "public": "denied", "secret": "denied", "state": "ok"}|})
+    reply;
+  Alcotest.(check bool) "nothing written home" false (Sys.file_exists home_file);
+  Alcotest.(check bool)
+    "nothing written in the masked directory" false
+    (Sys.file_exists (Filename.concat secret_dir "new"));
+  match r.violations with
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+  | Collected vs when macos ->
+      List.iter
+        (fun (v : Sandbox_log.violation) ->
+          Printf.printf "violation: %s %s\n" v.kind v.detail)
+        vs;
+      let seen kind needle =
+        List.exists
+          (fun (v : Sandbox_log.violation) ->
+            String.equal v.kind kind && contains v.detail needle)
+          vs
+      in
+      Alcotest.(check bool) "network" true (seen "network-outbound" ":443");
+      Alcotest.(check bool)
+        "home write" true
+        (seen "file-write-create" (Filename.basename home_file));
+      Alcotest.(check bool)
+        "secret read" true
+        (seen "file-read-data" "/secret/key");
+      Alcotest.(check bool)
+        "in the trace" true
+        (List.mem "sandbox_violation" (trace_types r))
+  | Collected vs ->
+      (* Linux reports only relay failures, and these attempts make none. *)
+      Alcotest.(check int) "no relay failures" 0 (List.length vs)
+
+(* Preflight failures, on any host: a probe that cannot run is a sandbox that
+   does not work. *)
+
+let preflight ctx mode ~warn =
+  Sandbox.preflight ~env:ctx.env ~warn
+    {
+      mode;
+      allow_write = [];
+      deny_read = [];
+      bactrian_exe = "/usr/bin/false";
+      bactrian_dir = root ctx;
+    }
+
+let test_strict_fails_closed =
+  with_ctx "sandbox-strict" @@ fun ctx ->
+  match
+    preflight ctx `Strict ~warn:(fun w -> Alcotest.failf "warned: %s" w)
+  with
+  | Ok _ -> Alcotest.fail "a broken sandbox passed the strict preflight"
+  | Error m ->
+      Alcotest.(check bool)
+        "says why" true
+        (contains m "sandbox: strict, but the sandbox is unavailable")
+
+let test_auto_falls_back =
+  with_ctx "sandbox-auto" @@ fun ctx ->
+  let warnings = ref [] in
+  match preflight ctx `Auto ~warn:(fun w -> warnings := w :: !warnings) with
+  | Error m -> Alcotest.failf "auto must not stop: %s" m
+  | Ok t ->
+      let l = Sandbox.label t in
+      Alcotest.(check bool) "not applied" false l.applied;
+      Alcotest.(check bool) "has a reason" true (Option.is_some l.reason);
+      Alcotest.(check int) "warned once" 1 (List.length !warnings);
+      let r = ok (execute ctx { (config ()) with sandbox = t }) in
+      Alcotest.(check string) "the run still passes" "passed" (outcome_name r);
+      Alcotest.(check bool)
+        "labelled unsandboxed" false
+        Yojson.Safe.Util.(
+          to_bool (member "applied" (member "sandbox" (meta r))))
+
+let test_off_probes_nothing =
+  with_ctx "sandbox-off" @@ fun ctx ->
+  match preflight ctx `Off ~warn:(fun w -> Alcotest.failf "warned: %s" w) with
+  | Error m -> Alcotest.failf "off: %s" m
+  | Ok t ->
+      Alcotest.(check string)
+        "label" {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
+        (Yojson.Safe.to_string (Sandbox.label_json (Sandbox.label t)))
+
+(* The probe run outside any sandbox must be judged a failure: the preflight
+   cannot report a sandbox that does not enforce. *)
+let test_unsandboxed_probe_is_rejected () =
+  let dir = Filename.temp_dir "bactrian-probe" "" in
+  let outside = Filename.concat dir "outside"
+  and inside = Filename.concat dir "inside" in
+  Fun.protect ~finally:(fun () ->
+      List.iter
+        (fun f -> if Sys.file_exists f then Sys.remove f)
+        [ outside; inside ];
+      Unix.rmdir dir)
+  @@ fun () ->
+  let out = Filename.concat dir "report" in
+  let code =
+    Sys.command
+      (Printf.sprintf
+         "%s __sandbox-probe --port 9 --outside %s --inside %s > %s"
+         (Filename.quote bactrian_bin)
+         (Filename.quote outside) (Filename.quote inside) (Filename.quote out))
+  in
+  let line = String.trim (read out) in
+  Sys.remove out;
+  Alcotest.(check int) "probe exit" 0 code;
+  match Sandbox_probe.of_line line with
+  | Error m -> Alcotest.failf "report: %s" m
+  | Ok report -> (
+      let platform : Sandbox_policy.platform = if macos then Macos else Linux in
+      let host_netns =
+        match Unix.readlink "/proc/self/ns/net" with
+        | ns -> Some ns
+        | exception Unix.Unix_error _ -> None
+      in
+      match Sandbox_probe.judge platform ~host_netns report with
+      | Ok () -> Alcotest.fail "an unsandboxed probe was judged sandboxed"
+      | Error wrong ->
+          Alcotest.(check bool)
+            "the outside write is named" true
+            (List.mem "a write outside the state directory succeeded" wrong))
+
+let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
+  {
+    public;
+    listener = Ok ();
+    outside_write = Error "EPERM";
+    inside_write = Ok ();
+    netns;
+  }
+
+let test_judge () =
+  let judged platform ?host r =
+    Result.is_ok (Sandbox_probe.judge platform ~host_netns:host r)
+  in
+  Alcotest.(check bool) "macOS sandbox" true (judged Macos (report ()));
+  Alcotest.(check bool)
+    "an offline Mac is not a sandbox" false
+    (judged Macos (report ~public:(Error "ENETUNREACH") ()));
+  Alcotest.(check bool)
+    "a connection that went through" false
+    (judged Macos (report ~public:(Ok ()) ()));
+  Alcotest.(check bool)
+    "Linux in its own namespace" true
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]" ()));
+  Alcotest.(check bool)
+    "Linux in the host's namespace" false
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[1]" ()));
+  Alcotest.(check bool)
+    "Linux without a namespace reading" false
+    (judged Linux (report ~public:(Error "ENETUNREACH") ()));
+  Alcotest.(check bool)
+    "a listener that cannot be reached" false
+    (judged Macos { (report ()) with listener = Error "EPERM" });
+  Alcotest.(check bool)
+    "a state dir that cannot be written" false
+    (judged Macos { (report ()) with inside_write = Error "EPERM" });
+  Alcotest.(check bool)
+    "a write outside that worked" false
+    (judged Macos { (report ()) with outside_write = Ok () })
+
+let () =
+  Alcotest.run "run_sandbox"
+    [
+      ( "preflight",
+        [
+          Alcotest.test_case "strict fails closed" `Quick
+            test_strict_fails_closed;
+          Alcotest.test_case "auto falls back, labelled" `Slow
+            test_auto_falls_back;
+          Alcotest.test_case "off probes nothing" `Quick test_off_probes_nothing;
+          Alcotest.test_case "an unsandboxed probe is rejected" `Quick
+            test_unsandboxed_probe_is_rejected;
+          Alcotest.test_case "judging reports" `Quick test_judge;
+        ] );
+      ( "sandboxed",
+        [
+          Alcotest.test_case "record and replay inside the sandbox" `Slow
+            test_record_and_replay;
+          Alcotest.test_case "escapes fail and are reported" `Slow
+            test_escapes_fail;
+        ] );
+    ]

@@ -10,7 +10,7 @@ type parse_error =
   | Empty_agent
 
 let ( let* ) = Result.bind
-let log_variable = "BACTRIAN_SANDBOX_LOG"
+let log_variable = "BACTRIAN_SANDBOX_LOG_FD"
 
 (* Parsing *)
 
@@ -87,14 +87,16 @@ let violation_line ~port ~socket ~reason =
          ("reason", `String reason);
        ])
 
-(* One [save] per line: the file is opened for append and written with a
-   single call, so lines from concurrent connections do not interleave. *)
+(* One [write] per line on a descriptor opened for append, so lines from
+   concurrent connections do not interleave. *)
 let record ~log line =
   Option.iter
-    (fun path ->
+    (fun fd ->
+      let text = line ^ "\n" in
       try
-        Eio.Path.save ~create:(`If_missing 0o600) ~append:true path (line ^ "\n")
-      with Eio.Io _ as e ->
+        Eio_unix.Fd.use_exn "violation log" fd (fun fd ->
+            ignore (Unix.write_substring fd text 0 (String.length text) : int))
+      with (Eio.Io _ | Unix.Unix_error _) as e ->
         prerr_endline
           ("bactrian sandbox-init: cannot write the violation log: "
          ^ Printexc.to_string e))
@@ -214,30 +216,40 @@ let rec serve_all ~sw ~net ~log ~on_listening = function
       | Ok () -> serve_all ~sw ~net ~log ~on_listening rest
       | Error _ as failed -> failed)
 
-let spawn ~sw ~process_mgr ~stdout agent =
+let spawn ~sw ~process_mgr ~stdout ~hidden_fd agent =
   let env =
     Eio.Process.Env.override
       [ (log_variable, None) ]
       (Eio.Process.environment process_mgr)
   in
-  let fds =
-    [
-      (0, Eio_unix.Fd.stdin, `Blocking);
-      (1, stdout, `Blocking);
-      (2, Eio_unix.Fd.stderr, `Blocking);
-    ]
-  in
-  match Eio_unix.Process.spawn_unix ~sw process_mgr ~pgid:0 ~fds ~env agent with
+  match
+    let hidden =
+      Option.map
+        (fun n ->
+          let null = Unix.openfile "/dev/null" [ O_RDWR; O_CLOEXEC ] 0 in
+          (n, Eio_unix.Fd.of_unix ~sw ~close_unix:true null, `Blocking))
+        hidden_fd
+    in
+    let fds =
+      [
+        (0, Eio_unix.Fd.stdin, `Blocking);
+        (1, stdout, `Blocking);
+        (2, Eio_unix.Fd.stderr, `Blocking);
+      ]
+      @ Option.to_list hidden
+    in
+    Eio_unix.Process.spawn_unix ~sw process_mgr ~pgid:0 ~fds ~env agent
+  with
   | proc -> Ok proc
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Error (Spawn_failed (Printexc.to_string e))
 
 let run ?(on_listening = fun ~requested:_ ~bound:_ -> ())
-    ?(stdout = Eio_unix.Fd.stdout) ?log ~net ~process_mgr config =
+    ?(stdout = Eio_unix.Fd.stdout) ?log ?hidden_fd ~net ~process_mgr config =
   Eio.Switch.run @@ fun sw ->
   with_signal_forwarding @@ fun forward ->
   let* () = serve_all ~sw ~net ~log ~on_listening config.forwards in
-  let* proc = spawn ~sw ~process_mgr ~stdout config.agent in
+  let* proc = spawn ~sw ~process_mgr ~stdout ~hidden_fd config.agent in
   let pgid = Eio.Process.pid proc in
   (* The leader's death leaves its children behind unless the group goes too. *)
   Eio.Switch.on_release sw (fun () ->

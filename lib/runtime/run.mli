@@ -99,6 +99,11 @@ type config = {
           HTTP server, {!Mcp_proxy.http_variable} with its proxied URL.
           [meta.json] keeps each server's name, transport and policy, and
           nothing of its command, environment or URL ({!Mcp_meta}). *)
+  sandbox : Sandbox.t;
+      (** What the preflight decided ({!Sandbox.preflight}): the agent runs
+          inside the sandbox, or not, and [meta.json] records the
+          {!Sandbox.type-label} under [sandbox]. The MCP stdio servers are never
+          inside it. *)
 }
 
 val recorded_mcp :
@@ -119,6 +124,11 @@ type result = {
           model calls settled at plus its usage gaps, whatever other runs spend
           at the same time. Written to [meta.json] as [cost_usd], beside
           [latency_ms] and [tokens] (null when the trace has no model call). *)
+  sandbox : Sandbox.label;
+  violations : Sandbox.violations;
+      (** What the sandbox denied the agent, also in the trace as
+          [sandbox_violation] events and in [meta.json] under
+          [sandbox_violations] ([{collected, reason?, items}]). *)
 }
 
 val execute :
@@ -133,13 +143,16 @@ val execute :
   ledger:Ledger.t ->
   config ->
   (result, string) Stdlib.result
-(** Creates the run directory, cassette and state dir, builds the agent's
-    environment (design §5 step 2 minus egress, sandbox and libfaketime:
-    provider base URLs from the proxy, placeholder keys, SIM_NOW, TZ,
-    BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP variables, PATH, HOME, LANG,
-    TERM and the passthrough list, and nothing else), drives the turns, tears
-    down, derives and writes trace.jsonl and meta.json (atomically), and returns
-    the outcome.
+(** Creates the run directory, cassette, state directory and temporary directory
+    ([tmp], removed at teardown), builds the agent's environment (design §5 step
+    2 minus egress and libfaketime: provider base URLs from the proxy,
+    placeholder keys, SIM_NOW, TZ, BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP
+    variables, HOME and the XDG and npm cache variables inside the state
+    directory, TMPDIR, PYTHONDONTWRITEBYTECODE=1, PATH, LANG, TERM and the
+    passthrough list, and nothing else), starts the agent inside the sandbox
+    when [config.sandbox] says so, drives the turns, tears down, collects the
+    sandbox's violations, derives and writes trace.jsonl and meta.json
+    (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
     failure, unreadable fixtures, an invalid pattern): no agent was started.

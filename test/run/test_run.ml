@@ -39,7 +39,9 @@ let test_record =
   Alcotest.(check string) "meta run id" r.run_id (str "run_id");
   Alcotest.(check string) "meta outcome" "passed" (str "outcome");
   Alcotest.(check string) "meta clock" "contract_only" (str "clock");
-  Alcotest.(check string) "meta sandbox" "unsandboxed" (str "sandbox");
+  Alcotest.(check string)
+    "meta sandbox" {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
+    (Yojson.Safe.to_string (Yojson.Safe.Util.member "sandbox" meta));
   Alcotest.(check string) "meta scenario" "weather" (str "scenario");
   Alcotest.(check string)
     "meta version" Version.current (str "bactrian_version");
@@ -60,6 +62,12 @@ let allowed =
   [
     "PATH";
     "HOME";
+    "XDG_CACHE_HOME";
+    "XDG_CONFIG_HOME";
+    "XDG_DATA_HOME";
+    "npm_config_cache";
+    "TMPDIR";
+    "PYTHONDONTWRITEBYTECODE";
     "LANG";
     "TERM";
     "SIM_NOW";
@@ -158,6 +166,16 @@ let test_environment =
   Alcotest.(check string)
     "state dir" (file r "state")
     (value "BACTRIAN_STATE_DIR");
+  Alcotest.(check string)
+    "home is the state dir" (file r "state") (value "HOME");
+  Alcotest.(check string)
+    "caches" (file r "state/.cache") (value "XDG_CACHE_HOME");
+  Alcotest.(check string)
+    "npm cache" (file r "state/.npm") (value "npm_config_cache");
+  Alcotest.(check string) "temporary dir" (file r "tmp") (value "TMPDIR");
+  Alcotest.(check bool)
+    "temporary dir removed at teardown" false
+    (Sys.file_exists (file r "tmp"));
   List.iter
     (fun k ->
       let v = value k in

@@ -52,8 +52,8 @@ val read_manifest : _ Eio.Path.t -> (manifest, string option) result
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string
-      (** A spend cap of 0 everywhere, a missing key, no TLS, [sandbox: strict]
-          (this build has no sandbox). *)
+      (** A spend cap of 0 everywhere, a missing key, no TLS, a sandbox that
+          does not work under [sandbox: strict]. *)
   | Usage of string
       (** An unsupported agent, an unknown experiment to resume, a plan or
           fingerprint that no longer matches the experiment being resumed, an
@@ -67,6 +67,9 @@ val run_experiment :
   ?keys:(Model_proxy.provider * string) list ->
   ?upstream:(Model_proxy.provider -> Uri.t) ->
   ?connector:Upstream.connector ->
+  ?sandbox:Sandbox.mode ->
+  ?on_sandbox:(Sandbox.label -> unit) ->
+  bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
   experiment_file:string ->
   resume:string option ->
@@ -98,10 +101,16 @@ val run_experiment :
     names what changed. An exclusive lock on [experiments/<id>/run.lock] keeps a
     second process from running the same experiment.
 
-    [sandbox: strict] is [Environment] (exit 69): this build has no sandbox.
-    [warn] is called once per setting that is accepted but not enforced (see
-    {!Bactrian_core.Experiment.unenforced}) before the first run, and the same
-    lines are recorded in every run's [meta.json].
+    Before the first run, {!Sandbox.preflight} checks the sandbox once, in the
+    experiment's [sandbox] mode or in [sandbox] when given (the command line's
+    [--sandbox]), with its [allow_write] and [deny_read] paths taken relative to
+    the experiment file. [bactrian_exe] is the executable the probe re-runs. A
+    sandbox that does not work is [Environment] (exit 69) under [strict], and a
+    warning and unsandboxed runs under [auto]. [on_sandbox] is called with the
+    label every run will carry. [warn] is also called once per setting that is
+    accepted but not enforced (see {!Bactrian_core.Experiment.unenforced})
+    before the first run, and the same lines are recorded in every run's
+    [meta.json].
 
     Cancelling the calling fibre (see {!Interrupt}) cancels the runs in flight,
     marks them [Interrupted], writes the manifest, and re-raises the

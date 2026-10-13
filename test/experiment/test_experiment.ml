@@ -234,14 +234,12 @@ let test_unenforced () =
       (fun w -> List.hd (String.split_on_char ':' w))
       (Experiment.unenforced t)
   in
-  Alcotest.check strings "defaults"
-    [ "sandbox"; "egress"; "clock" ]
+  Alcotest.check strings "defaults" [ "egress"; "clock" ]
     (names (decoded (doc "")));
-  Alcotest.check strings "mcp servers are enforced"
-    [ "sandbox"; "egress"; "clock" ]
+  Alcotest.check strings "mcp servers are enforced" [ "egress"; "clock" ]
     (names (decoded (doc {|, "mcp": {"calendar": {"command": ["c"]}}|})));
   Alcotest.check strings "mcp servers that are not intercepted"
-    [ "sandbox"; "mcp"; "clock" ]
+    [ "mcp"; "clock" ]
     (names
        (decoded
           (doc
@@ -251,15 +249,37 @@ let test_unenforced () =
        (decoded
           (doc
              {|, "sandbox": "off", "intercept": ["model", "fixtures"], "clock": {"faketime": "off"}|})));
-  Alcotest.check strings "strict is refused elsewhere, not listed here"
+  Alcotest.check strings "the sandbox is enforced, never listed"
     [ "egress"; "clock" ]
     (names (decoded (doc {|, "sandbox": "strict"|})))
+
+(* The sandbox is a mode or a mapping with more paths. *)
+let test_sandbox_forms () =
+  let t = decoded (doc {|, "sandbox": "off"|}) in
+  Alcotest.(check bool) "mode only" true (t.sandbox = `Off);
+  Alcotest.(check (list string)) "no paths" [] t.sandbox_deny_read;
+  let t =
+    decoded
+      (doc
+         {|, "sandbox": {"mode": "strict", "allow_write": ["out"], "deny_read": ["/secret", "keys"]}|})
+  in
+  Alcotest.(check bool) "mode" true (t.sandbox = `Strict);
+  Alcotest.(check (list string)) "allow_write" [ "out" ] t.sandbox_allow_write;
+  Alcotest.(check (list string))
+    "deny_read" [ "/secret"; "keys" ] t.sandbox_deny_read;
+  let t = decoded (doc {|, "sandbox": {"deny_read": ["k"]}|}) in
+  Alcotest.(check bool) "mode defaults to auto" true (t.sandbox = `Auto);
+  match errors (doc {|, "sandbox": {"mode": "auto", "network": true}|}) with
+  | [ { path = "sandbox.network"; message = "unknown field" } ] -> ()
+  | es -> Alcotest.failf "got %a" pp_errors es
 
 (* A variant cannot set a variable bactrian sets itself. *)
 let test_reserved_env () =
   let reserved = Experiment.reserved_env in
   Alcotest.(check bool) "TZ" true (List.mem "TZ" reserved);
   Alcotest.(check bool) "key" true (List.mem "OPENAI_API_KEY" reserved);
+  Alcotest.(check bool) "home" true (List.mem "HOME" reserved);
+  Alcotest.(check bool) "temporary dir" true (List.mem "TMPDIR" reserved);
   Alcotest.(check bool) "mcp url" true (List.mem "BACTRIAN_MCP_URL" reserved);
   Alcotest.(check bool)
     "mcp http prefix" true
@@ -355,6 +375,7 @@ let () =
           Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
+          Alcotest.test_case "sandbox forms" `Quick test_sandbox_forms;
         ] );
       ( "errors",
         [

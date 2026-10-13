@@ -33,8 +33,12 @@ val parse : string list -> (config, parse_error) result
 val describe_parse_error : parse_error -> string
 
 val log_variable : string
-(** [BACTRIAN_SANDBOX_LOG]: the file {!run}'s [log] is read from by the caller.
-    {!run} removes it from the agent's environment. *)
+(** [BACTRIAN_SANDBOX_LOG_FD]: the number of a descriptor the forwarder inherits
+    from bactrian, open for append on the run's violation log, which it passes
+    to {!run} as [log] and [hidden_fd]. The log lies outside every path the
+    sandbox lets the agent write, and the agent does not inherit the descriptor,
+    so the agent cannot add lines to it. {!run} removes the variable from the
+    agent's environment. *)
 
 type error =
   | Listen_failed of { port : int; reason : string }
@@ -45,7 +49,8 @@ val describe_error : error -> string
 val run :
   ?on_listening:(requested:int -> bound:Eio.Net.Sockaddr.stream -> unit) ->
   ?stdout:Eio_unix.Fd.t ->
-  ?log:Eio.Fs.dir_ty Eio.Path.t ->
+  ?log:Eio_unix.Fd.t ->
+  ?hidden_fd:int ->
   net:_ Eio.Net.t ->
   process_mgr:_ Eio_unix.Process.mgr ->
   config ->
@@ -60,16 +65,18 @@ val run :
     Each connection is relayed by two copy fibres in its own switch, with
     half-close in each direction, so one failing connection is torn down alone.
     A connection whose socket cannot be reached is closed after one line
-    [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}] is appended to
-    [log] (nothing is written without [log]). An I/O error in the middle of a
-    relayed connection just ends that connection.
+    [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}] is written to
+    [log], a descriptor open for append (nothing is written without [log]). An
+    I/O error in the middle of a relayed connection just ends that connection.
 
     The agent inherits stdin, stdout and stderr and the forwarder's environment
-    minus {!log_variable}, and runs in its own process group. SIGTERM and SIGINT
-    received by the forwarder are sent to that group while it runs. When the
-    agent exits, the listeners and open connections are dropped and the group is
-    killed, so no stray child outlives the call. Must be called inside
-    [Eio_main.run].
+    minus {!log_variable}, and runs in its own process group. Descriptor
+    [hidden_fd], when given, is [/dev/null] in the agent: an inherited
+    descriptor is not closed on exec, so this is how the one [log] came from
+    stays out of the agent's reach. SIGTERM and SIGINT received by the forwarder
+    are sent to that group while it runs. When the agent exits, the listeners
+    and open connections are dropped and the group is killed, so no stray child
+    outlives the call. Must be called inside [Eio_main.run].
 
     [on_listening] is called once per listener after it is bound, with the
     requested port and the address actually bound, and [stdout] replaces the

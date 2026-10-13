@@ -225,14 +225,15 @@ let test_lock =
     (input_line (Unix.in_channel_of_descr stdout_r));
   mentions "already running" (refused (go ~resume:(Some s.experiment_id) ctx))
 
-(* Settings this build parses but cannot enforce: a strict sandbox stops
-   the experiment, the others are listed. *)
+(* A strict sandbox that does not work stops the experiment before any run
+   (the probe executable here does not exist). Settings this build parses but
+   cannot enforce are listed. *)
 
 let test_sandbox_strict =
   with_ctx "strict" @@ fun ctx ->
   write ctx "exp.json" (experiment_json ctx ~extra:{|, "sandbox": "strict"|} ());
-  match go ctx with
-  | Error (E.Environment m) -> mentions "no sandbox" m
+  match go ~sandbox:None ctx with
+  | Error (E.Environment m) -> mentions "the sandbox is unavailable" m
   | Ok _ | Error (E.Configuration _ | E.Usage _) ->
       Alcotest.fail "sandbox: strict must stop with an environment error"
 
@@ -241,7 +242,7 @@ let test_unenforced_warned_and_recorded =
   let warnings = ref [] in
   let s = ok (go ~warn:(fun w -> warnings := w :: !warnings) ctx) in
   let warnings = List.rev !warnings in
-  Alcotest.(check bool) "warned" true (List.length warnings >= 3);
+  Alcotest.(check bool) "warned" true (List.length warnings >= 2);
   List.iter
     (fun id ->
       Alcotest.(check (list string))

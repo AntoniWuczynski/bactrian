@@ -287,7 +287,8 @@ let test_preflight =
       Alcotest.fail "expected Environment");
   write ctx "exp.json" (experiment_json ctx ());
   match
-    E.run_experiment ~root:ctx.root ~keys:[] ~env:ctx.env
+    E.run_experiment ~root:ctx.root ~keys:[] ~sandbox:`Off
+      ~bactrian_exe:"/nonexistent/bactrian" ~env:ctx.env
       ~experiment_file:(ctx.dir ^ "/exp.json") ~resume:None ()
   with
   | Error (E.Environment m) ->

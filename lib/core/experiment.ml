@@ -48,6 +48,8 @@ type t = {
   normalise : string list;
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
+  sandbox_allow_write : string list;
+  sandbox_deny_read : string list;
   faketime : bool;
   caps_usd : (string * float) list;
   pricing : string option;
@@ -345,9 +347,24 @@ let caps_usd ~path c =
   and+ (_ : unit list) = collect (List.map known names) in
   caps
 
-let sandbox =
+let sandbox_mode =
   enum ~what:"sandbox mode"
     [ ("auto", `Auto); ("strict", `Strict); ("off", `Off) ]
+
+let sandbox ~path c =
+  match (c : Canon.t) with
+  | String _ ->
+      let+ mode = sandbox_mode ~path c in
+      (mode, [], [])
+  | Object _ ->
+      object_ ~path c (fun r ->
+          let+ mode = default r "mode" `Auto sandbox_mode
+          and+ allow_write = default r "allow_write" [] (list non_empty_string)
+          and+ deny_read = default r "deny_read" [] (list non_empty_string) in
+          (mode, allow_write, deny_read))
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ ->
+      fail ~path
+        "expected auto, strict, off or a mapping {mode, allow_write, deny_read}"
 
 let reserved_env =
   [
@@ -364,6 +381,13 @@ let reserved_env =
     "ANTHROPIC_API_KEY";
     "GEMINI_API_KEY";
     "OPENROUTER_API_KEY";
+    "HOME";
+    "XDG_CACHE_HOME";
+    "XDG_CONFIG_HOME";
+    "XDG_DATA_HOME";
+    "npm_config_cache";
+    "TMPDIR";
+    "PYTHONDONTWRITEBYTECODE";
   ]
 
 let reserved_env_prefixes = [ mcp_http_prefix ]
@@ -441,7 +465,8 @@ let decode c =
       and+ mcp = default r "mcp" [] mcp_servers
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
-      and+ sandbox = default r "sandbox" `Auto sandbox
+      and+ sandbox, sandbox_allow_write, sandbox_deny_read =
+        default r "sandbox" (`Auto, [], []) sandbox
       and+ faketime = default r "clock" true clock
       and+ caps_usd = default r "caps_usd" [] caps_usd
       and+ pricing = optional r "pricing" non_empty_string
@@ -462,6 +487,8 @@ let decode c =
         normalise;
         redact;
         sandbox;
+        sandbox_allow_write;
+        sandbox_deny_read;
         faketime;
         caps_usd;
         pricing;
@@ -473,12 +500,6 @@ let decode c =
 let unenforced t =
   List.concat
     [
-      (match t.sandbox with
-      | `Auto ->
-          [
-            "sandbox: auto (this build has no sandbox, so runs are unsandboxed)";
-          ]
-      | `Strict | `Off -> []);
       (if List.mem `Egress t.intercept then
          [
            "egress: the agent's network access is neither blocked nor recorded";

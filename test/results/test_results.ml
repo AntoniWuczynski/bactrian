@@ -79,7 +79,8 @@ let with_experiment name f () =
   write ctx0 "exp.json" (experiment_json ~compare:default_compare);
   let summary =
     match
-      E.run_experiment ~root:ctx0.root
+      E.run_experiment ~root:ctx0.root ~sandbox:`Off
+        ~bactrian_exe:"/nonexistent/bactrian"
         ~keys:[ (P.Openai, "real-key") ]
         ~upstream:(fun _ -> Uri.of_string (F.base_url up))
         ~env ~experiment_file:(dir ^ "/exp.json") ~resume:None ()

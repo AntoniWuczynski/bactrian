@@ -230,13 +230,19 @@ experiment cannot be resumed.
   bactrian: no experiment "nope"
   [64]
 
-This build has no sandbox, so sandbox: strict stops before anything runs.
+The sandbox mode is auto, strict or off, on the command line as in the
+experiment.
 
-  $ cp capped.yaml strict.yaml
-  $ echo 'sandbox: strict' >> strict.yaml
-  $ OPENAI_API_KEY=k bactrian run strict.yaml
-  bactrian: sandbox: strict was asked for but this build has no sandbox, so runs would be unsandboxed: use sandbox: auto or off
-  [69]
+  $ bactrian run capped.yaml --sandbox maybe 2> err.txt
+  [64]
+  $ cat err.txt
+  Usage: bactrian run [--help] [--json] [--resume=ID] [--sandbox=MODE]
+         [OPTION]… EXPERIMENT
+  bactrian: option --sandbox: invalid value maybe, expected one of auto, strict
+            or off
+  $ bactrian replay nope --sandbox off -- true
+  bactrian: no cassette for run "nope"
+  [64]
 
 A tab in indentation is reported where it is, with the fix.
 

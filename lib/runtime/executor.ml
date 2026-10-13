@@ -430,7 +430,7 @@ let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
   in
   { name; server; policy = s.policy }
 
-let run_config ~fs (l : loaded) (scenario : Scenario.t) ~scenario_dir
+let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
     (variant : Experiment.variant) : Run.config =
   {
     agent = l.argv;
@@ -463,6 +463,7 @@ let run_config ~fs (l : loaded) (scenario : Scenario.t) ~scenario_dir
       (if List.mem `Mcp l.experiment.intercept then
          List.map (mcp_config ~fs l) l.experiment.mcp
        else []);
+    sandbox;
   }
 
 (* One process runs an experiment at a time: two would both start the pending
@@ -542,8 +543,9 @@ let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
 
 let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
-    ?(upstream = P.default_upstream) ?connector ~env ~experiment_file ~resume ()
-    =
+    ?(upstream = P.default_upstream) ?connector ?sandbox
+    ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env
+    ~experiment_file ~resume () =
   let fs = Eio.Stdenv.fs env in
   let root =
     match root with
@@ -552,15 +554,6 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   in
   let* l = load ~fs ~experiment_file in
   let experiment = l.experiment in
-  let* () =
-    match experiment.sandbox with
-    | `Strict ->
-        Error
-          (Environment
-             "sandbox: strict was asked for but this build has no sandbox, so \
-              runs would be unsandboxed: use sandbox: auto or off")
-    | `Auto | `Off -> Ok ()
-  in
   let planned =
     plan ~seed:experiment.seed ~scenarios:(List.map fst l.scenarios)
       ~variants:
@@ -574,6 +567,22 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume l planned
   in
   let* () = preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector in
+  let in_dir path =
+    if Filename.is_relative path then Filename.concat l.dir path else path
+  in
+  let* sandbox =
+    Result.map_error
+      (fun m -> Environment m)
+      (Sandbox.preflight ~env ~warn
+         {
+           mode = Option.value sandbox ~default:experiment.sandbox;
+           allow_write = List.map in_dir experiment.sandbox_allow_write;
+           deny_read = List.map in_dir experiment.sandbox_deny_read;
+           bactrian_exe;
+           bactrian_dir = Eio.Path.native_exn root;
+         })
+  in
+  on_sandbox (Sandbox.label sandbox);
   let* jobs =
     List.mapi
       (fun i (p : planned) ->
@@ -586,7 +595,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         | Some scenario, Some variant ->
             Ok
               ( i,
-                run_config ~fs l scenario
+                run_config ~fs ~sandbox l scenario
                   ~scenario_dir:
                     (Filename.concat l.dir (Filename.dirname p.scenario))
                   variant )

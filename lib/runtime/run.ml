@@ -54,6 +54,7 @@ type config = {
   turn_timeout : float;
   total_timeout : float;
   mcp : Mcp_proxy.config list;
+  sandbox : Sandbox.t;
 }
 
 type result = {
@@ -62,6 +63,8 @@ type result = {
   run_dir : string;
   findings : P.findings;
   spend : float;
+  sandbox : Sandbox.label;
+  violations : Sandbox.violations;
 }
 
 let ( let* ) = Result.bind
@@ -235,10 +238,25 @@ let recorded_mcp store ~from =
 (* The agent's environment *)
 
 let base_env =
-  [ "PATH"; "HOME"; "LANG"; "TERM" ]
+  [ "PATH"; "LANG"; "TERM" ]
   |> List.filter_map (fun k -> Option.map (fun v -> (k, v)) (Sys.getenv_opt k))
 
-let build_env config ~proxy ~token ~run_id ~state_dir ~sim_now =
+(* The agent's home and caches are its state directory, and its temporary files
+   go to the run's temporary directory, sandboxed or not, so the environment
+   is the same either way (design §5 step 2). *)
+let home_env ~state_dir ~temp_dir =
+  let under = Filename.concat state_dir in
+  [
+    ("HOME", state_dir);
+    ("XDG_CACHE_HOME", under ".cache");
+    ("XDG_CONFIG_HOME", under ".config");
+    ("XDG_DATA_HOME", under ".local/share");
+    ("npm_config_cache", under ".npm");
+    ("TMPDIR", temp_dir);
+    ("PYTHONDONTWRITEBYTECODE", "1");
+  ]
+
+let build_env config ~proxy ~token ~run_id ~state_dir ~temp_dir ~sim_now =
   let ours =
     [
       ("SIM_NOW", sim_now);
@@ -246,6 +264,7 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~sim_now =
       ("BACTRIAN_RUN_ID", run_id);
       ("BACTRIAN_STATE_DIR", state_dir);
     ]
+    @ home_env ~state_dir ~temp_dir
     @ List.concat_map
         (fun (p, _, url_var) ->
           [
@@ -348,8 +367,29 @@ let decide_outcome ~replay (findings : P.findings) failure =
 
 (* Files *)
 
+let violations_json : Sandbox.violations -> Yojson.Safe.t = function
+  | Collected vs ->
+      `Assoc
+        [
+          ("collected", `Bool true);
+          ( "items",
+            `List
+              (List.map
+                 (fun (v : Sandbox_log.violation) ->
+                   `Assoc
+                     [ ("kind", `String v.kind); ("detail", `String v.detail) ])
+                 vs) );
+        ]
+  | Not_collected reason ->
+      `Assoc
+        [
+          ("collected", `Bool false);
+          ("reason", `String reason);
+          ("items", `List []);
+        ]
+
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
-    ~latency_ms ~tokens ~normalise ~redact ~replay_of =
+    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -359,7 +399,8 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
        ("bactrian_version", `String Version.current);
        ("sim_now", `String sim_now);
        ("clock", `String "contract_only");
-       ("sandbox", `String "unsandboxed");
+       ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
+       ("sandbox_violations", violations_json violations);
        ("outcome", `String (outcome_kind outcome));
        ( "reason",
          match outcome_reason outcome with Some r -> `String r | None -> `Null
@@ -503,6 +544,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let state_dir = Eio.Path.(run_dir / "state") in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 state_dir;
   let state_dir_path = Filename.concat run_dir_path "state" in
+  let temp_dir = Eio.Path.(run_dir / "tmp") in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 temp_dir;
+  let temp_dir_path = Filename.concat run_dir_path "tmp" in
   let* () = copy_fixtures ~env ~state_dir config.fixtures in
   let header : Cassette.header =
     {
@@ -532,6 +576,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let events = ref [] in
   let add e = events := e :: !events in
   let registered = ref false in
+  let violations = ref None in
   let findings_cell = ref None in
   let unregister () =
     match !findings_cell with
@@ -569,12 +614,29 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       };
     registered := true;
     Fun.protect ~finally:(fun () -> ignore (unregister ())) @@ fun () ->
+    let* sandboxed, sandbox_started =
+      Result.map_error
+        (fun m -> "sandbox: " ^ m)
+        (Sandbox.start ~sw config.sandbox
+           {
+             run_id;
+             run_dir = run_dir_path;
+             state_dir = state_dir_path;
+             temp_dir = temp_dir_path;
+             port = P.port proxy;
+             listen_unix =
+               (fun path ->
+                 P.listen_unix proxy ~sw ~net:(Eio.Stdenv.net env) ~token path);
+           }
+           config.agent)
+    in
     let driver_config : D.config =
       {
-        argv = config.agent;
+        argv = sandboxed.argv;
         env =
           build_env config ~proxy ~token ~run_id ~state_dir:state_dir_path
-            ~sim_now;
+            ~temp_dir:temp_dir_path ~sim_now
+          @ sandboxed.env;
         cwd = Some Eio.Path.(Eio.Stdenv.fs env / config.cwd);
         stderr_path = Eio.Path.(run_dir / "agent.stderr");
         turn_timeout = config.turn_timeout;
@@ -594,9 +656,20 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         }
     in
     let session =
-      D.with_agent ~process_mgr:(Eio.Stdenv.process_mgr env)
+      D.with_agent ~fds:sandboxed.fds ~process_mgr:(Eio.Stdenv.process_mgr env)
         ~clock driver_config (fun d -> converse ~t_ms ~add d ~start turns)
     in
+    let collected = Sandbox.collect ~env sandbox_started in
+    violations := Some collected;
+    (match collected with
+    | Collected vs ->
+        List.iter
+          (fun (v : Sandbox_log.violation) ->
+            add
+              (Trace_builder.Got_violation
+                 { t_ms = t_ms (); kind = v.kind; detail = v.detail }))
+          vs
+    | Not_collected _ -> ());
     let failure =
       match session with
       | Error e -> Some (describe_driver_error e)
@@ -642,6 +715,16 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       | None -> decide_outcome ~replay findings failure
     in
     let spend = Ledger.spent_by ledger ~owner:run_id in
+    let label = Sandbox.label config.sandbox in
+    let violations : Sandbox.violations =
+      match (!violations, label.applied) with
+      | Some v, _ -> v
+      | None, true -> Not_collected "the run stopped before its agent did"
+      | None, false -> Collected []
+    in
+    (match Eio.Path.rmtree ~missing_ok:true temp_dir with
+    | () -> ()
+    | exception Eio.Io _ -> ());
     let entries =
       Trace_builder.build
         {
@@ -702,10 +785,21 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~latency_ms:(Report_data.latency_ms entries)
               ~tokens:(Report_data.tokens entries)
               ~normalise:normalise_sources ~redact:redact_sources
-              ~replay_of:(Option.map (fun (_, id, _) -> id) recording))
+              ~replay_of:(Option.map (fun (_, id, _) -> id) recording)
+              ~violations)
         ^ "\n")
     with
-    | () -> Ok { run_id; outcome; run_dir = run_dir_path; findings; spend }
+    | () ->
+        Ok
+          {
+            run_id;
+            outcome;
+            run_dir = run_dir_path;
+            findings;
+            spend;
+            sandbox = label;
+            violations;
+          }
     | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
   in
   match !interrupted with

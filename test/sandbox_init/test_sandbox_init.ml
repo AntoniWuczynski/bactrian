@@ -110,7 +110,13 @@ let start ctx ?log ~forwards agent =
   let all_bound, set_bound = Eio.Promise.create () in
   let result, set_result = Eio.Promise.create () in
   let out_r, out_w = Eio_unix.pipe ctx.sw in
-  let log = Option.map (fun p -> Eio.Path.(Eio.Stdenv.fs ctx.env / p)) log in
+  let log =
+    Option.map
+      (fun p ->
+        Eio_unix.Fd.of_unix ~sw:ctx.sw ~close_unix:true
+          (Unix.openfile p [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ] 0o600))
+      log
+  in
   let on_listening ~requested:_ ~bound:addr =
     (match addr with
     | `Tcp (ip, port) ->
@@ -402,11 +408,11 @@ let signal_reaches_whole_group () =
 
 let environment_loses_log_variable () =
   with_ctx @@ fun ctx ->
-  Unix.putenv S.log_variable "/somewhere";
+  Unix.putenv S.log_variable "3";
   Unix.putenv "BACTRIAN_SANDBOX_KEPT" "yes";
   let f, result =
     run_to_end ctx
-      (sh "echo ${BACTRIAN_SANDBOX_LOG-unset} $BACTRIAN_SANDBOX_KEPT")
+      (sh "echo ${BACTRIAN_SANDBOX_LOG_FD-unset} $BACTRIAN_SANDBOX_KEPT")
   in
   Alcotest.(check string) "status" "exit 0" (describe result);
   Alcotest.(check string) "variables" "unset yes" (Buf_read.line f.out)
@@ -486,14 +492,40 @@ let missing_agent () =
 
 (* The subcommand *)
 
-let subcommand args =
+(* [log] becomes the subcommand's descriptor 3, named by the variable. *)
+let subcommand ?log args =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let out_r, out_w = Eio_unix.pipe sw in
+  let inherited =
+    Option.to_list
+      (Option.map
+         (fun p ->
+           ( 3,
+             Eio_unix.Fd.of_unix ~sw ~close_unix:true
+               (Unix.openfile p
+                  [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ]
+                  0o600),
+             `Blocking ))
+         log)
+  in
+  let out = Eio_unix.Resource.fd out_w in
+  let env_vars =
+    Eio.Process.Env.override
+      [ (S.log_variable, Option.map (fun (_ : string) -> "3") log) ]
+      (Eio.Process.environment (Eio.Stdenv.process_mgr env))
+  in
   let proc =
-    Eio.Process.spawn ~sw
+    Eio_unix.Process.spawn_unix ~sw
       (Eio.Stdenv.process_mgr env)
-      ~stdout:out_w ~stderr:out_w
+      ~env:env_vars
+      ~fds:
+        ([
+           (0, Eio_unix.Fd.stdin, `Blocking);
+           (1, out, `Blocking);
+           (2, out, `Blocking);
+         ]
+        @ inherited)
       (bactrian :: "__sandbox-init" :: args)
   in
   Eio.Resource.close out_w;
@@ -525,6 +557,36 @@ let subcommand_rejects_bad_arguments () =
      in
      find 0)
 
+(* The agent cannot add lines to the violation log: its descriptor 3 is
+   /dev/null, while a relay failure still reaches the log. *)
+let subcommand_hides_the_log () =
+  let dir = Filename.temp_dir "bactrian-sbx" "" in
+  Fun.protect ~finally:(fun () -> remove_tree dir) @@ fun () ->
+  let log = Filename.concat dir "violations.log" in
+  let missing = Filename.concat dir "missing.sock" in
+  let status, output =
+    subcommand ~log
+      [
+        "47913=" ^ missing;
+        "--";
+        "/bin/sh";
+        "-c";
+        "echo forged >&3; echo $?; python3 -c 'import socket; \
+         socket.create_connection((\"127.0.0.1\", 47913)).recv(1)'";
+      ]
+  in
+  Alcotest.check status_t "status" (`Exited 0) status;
+  Alcotest.(check string) "the agent's write went nowhere" "0\n" output;
+  let lines =
+    In_channel.with_open_bin log In_channel.input_all
+    |> String.split_on_char '\n'
+    |> List.filter (fun l -> not (String.equal l ""))
+  in
+  Alcotest.(check int) "one line" 1 (List.length lines);
+  Alcotest.(check string)
+    "the forwarder's line" "relay_failed"
+    (Yojson.Safe.Util.to_string (field "kind" (List.hd lines)))
+
 let () =
   Alcotest.run "sandbox_init"
     [
@@ -549,6 +611,8 @@ let () =
           Alcotest.test_case "a failing connection is alone" `Quick
             failing_connection_is_alone;
           Alcotest.test_case "no log, no file" `Quick no_log_writes_nothing;
+          Alcotest.test_case "the agent cannot write the log" `Quick
+            subcommand_hides_the_log;
           Alcotest.test_case "port in use" `Quick port_in_use;
           Alcotest.test_case "agent not found" `Quick missing_agent;
         ] );
