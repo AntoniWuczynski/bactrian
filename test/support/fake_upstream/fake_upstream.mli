@@ -15,6 +15,14 @@ type reply = {
   ending : ending;
 }
 
+type request = {
+  meth : string;
+  path : string;
+  query : string;  (** Without the leading ['?']; empty when absent. *)
+  headers : (string * string) list;  (** Names lower-cased. *)
+  body : string;
+}
+
 type source =
   | Fixtures of string
       (** A directory laid out as [test/fixtures/protocols]:
@@ -28,6 +36,9 @@ type source =
   | Script of reply list
       (** The n-th request gets the n-th reply, whatever it says. Requests past
           the end get a 500. *)
+  | Handler of (request -> reply)
+      (** Every request gets the reply the function gives. It runs in the
+          connection's fibre, so it may wait on the Eio clock. *)
 
 type error =
   | Unreadable of { path : string; reason : string }
@@ -35,13 +46,10 @@ type error =
 
 val pp_error : Format.formatter -> error -> unit
 
-type request = {
-  meth : string;
-  path : string;
-  query : string;  (** Without the leading ['?']; empty when absent. *)
-  headers : (string * string) list;  (** Names lower-cased. *)
-  body : string;
-}
+val case_reply : string -> (reply, error) result
+(** The reply recorded in one fixture case directory ([meta.json] and
+    [response.raw] split at [chunks.json]'s boundaries), as {!Fixtures} would
+    serve it. *)
 
 type t
 

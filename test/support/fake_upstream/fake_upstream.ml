@@ -7,8 +7,6 @@ type reply = {
   ending : ending;
 }
 
-type source = Fixtures of string | Script of reply list
-
 type error =
   | Unreadable of { path : string; reason : string }
   | Invalid_fixture of { case : string; reason : string }
@@ -26,6 +24,11 @@ type request = {
   headers : (string * string) list;
   body : string;
 }
+
+type source =
+  | Fixtures of string
+  | Script of reply list
+  | Handler of (request -> reply)
 
 type fixture = {
   meth : string;
@@ -124,6 +127,8 @@ let load_case dir =
       reply = { status; headers; chunks; ending = Complete };
     }
 
+let case_reply dir = Result.map (fun (f : fixture) -> f.reply) (load_case dir)
+
 let load_fixtures root =
   let* protocols = list_dir root in
   List.fold_left
@@ -206,12 +211,14 @@ let choose source ~count r =
       match List.nth_opt replies count with
       | Some reply -> reply
       | None -> message ~status:500 "script exhausted")
+  | `Handler f -> f r
 
 let start ~sw ~net source =
   let* source =
     match source with
     | Fixtures dir -> Result.map (fun f -> `Fixtures f) (load_fixtures dir)
     | Script replies -> Ok (`Script replies)
+    | Handler f -> Ok (`Handler f)
   in
   let log = ref [] in
   let callback _conn http_request body =

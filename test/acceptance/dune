@@ -4,7 +4,11 @@
 ; `pnpm --dir examples/agents/typescript build`.
 
 (executables
- (names test_acceptance test_launch_env_outside test_mcp_client)
+ (names
+  test_acceptance
+  test_launch_env_outside
+  test_mcp_client
+  test_upstream_override)
  (libraries
   bactrian.core
   mcp_client
@@ -43,10 +47,15 @@
    (setenv
     FAKE_MCP_SERVER
     %{exe:../support/fake_mcp/fake_mcp_server.exe}
-    (progn
-     (run %{exe:test_acceptance.exe})
-     ; bactrian serve-mcp from the outside, with a scripted client.
-     (run %{exe:test_mcp_client.exe}))))))
+    (setenv
+     FAKE_UPSTREAM_SERVER
+     %{exe:../support/fake_upstream/fake_upstream_server.exe}
+     (progn
+      (run %{exe:test_acceptance.exe})
+      ; bactrian serve-mcp from the outside, with a scripted client.
+      (run %{exe:test_mcp_client.exe})
+      ; Experiments through BACTRIAN_UPSTREAM_*, against a fake upstream process.
+      (run %{exe:test_upstream_override.exe})))))))
 
 ; The launch environments of bactrian and its children, read from outside
 ; while a sandboxed run is live. Needs python3.

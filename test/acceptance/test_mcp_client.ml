@@ -7,57 +7,15 @@
 open Bactrian_core
 open Bactrian_runtime
 open Acceptance_world
+open Cli_world
 module C = Mcp_client
 module E = Executor
 
 let era_name = function C.Modern -> "modern" | C.Legacy -> "legacy"
 let eras = [ C.Modern; C.Legacy ]
-let exe () = executable "BACTRIAN_EXE"
-
-let obj fields =
-  List.fold_left
-    (fun o (k, v) -> Canon.set_member k v o)
-    Canon.empty_object fields
-
-let strings l = Canon.list (List.map Canon.string l)
-
-let json =
-  Alcotest.testable
-    (fun ppf c -> Format.pp_print_string ppf (Canon.to_string c))
-    Canon.equal
-
-let canon_of_file path =
-  match Canon.of_string (read path) with
-  | Ok c -> c
-  | Error e -> Alcotest.failf "%s: %a" path Canon.pp_error e
-
-let get what = function Some v -> v | None -> Alcotest.failf "missing %s" what
-let field key c = get key (Canon.member key c)
-let string_field key c = get key (Canon.str_member key c)
-
-(* Directories *)
-
-let remove_tree dir =
-  ignore (Sys.command ("rm -rf " ^ Filename.quote dir) : int)
-
-let write path text =
-  ignore (Sys.command ("mkdir -p " ^ Filename.quote (Filename.dirname path)));
-  Out_channel.with_open_bin path (fun oc -> output_string oc text)
-
-(* An empty project in a directory of its own, with a sibling outside it. *)
-let with_project name f =
-  let parent = Filename.concat (Sys.getcwd ()) ("tmp-mcp-" ^ name) in
-  remove_tree parent;
-  let project = Filename.concat parent "project" in
-  ignore (Sys.command ("mkdir -p " ^ Filename.quote project));
-  Fun.protect
-    ~finally:(fun () -> remove_tree parent)
-    (fun () -> f ~parent ~project)
 
 (* A client that has been told what it must not leak. *)
 type conn = { c : C.t; seen : Buffer.t }
-
-let key_env = [ ("OPENAI_API_KEY", real_key) ]
 
 let connect ?(env = key_env) ~dir era =
   let c = C.start ~env ~exe:(exe ()) ~dir era in
@@ -91,73 +49,6 @@ let check_exit what expected = function
   | Unix.WSIGNALED n | Unix.WSTOPPED n ->
       Alcotest.failf "%s: the server was stopped by signal %d" what n
 
-(* The command line *)
-
-let cli ~dir ~env args =
-  let out = Filename.temp_file "cli" ".json" in
-  Fun.protect ~finally:(fun () -> Sys.remove out) @@ fun () ->
-  let assignments =
-    String.concat " "
-      (List.map (fun (k, v) -> Filename.quote (k ^ "=" ^ v)) env)
-  in
-  let command =
-    Printf.sprintf "cd %s && env %s %s %s > %s 2> /dev/null"
-      (Filename.quote dir) assignments
-      (Filename.quote (exe ()))
-      (String.concat " " (List.map Filename.quote args))
-      (Filename.quote out)
-  in
-  let status = Sys.command command in
-  (status, canon_of_file out)
-
-(* Processes *)
-
-let alive pid =
-  match Unix.kill pid 0 with
-  | () -> true
-  | exception Unix.Unix_error (ESRCH, _, _) -> false
-
-let rec wait_until ~what ~seconds condition =
-  if condition () then ()
-  else if seconds <= 0. then Alcotest.failf "timed out waiting for %s" what
-  else begin
-    Unix.sleepf 0.05;
-    wait_until ~what ~seconds:(seconds -. 0.05) condition
-  end
-
-let read_pid path =
-  match int_of_string_opt (String.trim (read path)) with
-  | Some pid -> pid
-  | None -> Alcotest.failf "%s holds no process ID" path
-
-let wait_gone what pid =
-  wait_until ~what:(what ^ " to exit") ~seconds:5. (fun () -> not (alive pid))
-
-(* The experiment: two variants of the weather conversation, recorded through
-   the library with the fake upstream answering. *)
-
-let scenario_text =
-  Printf.sprintf
-    {|{"version": 1, "id": "weather", "timezone": "UTC",
- "turns": [{"user": %S}],
- "assertions": [{"tool_sequence": {"mode": "exact", "tools": ["get_weather"]}}, {"max_steps": 2}],
- "checkers": []}|}
-    first_turn
-
-let terse = "You are a terse assistant."
-
-let experiment_text argv =
-  Printf.sprintf
-    {|{"version": 1, "name": "weather",
- "agent": {"protocol": "command", "command": %s},
- "scenarios": ["scenarios/*.json"],
- "variants": {"base": {"env": {}}, "terse": {"env": {%S: %S}}},
- "repeats": 2, "concurrency": 1, "seed": 3, "sandbox": "off",
- "caps_usd": {"openai": 100},
- "compare": {"baseline": "base", "thresholds": {"pass_rate": 0.1}}}|}
-    (Yojson.Safe.to_string (`List (List.map (fun s -> `String s) argv)))
-    prompt_variable terse
-
 let golden_check_text =
   {|{"version": 1, "id": "weather", "timezone": "UTC",
  "turns": [{"user": "What is the weather in Paris right now?"}],
@@ -170,8 +61,7 @@ type experiment = {
 }
 
 let run_experiment (w : world) argv =
-  write (Filename.concat w.dir "scenarios/weather.json") scenario_text;
-  write (Filename.concat w.dir "exp.json") (experiment_text argv);
+  write_experiment w.dir argv;
   let summary =
     match
       E.run_experiment
@@ -690,31 +580,156 @@ let end_of_input era () =
   check_exit "the server exits at end of input" 0 (C.close h.conn.c);
   gone h
 
-(* [run_start] in this build: the TLS connector is not there, so an experiment
-   cannot run, and the job fails as [bactrian run] does. *)
+(* [run_start] against the fake upstream through the override, for each
+   example agent in each era. *)
 
-let run_start_without_tls () =
-  if Bactrian_app.Features.tls_available then Alcotest.skip ();
-  with_project "run-start" @@ fun ~parent:_ ~project ->
-  write (Filename.concat project "scenarios/weather.json") scenario_text;
-  write
-    (Filename.concat project "exp.json")
-    (experiment_text [ "python3"; "-I"; "-c"; "pass" ]);
-  let conn = connect ~dir:project Modern in
-  let job =
-    string_field "job_id"
-      (ok_call conn "run_start"
-         [
-           ("experiment", Canon.string "exp.json");
-           ("sandbox", Canon.string "off");
-         ])
+let run_flags = [ "run"; "exp.json"; "--sandbox"; "off"; "--json" ]
+let upstream_variable = "BACTRIAN_UPSTREAM_OPENAI"
+
+let run_args ?resume () =
+  [ ("experiment", Canon.string "exp.json"); ("sandbox", Canon.string "off") ]
+  @ match resume with Some id -> [ ("resume", Canon.string id) ] | None -> []
+
+let run_statuses j =
+  List.map (string_field "status") (get "runs" (Canon.list_member "runs" j))
+
+(* The command line and the server each started an experiment of their own, so
+   each has a new experiment ID and new run IDs. Nothing else differs, and
+   nothing else is normalised. *)
+let summary_normalised j =
+  let runs =
+    List.map
+      (Canon.remove_member "run_id")
+      (get "runs" (Canon.list_member "runs" j))
   in
+  Canon.set_member "runs" (Canon.list runs)
+    (Canon.remove_member "experiment_id" j)
+
+let run_start agent era () =
+  let argv = agent.argv () in
+  with_project ("run-start-" ^ agent.name ^ "-" ^ era_name era)
+  @@ fun ~parent:_ ~project ->
+  with_upstream ~dir:project @@ fun up ->
+  write_experiment project argv;
+  let env = (upstream_variable, upstream_url up) :: key_env in
+  let conn = connect ~env ~dir:project era in
+  Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
+  let job = string_field "job_id" (ok_call conn "run_start" (run_args ())) in
+  let status = C.poll_job conn.c job in
+  Alcotest.(check string)
+    "the job succeeded" "succeeded"
+    (string_field "state" status);
+  Alcotest.(check string) "its kind" "run" (string_field "kind" status);
+  let served = field "result" status in
+  Alcotest.(check (list string))
+    "every run passed"
+    (List.init 4 (fun _ -> "passed"))
+    (run_statuses served);
+  let compared =
+    ok_call conn "compare"
+      [ ("experiment_id", Canon.string (string_field "experiment_id" served)) ]
+  in
+  check_exit "the server exits at end of input" 0 (C.close conn.c);
+  no_secret conn;
+  Alcotest.(check int)
+    "the model calls all went to the fake upstream" 8
+    (List.length (upstream_requests up));
+  let code, printed = cli ~dir:project ~env run_flags in
+  Alcotest.(check int) "run: the exit status" 0 code;
+  Alcotest.check json "the job's result equals run --json"
+    (summary_normalised printed)
+    (summary_normalised served);
+  let code, printed =
+    cli ~dir:project ~env
+      [ "compare"; string_field "experiment_id" served; "--json" ]
+  in
+  Alcotest.(check int)
+    "compare: the exit status" code
+    (Option.value (Canon.int_member "exit" compared) ~default:code);
+  Alcotest.check json "compare equals the CLI's" printed compared
+
+(* Cancelling an experiment while an agent is running, then resuming it. Every
+   agent records its process ID before it replaces the shell that started it,
+   so the file lists each agent that ever ran. *)
+
+let agent_pids path = if Sys.file_exists path then lines path else []
+
+let cancel_and_resume era () =
+  let agent = List.hd agents in
+  with_project ("run-resume-" ^ era_name era) @@ fun ~parent:_ ~project ->
+  let hold = Filename.concat project "hold" in
+  write hold "";
+  with_upstream ~hold ~dir:project @@ fun up ->
+  let pids = Filename.concat project "agent.pids" in
+  write_experiment project
+    ([ "sh"; "-c"; {|echo $$ >> agent.pids; exec "$@"|}; "sh" ] @ agent.argv ());
+  let env = (upstream_variable, upstream_url up) :: key_env in
+  let conn = connect ~env ~dir:project era in
+  Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
+  let job = string_field "job_id" (ok_call conn "run_start" (run_args ())) in
+  (* The fake upstream holds the agent's first model call. *)
+  wait_until ~what:"an agent to call the model" ~seconds:30. (fun () ->
+      agent_pids pids <> [] && upstream_requests up <> []);
+  Alcotest.(check string)
+    "the experiment is running" "running"
+    (string_field "state"
+       (ok_call conn "job_status" [ ("job_id", Canon.string job) ]));
+  let cancelled = ok_call conn "job_cancel" [ ("job_id", Canon.string job) ] in
+  Alcotest.(check string)
+    "cancelled" "cancelled"
+    (string_field "state" cancelled);
+  let id = string_field "experiment_id" (field "error" cancelled) in
+  let all_gone what =
+    List.iter
+      (fun pid ->
+        wait_gone what
+          (get "a process ID" (int_of_string_opt (String.trim pid))))
+      (agent_pids pids)
+  in
+  all_gone "a cancelled agent";
+  Alcotest.(check int) "one agent ran" 1 (List.length (agent_pids pids));
+  (* Release the upstream and resume: the cancelled run starts again. *)
+  Sys.remove hold;
+  let resumed =
+    string_field "job_id" (ok_call conn "run_start" (run_args ~resume:id ()))
+  in
+  let status = C.poll_job conn.c resumed in
+  Alcotest.(check string)
+    "the resumed job succeeded" "succeeded"
+    (string_field "state" status);
+  let result = field "result" status in
+  Alcotest.(check string)
+    "it is the same experiment" id
+    (string_field "experiment_id" result);
+  Alcotest.(check (list string))
+    "every run passed"
+    (List.init 4 (fun _ -> "passed"))
+    (run_statuses result);
+  Alcotest.(check int)
+    "the cancelled run started again, and no other run twice" 5
+    (List.length (agent_pids pids));
+  all_gone "an agent";
+  Alcotest.(check int)
+    "the model was called twice by each of the four runs, and the cancelled \
+     run's first call reached the server once"
+    9
+    (List.length (upstream_requests up));
+  check_exit "the server exits at end of input" 0 (C.close conn.c);
+  no_secret conn
+
+(* An https upstream cannot be called in this build, so the job fails as
+   [bactrian run] does. *)
+
+let run_start_https_without_tls () =
+  if Bactrian_app.Features.tls_available then Alcotest.skip ();
+  with_project "run-start-https" @@ fun ~parent:_ ~project ->
+  write_experiment project [ "python3"; "-I"; "-c"; "pass" ];
+  let env = (upstream_variable, "https://gateway.invalid") :: key_env in
+  let conn = connect ~env ~dir:project Modern in
+  let job = string_field "job_id" (ok_call conn "run_start" (run_args ())) in
   let status = C.poll_job conn.c job in
   check_exit "exit" 0 (C.close conn.c);
-  let code, printed =
-    cli ~dir:project ~env:key_env
-      [ "run"; "exp.json"; "--sandbox"; "off"; "--json" ]
-  in
+  let code, printed = cli ~dir:project ~env run_flags in
   Alcotest.(check string) "failed" "failed" (string_field "state" status);
   Alcotest.(check int) "69, the environment is not ready" 69 code;
   Alcotest.(check (option int))
@@ -757,7 +772,20 @@ let () =
       ("root confinement", per_era confinement);
       ("job_cancel", per_era cancel);
       ("end of input with a job running", per_era end_of_input);
-      ( "run_start",
-        [ Alcotest.test_case "fails as run does" `Quick run_start_without_tls ]
-      );
+      ( "run_start through the override",
+        List.concat_map
+          (fun a ->
+            List.map
+              (fun e ->
+                Alcotest.test_case
+                  (a.name ^ ", " ^ era_name e)
+                  `Slow (run_start a e))
+              eras)
+          agents );
+      ("job_cancel, then resume", per_era cancel_and_resume);
+      ( "run_start with an https upstream",
+        [
+          Alcotest.test_case "fails as run does" `Quick
+            run_start_https_without_tls;
+        ] );
     ]

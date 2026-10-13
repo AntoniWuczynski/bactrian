@@ -1,3 +1,12 @@
 (library
  (name fake_upstream)
+ (modules fake_upstream)
  (libraries bactrian.core eio cohttp-eio http uri))
+
+; The same fake as a process of its own, for tests that run the real binary
+; and need the upstream to answer while they wait.
+
+(executable
+ (name fake_upstream_server)
+ (modules fake_upstream_server)
+ (libraries fake_upstream bactrian.core cmdliner eio_main))
