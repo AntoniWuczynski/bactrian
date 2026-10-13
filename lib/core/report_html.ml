@@ -22,27 +22,36 @@ let cell_elt = function
         ]
   | New -> H.td [ H.span ~a:[ H.a_class [ "badge"; "new" ] ] [ H.txt "new" ] ]
 
-(* The first cell of each row is its header. *)
+(* The first cell of each row is its header. The caption is shown above the
+   scrolling wrapper, so a narrow screen never scrolls it out of view, and kept
+   in the table, hidden, as its accessible name. *)
 let table ~caption ~head rows =
   H.div
-    ~a:[ H.a_class [ "scroll" ] ]
     [
-      H.table
-        ~caption:(H.caption [ H.txt caption ])
-        ~thead:
-          (H.thead
-             [
-               H.tr
-                 (List.map
-                    (fun h -> H.th ~a:[ H.a_scope `Col ] [ H.txt h ])
-                    head);
-             ])
-        (List.map
-           (fun (header, cells) ->
-             H.tr
-               (H.th ~a:[ H.a_scope `Row ] [ H.txt header ]
-               :: List.map cell_elt cells))
-           rows);
+      H.p
+        ~a:[ H.a_class [ "caption" ]; H.a_aria "hidden" [ "true" ] ]
+        [ H.txt caption ];
+      H.div
+        ~a:[ H.a_class [ "scroll" ] ]
+        [
+          H.table
+            ~caption:
+              (H.caption ~a:[ H.a_class [ "sr-only" ] ] [ H.txt caption ])
+            ~thead:
+              (H.thead
+                 [
+                   H.tr
+                     (List.map
+                        (fun h -> H.th ~a:[ H.a_scope `Col ] [ H.txt h ])
+                        head);
+                 ])
+            (List.map
+               (fun (header, cells) ->
+                 H.tr
+                   (H.th ~a:[ H.a_scope `Row ] [ H.txt header ]
+                   :: List.map cell_elt cells))
+               rows);
+        ];
     ]
 
 let section id title body =
@@ -141,12 +150,12 @@ let verdict_table (d : D.t) =
     let estimate, ival, threshold = F.metric_texts m in
     ( F.metric r.metric,
       [
+        Badge r.verdict;
         Text (if r.in_gate then "yes" else "no");
         Num estimate;
         Num ival;
         Num (Printf.sprintf "%.4f" r.level);
         Num threshold;
-        Badge r.verdict;
       ] )
   in
   table
@@ -155,14 +164,15 @@ let verdict_table (d : D.t) =
        points. Cost and tokens are relative changes in the scenario-weighted \
        mean, latency in the typical scenario's median."
     ~head:
+      (* The verdict comes second, so it is in view on a narrow screen. *)
       [
         "Metric";
+        "Verdict";
         "In gate";
         "Estimate";
         "Interval";
         "Level";
         "Threshold";
-        "Verdict";
       ]
     (List.map row d.metrics)
 
@@ -260,16 +270,17 @@ let forest_section (d : D.t) =
         ~head:
           [
             "Scenario";
+            "Verdict";
             "Baseline";
             "Candidate";
             "Difference";
             "Interval";
-            "Verdict";
           ]
         (List.map
            (fun (s : D.scenario_row) ->
              ( s.scenario,
                [
+                 Badge s.verdict;
                  Num
                    (Printf.sprintf "%s (%s)"
                       (F.share s.baseline_passes s.baseline_runs)
@@ -280,7 +291,6 @@ let forest_section (d : D.t) =
                       (F.rate s.candidate_passes s.candidate_runs));
                  Num (F.points s.difference);
                  Num (interval F.points s.interval);
-                 Badge s.verdict;
                ] ))
            d.scenarios);
     ]
@@ -312,7 +322,9 @@ let pass_hat_k_text = function
         (List.mapi (fun i p -> Printf.sprintf "%d: %.3f" (i + 1) p) ps)
 
 let arm_table (d : D.t) scenario (arms : D.arm_row list) =
-  let col f = List.map (fun (a : D.arm_row) -> Num (f a.stats)) arms in
+  (* Text cells, which wrap: a value with its interval, or pass^k for every k,
+     would otherwise push the other variant off a narrow screen. *)
+  let col f = List.map (fun (a : D.arm_row) -> Text (f a.stats)) arms in
   let measure_rows name format (get : Arm_stats.t -> Arm_stats.measure option) =
     [
       ( name ^ ", median",
@@ -326,7 +338,7 @@ let arm_table (d : D.t) scenario (arms : D.arm_row list) =
     ]
   in
   table ~caption:scenario
-    ~head:("" :: List.map (fun (a : D.arm_row) -> label d a.variant) arms)
+    ~head:("Measure" :: List.map (fun (a : D.arm_row) -> label d a.variant) arms)
     ([
        ( "Finished runs",
          col (fun s ->

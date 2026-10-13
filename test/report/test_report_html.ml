@@ -46,7 +46,13 @@ let test_accessible () =
   let tables = count {|<table|} html in
   Alcotest.(check bool) "tables" true (tables >= 6);
   Alcotest.(check int)
-    "every table has a caption" tables (count {|<caption>|} html);
+    "every table has a caption" tables
+    (count {|<caption class="sr-only">|} html);
+  Alcotest.(check int)
+    "shown outside the scrolling wrapper" tables
+    (count
+       {|<p class="caption" aria-hidden="true">[^<]+</p>\s*<div class="scroll">|}
+       html);
   Alcotest.(check int)
     "every header cell has a scope" (count {|<th[ >]|} html)
     (count {|<th scope="(col|row)"|} html);
