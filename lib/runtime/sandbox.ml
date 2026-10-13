@@ -543,33 +543,31 @@ let seatbelt_violations ~env ~tag ~since ~marker =
           Sandbox_log.predicate ~tag;
         ]
       in
-      let rec poll () =
-        let lines =
-          String.split_on_char '\n'
-            (Eio.Process.parse_out mgr ~env:(tool_env ()) Eio.Buf_read.take_all
-               argv)
-        in
-        if
-          List.exists
-            (fun l ->
-              Option.is_some (Sandbox_log.of_seatbelt_ndjson ~tag:end_tag l))
-            lines
-        then List.filter_map (Sandbox_log.of_seatbelt_ndjson ~tag) lines
-        else begin
-          Eio.Time.sleep clock 0.5;
-          poll ()
-        end
+      let read () =
+        String.split_on_char '\n'
+          (Eio.Process.parse_out mgr ~env:(tool_env ()) Eio.Buf_read.take_all
+             argv)
       in
+      let now () = Eio.Time.now clock in
+      (* The deadline is checked between reads, and the outer bound only stops
+         a [log show] that hangs. *)
       match
-        Eio.Time.with_timeout clock log_timeout (fun () -> Ok (poll ()))
+        Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
+            Ok
+              (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
+                 ~deadline:(now () +. log_timeout)))
       with
-      | Ok vs -> Collected vs
-      | Error `Timeout ->
+      | Ok (Some vs) -> Collected vs
+      | Ok None ->
           Not_collected
             (Printf.sprintf
                "the system log did not show the run's end marker within %.0f \
                 seconds"
                log_timeout)
+      | Error `Timeout ->
+          Not_collected
+            (Printf.sprintf "log show did not finish within %.0f seconds"
+               (log_timeout +. 5.))
       | exception (Eio.Io _ as e) ->
           Not_collected ("log show failed: " ^ Printexc.to_string e))
 

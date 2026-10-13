@@ -77,6 +77,37 @@ let of_seatbelt_ndjson ~tag line =
 type relay = { kind : string; port : int; socket : string; reason : string }
 [@@deriving of_yojson]
 
+let poll_interval = 0.5
+let settle_interval = 1.
+
+let equal_violation (a : violation) (b : violation) =
+  String.equal a.kind b.kind && String.equal a.detail b.detail
+
+let settle ~tag ~read ~wait ~now ~deadline =
+  let marked =
+    List.exists (fun l ->
+        Option.is_some (of_seatbelt_ndjson ~tag:(end_tag tag) l))
+  in
+  let parse = List.filter_map (of_seatbelt_ndjson ~tag) in
+  let rec until_marker () =
+    let lines = read () in
+    if marked lines then until_stable (parse lines)
+    else if now () >= deadline then None
+    else begin
+      wait poll_interval;
+      until_marker ()
+    end
+  and until_stable previous =
+    if now () +. settle_interval > deadline then Some previous
+    else begin
+      wait settle_interval;
+      let next = parse (read ()) in
+      if List.equal equal_violation previous next then Some next
+      else until_stable next
+    end
+  in
+  until_marker ()
+
 let of_relay_line line =
   match Yojson.Safe.from_string line with
   | exception Yojson.Json_error m -> Error m

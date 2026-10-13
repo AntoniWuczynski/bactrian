@@ -115,6 +115,7 @@ val preload_hidden : t -> string -> bool
 
 val collect : env:Eio_unix.Stdenv.base -> started -> violations
 (** After the agent exited: on macOS, the Seatbelt denials logged with the run's
-    tag since it started, read with [log show] (at most 30 seconds); on Linux,
-    the forwarder's relay failures from [sandbox.log]. An unsandboxed run has
-    none. *)
+    tag since it started, read with [log show] until the end marker is there and
+    two reads a second apart agree (at most about 30 seconds, see
+    {!Bactrian_core.Sandbox_log.settle}); on Linux, the forwarder's relay
+    failures from [sandbox.log]. An unsandboxed run has none. *)
