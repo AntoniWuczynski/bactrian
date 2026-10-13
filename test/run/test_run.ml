@@ -434,7 +434,11 @@ let test_cli_interrupt =
         [
           "sh";
           "-c";
-          Printf.sprintf "cd %s && exec %s replay %s -- %s" (Filename.quote cwd)
+          (* The agent reports its own pid, which inside a Linux sandbox
+             belongs to another pid namespace: test_run_sandbox covers the
+             sandboxed case. *)
+          Printf.sprintf "cd %s && exec %s replay %s --sandbox off -- %s"
+            (Filename.quote cwd)
             (Filename.quote bactrian_bin)
             recorded.run_id agent;
         ]

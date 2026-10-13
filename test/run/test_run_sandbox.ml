@@ -192,6 +192,106 @@ let test_escapes_fail =
       (* Linux reports only relay failures, and these attempts make none. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
+(* SIGINT to a sandboxed replay: bactrian exits 130 and nothing of the agent
+   survives. The agent's own pid is no help, since on Linux it lives in another
+   pid namespace, so its processes are found by a marker in their command
+   line. *)
+(* Eio's own signal handling interrupts a blocking waitpid, so poll. *)
+let rec wait_exit pid =
+  match Unix.waitpid [ WNOHANG ] pid with
+  | 0, _ ->
+      Unix.sleepf 0.05;
+      wait_exit pid
+  | _, status -> status
+  | exception Unix.Unix_error (EINTR, _, _) -> wait_exit pid
+
+let still_running marker =
+  let devnull = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+  Fun.protect ~finally:(fun () -> Unix.close devnull) @@ fun () ->
+  let pid =
+    Unix.create_process "pgrep"
+      [| "pgrep"; "-f"; marker |]
+      devnull devnull devnull
+  in
+  match wait_exit pid with
+  | WEXITED 0 -> true
+  | WEXITED _ | WSIGNALED _ | WSTOPPED _ -> false
+
+let test_interrupt =
+  sandboxed "sandbox-interrupt" @@ fun ctx ->
+  let recorded = ok (execute ctx (config ())) in
+  let cwd = Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn ctx.dir) in
+  let runs = Filename.concat (Filename.concat cwd ".bactrian") "runs" in
+  let marker = Printf.sprintf "bactrian-hung-agent-%d" (Unix.getpid ()) in
+  let agent =
+    String.concat " "
+      (List.map Filename.quote
+         [
+           "sh";
+           "-c";
+           {|touch "$BACTRIAN_STATE_DIR/started"; while :; do sleep 1; done|};
+           marker;
+         ])
+  in
+  let pid =
+    let devnull = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+    Fun.protect ~finally:(fun () -> Unix.close devnull) @@ fun () ->
+    Unix.create_process "sh"
+      [|
+        "sh";
+        "-c";
+        Printf.sprintf "cd %s && exec %s replay %s --sandbox strict -- %s"
+          (Filename.quote cwd)
+          (Filename.quote bactrian_bin)
+          recorded.run_id agent;
+      |]
+      devnull devnull devnull
+  in
+  let deadline = Unix.gettimeofday () +. 20. in
+  let rec started () =
+    match
+      List.find_opt
+        (fun id ->
+          Sys.file_exists (String.concat "/" [ runs; id; "state"; "started" ]))
+        (Array.to_list (Sys.readdir runs))
+    with
+    | Some id -> id
+    | None ->
+        if Unix.gettimeofday () > deadline then begin
+          Unix.kill pid Sys.sigkill;
+          Alcotest.fail "the sandboxed agent did not start"
+        end
+        else begin
+          Unix.sleepf 0.1;
+          started ()
+        end
+  in
+  let run_id = started () in
+  Alcotest.(check bool) "the agent runs" true (still_running marker);
+  Unix.kill pid Sys.sigint;
+  (match wait_exit pid with
+  | WEXITED n -> Alcotest.(check int) "exit status" 130 n
+  | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
+  let rec gone n =
+    if not (still_running marker) then true
+    else if n = 0 then false
+    else begin
+      Unix.sleepf 0.2;
+      gone (n - 1)
+    end
+  in
+  Alcotest.(check bool) "nothing of the agent survives" true (gone 30);
+  let meta =
+    Yojson.Safe.from_file (String.concat "/" [ runs; run_id; "meta.json" ])
+  in
+  let open Yojson.Safe.Util in
+  Alcotest.(check string)
+    "reason" "interrupted"
+    (to_string (member "reason" meta));
+  Alcotest.(check bool)
+    "sandboxed" true
+    (to_bool (member "applied" (member "sandbox" meta)))
+
 (* Preflight failures, on any host: a probe that cannot run is a sandbox that
    does not work. *)
 
@@ -342,5 +442,7 @@ let () =
             test_record_and_replay;
           Alcotest.test_case "escapes fail and are reported" `Slow
             test_escapes_fail;
+          Alcotest.test_case "SIGINT ends a sandboxed replay" `Slow
+            test_interrupt;
         ] );
     ]

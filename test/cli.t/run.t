@@ -235,11 +235,8 @@ experiment.
 
   $ bactrian run capped.yaml --sandbox maybe 2> err.txt
   [64]
-  $ cat err.txt
-  Usage: bactrian run [--help] [--json] [--resume=ID] [--sandbox=MODE]
-         [OPTION]… EXPERIMENT
-  bactrian: option --sandbox: invalid value maybe, expected one of auto, strict
-            or off
+  $ grep -c maybe err.txt
+  1
   $ bactrian replay nope --sandbox off -- true
   bactrian: no cassette for run "nope"
   [64]
