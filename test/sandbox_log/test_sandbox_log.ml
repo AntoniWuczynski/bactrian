@@ -63,6 +63,55 @@ let test_ndjson () =
     (L.of_seatbelt_ndjson ~tag {|{"count":2,"finished":1}|});
   Alcotest.check violation "not JSON" None (L.of_seatbelt_ndjson ~tag "oops")
 
+(* [log show] as a script of reads, on a clock that only [wait] moves. *)
+let settle ?(deadline = 30.) reads =
+  let line m = Yojson.Safe.to_string (`Assoc [ ("eventMessage", `String m) ]) in
+  let denial d = line (message ("Sandbox: cat(3) deny(1) file-read-data " ^ d))
+  and marker =
+    line ("Sandbox: touch(5) deny(1) file-write-create /m\n" ^ L.end_tag tag)
+  in
+  let script = ref reads and clock = ref 0. and calls = ref 0 in
+  let read () =
+    incr calls;
+    match !script with
+    | [] -> Alcotest.fail "read after the script ended"
+    | (ds, marked) :: rest ->
+        script := rest;
+        List.map denial ds @ if marked then [ marker ] else []
+  in
+  let result =
+    L.settle ~tag ~read
+      ~wait:(fun s -> clock := !clock +. s)
+      ~now:(fun () -> !clock)
+      ~deadline
+  in
+  ( Option.map (List.map (fun (v : L.violation) -> v.detail)) result,
+    !calls,
+    !clock )
+
+let test_settle () =
+  let check name expected (got, calls, clock) =
+    Alcotest.(check (triple (option (list string)) int (float 0.)))
+      name expected (got, calls, clock)
+  in
+  check "stable at once: the marker read and one more"
+    (Some [ "/a by cat(3)" ], 2, 1.)
+    (settle [ ([ "/a" ], true); ([ "/a" ], true) ]);
+  check "polls until the marker, then waits for a late denial"
+    (Some [ "/a by cat(3)"; "/b by cat(3)" ], 4, 2.5)
+    (settle
+       [
+         ([], false);
+         ([ "/a" ], true);
+         ([ "/a"; "/b" ], true);
+         ([ "/a"; "/b" ], true);
+       ]);
+  check "no marker by the deadline" (None, 3, 1.)
+    (settle ~deadline:1. [ ([], false); ([], false); ([], false) ]);
+  check "still changing at the deadline: the last read"
+    (Some [ "/a by cat(3)"; "/b by cat(3)" ], 2, 1.)
+    (settle ~deadline:1.5 [ ([ "/a" ], true); ([ "/a"; "/b" ], true) ])
+
 let test_relay () =
   (match
      L.of_relay_line
@@ -88,6 +137,7 @@ let () =
           Alcotest.test_case "tag and predicate" `Quick test_tag;
           Alcotest.test_case "messages" `Quick test_messages;
           Alcotest.test_case "ndjson" `Quick test_ndjson;
+          Alcotest.test_case "settle" `Quick test_settle;
         ] );
       ("linux", [ Alcotest.test_case "relay failures" `Quick test_relay ]);
     ]

@@ -24,7 +24,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 2. An experiment comparing two live model variants over several scenarios with repeats produces a verdict per metric (`regression`, `improvement`, `no-change`, `inconclusive`) whose statistics match reference implementations.
 3. A coding agent can drive all of this through the MCP server (planned).
 4. Prebuilt binaries run on macOS arm64 and Linux x86_64 and arm64 (planned).
-5. Every run is sandboxed by default where the host allows it, and otherwise visibly labelled `unsandboxed`. In sandboxed runs, escape attempts (direct network, writes outside the run, reads of credential paths) fail on macOS and Linux, and real API keys never enter the sandbox (planned).
+5. Every run is sandboxed by default where the host allows it, and otherwise visibly labelled `unsandboxed`. In sandboxed runs, escape attempts (direct network, writes outside the run, reads of credential paths) fail on macOS and Linux, and real API keys never enter the sandbox.
 
 ## 2. Decisions
 
@@ -71,7 +71,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Redact`, `Mask` | Deterministic scrubbing of secrets and configured patterns, and the `normalise` masks applied before keying. |
 | `Mcp_msg` | MCP messages for both protocol eras (2026-07-28 and 2025-11-25). |
 | `Report_data`, `Report_html` | Report data, and its pure rendering to a single self-contained HTML file. |
-| `Sandbox_policy` (planned) | Pure generation of the Seatbelt profile text and the bubblewrap argument list, so that they can be property-tested. |
+| `Sandbox_policy` | Pure generation of the Seatbelt profile text and the bubblewrap argument list, so that they can be property-tested. |
 
 ### `bactrian.runtime` (Eio)
 
@@ -83,7 +83,8 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. |
 | `Agent_clock` | Finds `libfaketimeMT.so.1`, decides whether the agent's clock is enforced, and adds the `LD_PRELOAD` and `FAKETIME` variables to its environment (section 5 step 2, decision record 0009). |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
-| `Checker_runner` | Runs external checker commands with the trace on standard input. Checkers will run sandboxed as well. |
+| `Launch_env` | Re-executes `record`, `replay` and `run` with an allowlisted launch environment and restores the rest from an unlinked temporary file (section 5.2, decision record 0010). |
+| `Checker_runner` | Runs external checker commands with the trace on standard input. Running checkers sandboxed is planned. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
 | `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |
 | `Executor` | Expands experiments, schedules runs with a concurrency limit, one Eio switch per run so a failing run is torn down alone. |
@@ -153,6 +154,7 @@ HTTP-mode runs are unsandboxed whatever `sandbox` says, because bactrian does no
 - Each run gets a run token of 128 random bits from the operating system's generator, separate from its run ID. The model proxy requires it in the path and the egress proxy will require it as the proxy password. Requests without a live token get 403.
 - The project CA (planned) lives in `.bactrian/ca/` (directory mode 0700, key mode 0600), is valid for one year and is replaced with `bactrian ca rotate`. Leaf certificates are valid for 7 days, live only in memory, and are cached per host.
 - The per-run trust bundle (planned) is written into the run's temporary directory and deleted at teardown.
+- bactrian's launch environment holds no provider keys. `record`, `replay` and `run` re-execute bactrian with only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ` and `TMPDIR` in it, and hand the full environment to the new image through an unlinked temporary file, from which it is restored with `putenv`. The launch-time copy that other processes can read (section 5.3) then holds none of the keys. No child inherits bactrian's environment: each gets an explicit one (decision record 0010 lists them).
 - Checker processes run with a scrubbed environment: no provider keys, no proxy variables, no trust-bundle variables. They receive only `BACTRIAN_RUN_ID`, `PATH`, `HOME`, `LANG` and `TZ`.
 
 ### 5.3 Sandbox contract
@@ -180,9 +182,9 @@ Preflight and failure:
 
 Labels and violations:
 - Every run's `meta.json` has `sandbox: {mode, applied, reason?}`. The terminal output of `record`, `replay` and `run`, `compare` and every report flag the runs that were not sandboxed, with the reason.
-- What the sandbox denied is attached to the run as `sandbox_violation` trace events and under `sandbox_violations` in `meta.json` (`{collected, reason?, items}`). On macOS every denial in the run's profile carries a tag naming the run (`(with message …)`), and after the agent exits bactrian reads the run's tagged lines with `log show`. The system log shows a denial a second or more after it happens, so bactrian first causes one more tagged denial as an end marker and reads once the marker is there, for at most 30 seconds. If `log` fails or the marker never shows, the run records the violations as not collected, with the reason, rather than as none. The few lookups that every Node and Python process makes at start are refused without a log line. On Linux the violations are the forwarder's relay failures, written to a log in the run directory through a descriptor that only the forwarder holds, so the agent cannot add to it. Denied writes and reads surface there as the agent's own errors.
+- What the sandbox denied is attached to the run as `sandbox_violation` trace events and under `sandbox_violations` in `meta.json` (`{collected, reason?, items}`). On macOS every denial in the run's profile carries a tag naming the run (`(with message …)`), and after the agent exits bactrian reads the run's tagged lines with `log show`. The system log shows a denial a second or more after it happens, so bactrian first causes one more tagged denial as an end marker and reads until the marker is there and then until two reads a second apart give the same violations, because the marker does not prove that earlier denials from other processes have been flushed. All of this takes at most 30 seconds. If `log` fails or the marker never shows, the run records the violations as not collected, with the reason, rather than as none. The few lookups that every Node and Python process makes at start are refused without a log line. On Linux the violations are the forwarder's relay failures, written to a log in the run directory through a descriptor that only the forwarder holds, so the agent cannot add to it. Denied writes and reads surface there as the agent's own errors.
 - What each kind of escape attempt yields, as exercised by the escape agents: on macOS, an outbound connection (HTTPS, raw TCP or WebSocket) is a `network-outbound` violation naming the port, a DNS lookup is a `network-outbound` violation on `/private/var/run/mDNSResponder` (Node also logs `mach-lookup` of `com.apple.SystemConfiguration.DNSConfiguration`, which Python's lookup does not log), a write is `file-write-create` and a read of a denied path is `file-read-data`. On Linux none of these is a violation. Each fails inside the agent (`ENETUNREACH`, `EROFS`, or `ENOENT` for a masked path).
-- A known limit on macOS: Seatbelt does not govern the `sysctl` that returns another process's arguments and environment, so an agent can read the launch-time environment of another process of the same user whose binary is not an Apple platform binary. That includes bactrian, when it was started with a provider key exported in its environment. The key cannot leave the sandbox except through bactrian's own listeners, but it can reach the agent, and so a recording. Until that is closed, start bactrian without the provider keys in its environment where the agent is not trusted. Linux is not affected, because the agent has its own process namespace.
+- Launch environments: on macOS Seatbelt does not govern the `sysctl` that returns another process's launch-time arguments and environment, so an agent can read those of any process of the same user whose binary is not an Apple platform binary. bactrian therefore keeps the provider keys out of its own launch environment and out of every child's (section 5.2, decision record 0010). Residual risk: other processes of the user, such as a shell installed from Homebrew, `tmux`, `direnv` or the `uv run --env-file` that started bactrian, can hold keys in theirs, and the agent can read them. Run bactrian as a dedicated user or in a virtual machine when the agent is hostile. On Linux the agent has its own process namespace and sees no other process.
 
 ## 6. File formats
 

@@ -139,6 +139,15 @@ let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
       | Bubblewrap path, _ :: args -> Ok (path :: args)
       | Bubblewrap _, [] | Seatbelt, ([] | _ :: _) -> Ok argv)
 
+(* The helper commands bactrian runs (bwrap --version, the end marker, log
+   show) get only PATH: after the launch environment is restored, inheriting
+   bactrian's would put the provider keys in their launch environment, where
+   another process of the user can read them (decision 0010). *)
+let path_var () =
+  "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin"
+
+let tool_env () = [| path_var () |]
+
 (* Linux tools *)
 
 let on_path name =
@@ -174,7 +183,7 @@ let bubblewrap ~env =
       match
         Eio.Process.parse_out
           (Eio.Stdenv.process_mgr env)
-          Eio.Buf_read.take_all [ path; "--version" ]
+          ~env:(tool_env ()) Eio.Buf_read.take_all [ path; "--version" ]
       with
       | exception Eio.Io _ -> Error (Printf.sprintf "%s --version failed" path)
       | text -> (
@@ -322,13 +331,7 @@ let probe ~env (host : host) =
         Filename.concat (resolved state_dir) "inside";
       ]
   in
-  let vars =
-    [|
-      "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin";
-      "HOME=" ^ state_dir;
-      "TMPDIR=" ^ temp_dir;
-    |]
-  in
+  let vars = [| path_var (); "HOME=" ^ state_dir; "TMPDIR=" ^ temp_dir |] in
   let* line = run_probe_command ~sw ~env ~vars argv in
   let* report =
     Result.map_error
@@ -515,7 +518,7 @@ let seatbelt_violations ~env ~tag ~since ~marker =
   match
     Eio.Process.run mgr
       ~is_success:(fun (_ : int) -> true)
-      ~stdout:discard ~stderr:discard
+      ~stdout:discard ~stderr:discard ~env:(tool_env ())
       [
         "/usr/bin/sandbox-exec";
         "-p";
@@ -540,32 +543,31 @@ let seatbelt_violations ~env ~tag ~since ~marker =
           Sandbox_log.predicate ~tag;
         ]
       in
-      let rec poll () =
-        let lines =
-          String.split_on_char '\n'
-            (Eio.Process.parse_out mgr Eio.Buf_read.take_all argv)
-        in
-        if
-          List.exists
-            (fun l ->
-              Option.is_some (Sandbox_log.of_seatbelt_ndjson ~tag:end_tag l))
-            lines
-        then List.filter_map (Sandbox_log.of_seatbelt_ndjson ~tag) lines
-        else begin
-          Eio.Time.sleep clock 0.5;
-          poll ()
-        end
+      let read () =
+        String.split_on_char '\n'
+          (Eio.Process.parse_out mgr ~env:(tool_env ()) Eio.Buf_read.take_all
+             argv)
       in
+      let now () = Eio.Time.now clock in
+      (* The deadline is checked between reads, and the outer bound only stops
+         a [log show] that hangs. *)
       match
-        Eio.Time.with_timeout clock log_timeout (fun () -> Ok (poll ()))
+        Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
+            Ok
+              (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
+                 ~deadline:(now () +. log_timeout)))
       with
-      | Ok vs -> Collected vs
-      | Error `Timeout ->
+      | Ok (Some vs) -> Collected vs
+      | Ok None ->
           Not_collected
             (Printf.sprintf
                "the system log did not show the run's end marker within %.0f \
                 seconds"
                log_timeout)
+      | Error `Timeout ->
+          Not_collected
+            (Printf.sprintf "log show did not finish within %.0f seconds"
+               (log_timeout +. 5.))
       | exception (Eio.Io _ as e) ->
           Not_collected ("log show failed: " ^ Printexc.to_string e))
 
