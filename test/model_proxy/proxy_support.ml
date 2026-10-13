@@ -371,3 +371,81 @@ let refused_url ctx =
   with
   | () -> Alcotest.fail "unreachable"
   | exception Failure p -> "http://127.0.0.1:" ^ p
+
+let slow_upstream ctx ~chunks ~gap =
+  let sock =
+    Eio.Net.listen ~sw:ctx.sw ~backlog:16 ~reuse_addr:true
+      (Eio.Stdenv.net ctx.env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port =
+    match Eio.Net.listening_addr sock with
+    | `Tcp (_, p) -> p
+    | `Unix _ -> Alcotest.fail "unix listener"
+  in
+  Eio.Fiber.fork_daemon ~sw:ctx.sw (fun () ->
+      Eio.Net.run_server sock
+        ~on_error:(fun _ -> ())
+        (fun flow _ ->
+          let r = Eio.Buf_read.of_flow ~max_size:1_000_000 flow in
+          let rec head len =
+            match Eio.Buf_read.line r with
+            | "" -> len
+            | line -> (
+                match String.split_on_char ':' line with
+                | k :: v :: _
+                  when String.equal (String.lowercase_ascii k) "content-length"
+                  ->
+                    head (int_of_string (String.trim v))
+                | _ -> head len)
+          in
+          ignore (Eio.Buf_read.take (head 0) r);
+          Eio.Flow.copy_string
+            "HTTP/1.1 200 OK\r\n\
+             content-type: text/event-stream\r\n\
+             transfer-encoding: chunked\r\n\
+             \r\n"
+            flow;
+          List.iter
+            (fun c ->
+              Eio.Flow.copy_string
+                (Printf.sprintf "%x\r\n%s\r\n" (String.length c) c)
+                flow;
+              Eio.Time.sleep (Eio.Stdenv.clock ctx.env) gap)
+            chunks;
+          Eio.Flow.copy_string "0\r\n\r\n" flow));
+  Printf.sprintf "http://127.0.0.1:%d" port
+
+(* Seconds between the moments each event was complete at the agent. *)
+let event_gaps r events =
+  let ends =
+    List.fold_left_map
+      (fun acc e ->
+        let n = acc + String.length e in
+        (n, n))
+      0 events
+    |> snd
+  in
+  let times =
+    List.map
+      (fun n -> fst (List.find (fun (_, total) -> total >= n) r.arrivals))
+      ends
+  in
+  let rec gaps = function
+    | a :: (b :: _ as rest) -> (b -. a) :: gaps rest
+    | [ _ ] | [] -> []
+  in
+  gaps times
+
+let record_all ctx ~token fixtures =
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  let run = make_run ctx ~token ~upstream:(F.base_url up) in
+  P.register ctx.proxy run;
+  List.iter (fun f -> check_ok (send_fixture ctx ~token f)) fixtures;
+  ignore (P.unregister ctx.proxy ~token);
+  recording ctx run
+
+let replay_run ?(record = true) ?(matcher = Matcher.Strict) ?(timing = P.Fast)
+    ctx ~token ~upstream recording =
+  make_run ctx ~token ~upstream ~record
+    ~mode:(P.Replay { recording; matcher; allow_reorder = false; timing })

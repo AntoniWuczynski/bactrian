@@ -66,3 +66,16 @@ val decode : Canon.t -> (t, error list) result
       {!Pricing.providers}), [pricing] (a price file, see {!Price_file})
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
+
+val reserved_env : string list
+(** The variables bactrian sets in every run's environment: [SIM_NOW], [TZ],
+    [BACTRIAN_RUN_ID], [BACTRIAN_STATE_DIR], the four provider base URLs and the
+    four provider key placeholders. A variant that sets one is a configuration
+    error at [variants.<name>.env.<KEY>], because it would be dropped without a
+    word. *)
+
+val unenforced : t -> string list
+(** One line per setting this build accepts but does not enforce yet (spec §5.3:
+    the sandbox under [auto], egress, MCP interception and faketime), each
+    starting with the setting's name and a colon. [sandbox: strict] is not
+    listed: it is refused outright where the run starts. *)

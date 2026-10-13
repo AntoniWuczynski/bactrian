@@ -143,6 +143,7 @@ let acceptance agent () =
         redact = [];
         pricing = Pricing.default;
         checks = None;
+        unenforced = [];
         turn_timeout = 60.;
         total_timeout = 90.;
       }

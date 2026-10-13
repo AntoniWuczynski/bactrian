@@ -131,12 +131,14 @@ let reject_duplicate_names ~path (variants : variant list) =
   go [] 0 variants
 
 let variants ~path c =
-  let* vs =
+  let* vs, mapping_form =
     match (c : Canon.t) with
     | Object _ ->
         let+ named = variants_of_mapping ~path c in
-        List.map (fun (name, env) -> { name; env }) named
-    | List _ -> list variant_entry ~path c
+        (List.map (fun (name, env) -> { name; env }) named, true)
+    | List _ ->
+        let+ entries = list variant_entry ~path c in
+        (entries, false)
     | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ ->
         fail ~path "expected a mapping of variants or a list of {name, env}"
   in
@@ -144,7 +146,7 @@ let variants ~path c =
   | [] -> fail ~path "must contain at least one variant"
   | _ :: _ ->
       let+ () = reject_duplicate_names ~path vs in
-      vs
+      (vs, mapping_form)
 
 let egress ~path c =
   object_ ~path c (fun r ->
@@ -205,6 +207,47 @@ let sandbox =
   enum ~what:"sandbox mode"
     [ ("auto", `Auto); ("strict", `Strict); ("off", `Off) ]
 
+let reserved_env =
+  [
+    "SIM_NOW";
+    "TZ";
+    "BACTRIAN_RUN_ID";
+    "BACTRIAN_STATE_DIR";
+    "OPENAI_BASE_URL";
+    "ANTHROPIC_BASE_URL";
+    "GOOGLE_GEMINI_BASE_URL";
+    "OPENROUTER_BASE_URL";
+    "OPENAI_API_KEY";
+    "ANTHROPIC_API_KEY";
+    "GEMINI_API_KEY";
+    "OPENROUTER_API_KEY";
+  ]
+
+(* [named] says how the variant is written in the document, as a path. *)
+let env_not_reserved ~mapping_form (variants : variant list) =
+  collect
+    (List.mapi
+       (fun i (v : variant) ->
+         let base =
+           if mapping_form then field_path "variants" v.name
+           else index_path "variants" i
+         in
+         collect
+           (List.filter_map
+              (fun (key, _) ->
+                if List.mem key reserved_env then
+                  Some
+                    (fail
+                       ~path:(field_path (field_path base "env") key)
+                       (Printf.sprintf
+                          "%s is set by bactrian for every run and cannot be \
+                           overridden"
+                          key))
+                else None)
+              v.env))
+       variants)
+  |> Result.map ignore
+
 let baseline_exists (variants : variant list) = function
   | None -> Ok ()
   | Some (c : compare) ->
@@ -220,51 +263,83 @@ let baseline_exists (variants : variant list) = function
                 (List.map (fun (v : variant) -> v.name) variants)))
 
 let decode c =
-  let decoded =
-    object_ ~path:"" c (fun r ->
-        let+ _version = required r "version" (version 1)
-        and+ name = required r "name" non_empty_string
-        and+ agent, env_passthrough = required r "agent" agent
-        and+ scenarios =
-          required r "scenarios" (non_empty_list non_empty_string)
-        and+ variants = required r "variants" variants
-        and+ repeats = default r "repeats" 1 (int_at_least 1)
-        and+ concurrency = default r "concurrency" 1 (int_at_least 1)
-        and+ intercept =
-          default r "intercept" [ `Model; `Mcp; `Fixtures; `Egress ] intercept
-        and+ egress_default, egress_hosts =
-          default r "egress" (Block, []) egress
-        and+ mcp = default r "mcp" [] (assoc policy)
-        and+ normalise = default r "normalise" [] (list regex)
-        and+ redact = default r "redact" [] (list regex)
-        and+ sandbox = default r "sandbox" `Auto sandbox
-        and+ faketime = default r "clock" true clock
-        and+ caps_usd = default r "caps_usd" [] caps_usd
-        and+ pricing = optional r "pricing" non_empty_string
-        and+ seed = default r "seed" 0 int
-        and+ compare = optional r "compare" compare_block in
-        {
-          name;
-          agent;
-          scenarios;
-          variants;
-          repeats;
-          concurrency;
-          intercept;
-          egress_default;
-          egress_hosts;
-          mcp;
-          normalise;
-          redact;
-          sandbox;
-          faketime;
-          caps_usd;
-          pricing;
-          seed;
-          env_passthrough;
-          compare;
-        })
-  in
-  let* t = decoded in
-  let+ () = baseline_exists t.variants t.compare in
-  t
+  object_ ~path:"" c (fun r ->
+      let variants_r = required r "variants" variants in
+      let compare = optional r "compare" compare_block in
+      (* Checks that need two decoded parts run beside the others, so their
+         errors come out in the same round. *)
+      let cross_checks =
+        match (variants_r, compare) with
+        | Ok (vs, mapping_form), Ok cmp ->
+            let+ () = baseline_exists vs cmp
+            and+ () = env_not_reserved ~mapping_form vs in
+            ()
+        | Ok (vs, mapping_form), Error _ -> env_not_reserved ~mapping_form vs
+        | Error _, (Ok _ | Error _) -> Ok ()
+      in
+      let+ _version = required r "version" (version 1)
+      and+ name = required r "name" non_empty_string
+      and+ agent, env_passthrough = required r "agent" agent
+      and+ scenarios = required r "scenarios" (non_empty_list non_empty_string)
+      and+ variants, _ = variants_r
+      and+ repeats = default r "repeats" 1 (int_at_least 1)
+      and+ concurrency = default r "concurrency" 1 (int_at_least 1)
+      and+ intercept =
+        default r "intercept" [ `Model; `Mcp; `Fixtures; `Egress ] intercept
+      and+ egress_default, egress_hosts = default r "egress" (Block, []) egress
+      and+ mcp = default r "mcp" [] (assoc policy)
+      and+ normalise = default r "normalise" [] (list regex)
+      and+ redact = default r "redact" [] (list regex)
+      and+ sandbox = default r "sandbox" `Auto sandbox
+      and+ faketime = default r "clock" true clock
+      and+ caps_usd = default r "caps_usd" [] caps_usd
+      and+ pricing = optional r "pricing" non_empty_string
+      and+ seed = default r "seed" 0 int
+      and+ compare = compare
+      and+ () = cross_checks in
+      {
+        name;
+        agent;
+        scenarios;
+        variants;
+        repeats;
+        concurrency;
+        intercept;
+        egress_default;
+        egress_hosts;
+        mcp;
+        normalise;
+        redact;
+        sandbox;
+        faketime;
+        caps_usd;
+        pricing;
+        seed;
+        env_passthrough;
+        compare;
+      })
+
+let unenforced t =
+  List.concat
+    [
+      (match t.sandbox with
+      | `Auto ->
+          [
+            "sandbox: auto (this build has no sandbox, so runs are unsandboxed)";
+          ]
+      | `Strict | `Off -> []);
+      (if List.mem `Egress t.intercept then
+         [
+           "egress: the agent's network access is neither blocked nor recorded";
+         ]
+       else []);
+      (if List.mem `Mcp t.intercept && not (List.is_empty t.mcp) then
+         [ "mcp: MCP traffic is not intercepted" ]
+       else []);
+      (if t.faketime then
+         [
+           "clock: faketime auto is not applied (SIM_NOW and TZ are a contract \
+            only)";
+         ]
+       else []);
+    ]

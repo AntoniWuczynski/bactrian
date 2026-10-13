@@ -177,6 +177,7 @@ let experiment_command ~json ~experiment ~resume =
           ~announce:(fun id ->
             announced := Some id;
             prerr_endline ("bactrian: experiment " ^ id))
+          ~warn:(fun w -> prerr_endline ("bactrian: warning: " ^ w))
           ())
   with
   | Error signal ->
@@ -212,11 +213,7 @@ let check_command scenarios =
           print_string
             (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
         reports;
-      if
-        List.for_all
-          (fun (r : Golden.report) -> List.is_empty r.offenders)
-          reports
-      then Output.exit_ok
+      if List.for_all Golden.passed reports then Output.exit_ok
       else Output.exit_failed
 
 (* Arguments *)
@@ -302,6 +299,7 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     redact = [];
     pricing = Bactrian_core.Pricing.default;
     checks = None;
+    unenforced = [];
     turn_timeout;
     total_timeout;
   }
@@ -549,7 +547,7 @@ let compare_exits =
 let results_error ~json (e : Results.error) =
   let code =
     match e with
-    | No_such_experiment _ | Bad_pricing _ -> Output.exit_usage
+    | No_such_experiment _ -> Output.exit_usage
     | Bad_manifest _ | Bad_run _ -> Output.exit_internal
   in
   fail ~json code (Format.asprintf "%a" Results.pp_error e)
@@ -720,9 +718,11 @@ let comparison_man =
       "Compares the candidate with the baseline over the runs of \
        $(i,EXPERIMENT-ID). The estimand, confidence, gate and thresholds come \
        from the $(b,compare) section of the experiment file that the manifest \
-       records. If that file is gone or has no such section, $(b,--baseline) \
-       and $(b,--candidate) are required, the estimand is $(b,suite), \
-       confidence 0.95 and the gate is the pass rate with threshold 0.";
+       records. Every gate metric needs a threshold there, under \
+       $(b,compare.thresholds): none is ever assumed, and a missing one is a \
+       usage error naming the metric. The file must therefore still exist and \
+       have a $(b,compare) section. $(b,--baseline) and $(b,--candidate) \
+       override its baseline and pick the candidate.";
   ]
 
 let compare_cmd =

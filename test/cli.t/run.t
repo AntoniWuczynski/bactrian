@@ -109,11 +109,12 @@ and path, and exits 64.
   > surprise: 1
   > YAML
   $ bactrian run exp.yaml
+  exp.yaml:4:13: scenarios[0]: glob "scenarios/*.yaml" matches no files
   exp.yaml:7:1: repeats: must be at least 1, found 0
   exp.yaml:8:1: surprise: unknown field
   [64]
   $ bactrian run exp.yaml --json
-  {"errors":[{"file":"exp.yaml","line":7,"column":1,"path":"repeats","message":"must be at least 1, found 0"},{"file":"exp.yaml","line":8,"column":1,"path":"surprise","message":"unknown field"}],"exit":64}
+  {"errors":[{"file":"exp.yaml","line":4,"column":13,"path":"scenarios[0]","message":"glob \"scenarios/*.yaml\" matches no files"},{"file":"exp.yaml","line":7,"column":1,"path":"repeats","message":"must be at least 1, found 0"},{"file":"exp.yaml","line":8,"column":1,"path":"surprise","message":"unknown field"}],"exit":64}
   [64]
 
 A glob that matches nothing is a configuration error too.
@@ -145,6 +146,21 @@ experiment cannot be resumed.
   [69]
   $ OPENAI_API_KEY=k bactrian run capped.yaml --resume nope
   bactrian: no experiment "nope"
+  [64]
+
+This build has no sandbox, so sandbox: strict stops before anything runs.
+
+  $ cp capped.yaml strict.yaml
+  $ echo 'sandbox: strict' >> strict.yaml
+  $ OPENAI_API_KEY=k bactrian run strict.yaml
+  bactrian: sandbox: strict was asked for but this build has no sandbox, so runs would be unsandboxed: use sandbox: auto or off
+  [69]
+
+A tab in indentation is reported where it is, with the fix.
+
+  $ printf 'version: 1\nid: t\nturns:\n\t- user: hi\n' > tab.yaml
+  $ bactrian check tab.yaml
+  tab.yaml:4:1: tab characters are not allowed here, YAML must be indented with spaces
   [64]
 
 The compare command documents the gate's statuses, and plan and report the usual

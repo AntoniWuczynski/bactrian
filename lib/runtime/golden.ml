@@ -2,7 +2,13 @@ open Bactrian_core
 
 type expected = Pass | Fail
 type offender = { trace : string; expected : expected; reason : string }
-type report = { scenario : string; offenders : offender list }
+
+type report = {
+  scenario : string;
+  offenders : offender list;
+  errors : string list;
+  warnings : string list;
+}
 
 let ( let* ) = Result.bind
 let checker_timeout = 60.
@@ -51,6 +57,30 @@ let judge ~expected items =
       else if failed then None
       else Some "expected to fail but every assertion and checker passed"
 
+let passed r = List.is_empty r.offenders && List.is_empty r.errors
+
+(* Assertions and checkers that no golden trace exercises prove nothing: with
+   only [pass] traces a lax one (that always passes) goes unnoticed. *)
+let coverage (scenario : Scenario.t) =
+  let has_items =
+    not (List.is_empty scenario.assertions && List.is_empty scenario.checkers)
+  in
+  match (has_items, scenario.golden_pass, scenario.golden_fail) with
+  | false, _, _ -> ([], [])
+  | true, [], [] ->
+      ( [
+          "no golden traces: add golden.pass and golden.fail traces so the \
+           assertions and checkers are exercised";
+        ],
+        [] )
+  | true, _ :: _, [] ->
+      ( [],
+        [
+          "no golden.fail trace, so an assertion or checker that always passes \
+           would go unnoticed";
+        ] )
+  | true, _, _ :: _ -> ([], [])
+
 let check ~env ~scenario_file =
   let fs = Eio.Stdenv.fs env in
   let* scenario = Config_loader.load_scenario Eio.Path.(fs / scenario_file) in
@@ -61,6 +91,7 @@ let check ~env ~scenario_file =
       match read_trace Eio.Path.(fs / dir / trace) with
       | Error reason -> Some reason
       | Ok entries ->
+          let date = Option.value (Checks.trace_date entries) ~default:date in
           judge ~expected
             (Checks.evaluate
                ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -71,10 +102,13 @@ let check ~env ~scenario_file =
     in
     Option.map (fun reason -> { trace; expected; reason }) verdict
   in
+  let errors, warnings = coverage scenario in
   Ok
     {
       scenario = scenario_file;
       offenders =
         List.filter_map (offender Pass) scenario.golden_pass
         @ List.filter_map (offender Fail) scenario.golden_fail;
+      errors;
+      warnings;
     }

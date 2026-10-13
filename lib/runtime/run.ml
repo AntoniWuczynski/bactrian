@@ -46,6 +46,7 @@ type config = {
   env_passthrough : string list;
   variant_env : (string * string) list;
   checks : checks option;
+  unenforced : string list;
   fixtures : string option;
   normalise : string list;
   redact : string list;
@@ -59,7 +60,7 @@ type result = {
   outcome : outcome;
   run_dir : string;
   findings : P.findings;
-  spend : (string * float) list;
+  spend : float;
 }
 
 let ( let* ) = Result.bind
@@ -177,6 +178,49 @@ let recorded_turns store ~run_id =
            (Ok [])
       |> Result.map List.rev
 
+(* The patterns a recording was made under, from its meta.json. Recordings
+   from before the patterns were saved have none. *)
+let recorded_patterns store ~run_id =
+  let* dir = Result.map_error store_error (Store.run_dir store ~run_id) in
+  match Eio.Path.load Eio.Path.(dir / "meta.json") with
+  | exception Eio.Io _ -> Ok ([], [])
+  | text -> (
+      let strings key = function
+        | `Assoc fields -> (
+            match List.assoc_opt key fields with
+            | None -> Ok []
+            | Some (`List items) ->
+                List.fold_right
+                  (fun item acc ->
+                    let* rest = acc in
+                    match item with
+                    | `String s -> Ok (s :: rest)
+                    | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _
+                    | `Assoc _ ->
+                        Error
+                          (Printf.sprintf
+                             "recording %s: meta.json %s: not a string" run_id
+                             key))
+                  items (Ok [])
+            | Some
+                ( `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _
+                | `Assoc _ ) ->
+                Error
+                  (Printf.sprintf "recording %s: meta.json %s: not a list"
+                     run_id key))
+        | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _
+          ->
+            Error
+              (Printf.sprintf "recording %s: meta.json is not an object" run_id)
+      in
+      match Yojson.Safe.from_string text with
+      | exception Yojson.Json_error m ->
+          Error (Printf.sprintf "recording %s: meta.json: %s" run_id m)
+      | json ->
+          let* normalise = strings "normalise" json in
+          let* redact = strings "redact" json in
+          Ok (normalise, redact))
+
 (* The agent's environment *)
 
 let base_env =
@@ -282,7 +326,7 @@ let decide_outcome ~replay (findings : P.findings) failure =
 (* Files *)
 
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
-    ~replay_of =
+    ~latency_ms ~tokens ~normalise ~redact ~replay_of =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -309,7 +353,13 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
              ("divergences", count findings.divergences);
              ("errors", count findings.errors);
            ] );
-       ("spend_usd", `Assoc (List.map (fun (p, usd) -> (p, `Float usd)) spend));
+       ("cost_usd", `Float spend);
+       ( "latency_ms",
+         match latency_ms with Some ms -> `Float ms | None -> `Null );
+       ("tokens", match tokens with Some n -> `Int n | None -> `Null);
+       ("normalise", `List (List.map (fun p -> `String p) normalise));
+       ("redact", `List (List.map (fun p -> `String p) redact));
+       ("unenforced", `List (List.map (fun w -> `String w) config.unenforced));
      ]
     @ match replay_of with Some r -> [ ("replay_of", `String r) ] | None -> [])
 
@@ -317,11 +367,6 @@ let write_trace dir entries =
   Store.write_atomic
     Eio.Path.(dir / "trace.jsonl")
     (String.concat "" (List.map (fun e -> Trace.to_line e ^ "\n") entries))
-
-let spent_by_provider ledger =
-  List.map
-    (fun (_, name) -> (name, Ledger.spent ledger ~provider:name))
-    providers
 
 let no_findings : P.findings =
   {
@@ -396,8 +441,6 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let run_id = fresh_id ~random_bytes now in
   let token = hex (random_bytes 16) in
   on_start run_id;
-  let* normalise = compile_patterns ~what:"normalise" config.normalise in
-  let* redact = redaction_patterns config.redact in
   let keys = match keys with Some k -> k | None -> keys_from_environment () in
   let* run_dir =
     Result.map_error store_error (Store.ensure_run_dir store ~run_id)
@@ -412,6 +455,15 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         in
         Ok (Some (r, id, cassette))
   in
+  (* A replay keys its requests with the patterns the recording was made
+     under, whatever the caller passes. *)
+  let* normalise_sources, redact_sources =
+    match recording with
+    | None -> Ok (config.normalise, config.redact)
+    | Some (_, id, _) -> recorded_patterns store ~run_id:id
+  in
+  let* normalise = compile_patterns ~what:"normalise" normalise_sources in
+  let* redact = redaction_patterns redact_sources in
   let* turns =
     match (config.turns, recording) with
     | [], Some (_, id, _) -> recorded_turns store ~run_id:id
@@ -451,7 +503,6 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
             timing = r.timing;
           }
   in
-  let spend_before = spent_by_provider ledger in
   let started = ref 0. in
   let t_ms () = Float.to_int ((Eio.Time.now clock -. !started) *. 1000.) in
   let events = ref [] in
@@ -565,15 +616,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       | Some m -> Errored m
       | None -> decide_outcome ~replay findings failure
     in
-    let spend =
-      List.filter_map
-        (fun (name, after) ->
-          let before =
-            Option.value (List.assoc_opt name spend_before) ~default:0.
-          in
-          if after > before then Some (name, after -. before) else None)
-        (spent_by_provider ledger)
-    in
+    let spend = Ledger.spent_by ledger ~owner:run_id in
     let entries =
       Trace_builder.build
         {
@@ -589,7 +632,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     in
     let outcome, verdicts =
       match (outcome, config.checks) with
-      | Passed, Some c -> (
+      | (Passed | Failed _ | Diverged), Some c ->
           let items =
             Checks.evaluate
               ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -598,15 +641,29 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~date:(String.sub (rfc3339 now) 0 10)
               ~assertions:c.assertions ~checkers:c.checkers entries
           in
-          match Checks.problems items with
-          | [] -> (Passed, Some items)
-          | problems -> (Failed (String.concat "; " problems), Some items))
-      | (Passed | Failed _ | Diverged | Errored _ | Not_run _), (Some _ | None)
-        ->
-          (outcome, None)
+          (* Only a run that passed is judged by its checks. The others keep
+             their outcome and still get their verdicts, for information. *)
+          let outcome =
+            match outcome with
+            | Passed -> (
+                match (Checks.checker_errors items, Checks.problems items) with
+                | (_ :: _ as errors), _ ->
+                    Errored ("checker: " ^ String.concat "; " errors)
+                | [], [] -> Passed
+                | [], problems -> Failed (String.concat "; " problems))
+            | Failed _ | Diverged | Errored _ | Not_run _ -> outcome
+          in
+          (outcome, Some items)
+      | (Errored _ | Not_run _), (Some _ | None) | _, None -> (outcome, None)
     in
     match
       write_trace run_dir entries;
+      Store.write_atomic
+        Eio.Path.(run_dir / "divergences.json")
+        (Yojson.Safe.pretty_to_string
+           (Divergences.file_json
+              (List.map Divergences.of_matcher findings.divergences))
+        ^ "\n");
       Option.iter
         (fun items ->
           Store.write_atomic
@@ -617,6 +674,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         Eio.Path.(run_dir / "meta.json")
         (Yojson.Safe.pretty_to_string
            (meta_json ~run_id ~config ~sim_now ~outcome ~findings ~spend
+              ~latency_ms:(Report_data.latency_ms entries)
+              ~tokens:(Report_data.tokens entries)
+              ~normalise:normalise_sources ~redact:redact_sources
               ~replay_of:(Option.map (fun (_, id, _) -> id) recording))
         ^ "\n")
     with

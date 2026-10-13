@@ -39,7 +39,8 @@ and check_keyword path (k, v) =
       in
       match names with
       | Some ns
-        when ns <> [] && List.for_all (fun n -> List.mem n type_names) ns ->
+        when (not (List.is_empty ns))
+             && List.for_all (fun n -> List.mem n type_names) ns ->
           []
       | Some _ | None ->
           [

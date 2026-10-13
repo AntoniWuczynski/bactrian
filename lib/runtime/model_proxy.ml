@@ -299,11 +299,20 @@ let normalised_query uri =
 
 let known_secrets run = run.token :: List.map snd run.keys
 
+(* Provider key formats and the known literals are scrubbed in the raw text,
+   where their boundary groups keep them exact. The user's patterns only see
+   the strings of a JSON document (or of a server-sent event), because a
+   pattern such as [Bearer .+] would otherwise swallow the closing quote and
+   brace. *)
 let scrub st text =
   let redact, text =
-    Redact.scrub
-      ~patterns:(Redact.provider_key_patterns @ st.run.redact)
+    Redact.scrub ~patterns:Redact.provider_key_patterns
       ~known:(known_secrets st.run) st.redact text
+  in
+  let redact, text =
+    match st.run.redact with
+    | [] -> (redact, text)
+    | patterns -> Redact.scrub_structured ~patterns redact text
   in
   st.redact <- redact;
   text
@@ -533,7 +542,8 @@ let live t ~conn_sw st x ~record =
         with
         | None -> Error (Ledger.Unknown_model model)
         | Some usd ->
-            Ledger.reserve run.ledger ~provider:(segment x.provider) ~model ~usd
+            Ledger.reserve run.ledger ~owner:run.run_id
+              ~provider:(segment x.provider) ~model ~usd
       in
       match reservation with
       | Error refusal -> refuse_spend st refusal

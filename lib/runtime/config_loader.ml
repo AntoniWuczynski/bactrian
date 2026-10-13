@@ -16,14 +16,15 @@ let ( let* ) = Result.bind
 
 (* {1 Positions} *)
 
-let join path key = if String.equal path "" then key else path ^ "." ^ key
-
 let parent path =
   if String.equal path "" then None
   else
-    let cut c = Some (String.sub path 0 (String.rindex path c)) in
-    if path.[String.length path - 1] = ']' then
-      if String.contains path '[' then cut '[' else Some ""
+    let cut c =
+      Some
+        (Option.fold ~none:"" ~some:(String.sub path 0)
+           (String.rindex_opt path c))
+    in
+    if path.[String.length path - 1] = ']' then cut '['
     else if String.contains path '.' then cut '.'
     else Some ""
 
@@ -33,17 +34,60 @@ let rec lookup table path =
   | None -> Option.bind (parent path) (lookup table)
 
 (* libyaml's description ends "... character N position N returned: R", where
-   the numbers are 0 for syntax errors. Keep the description only. *)
+   the numbers are 0 for syntax errors, and the binding prefixes it with "error
+   calling parser: ". Keep the description only. *)
 let describe msg =
-  let key = " character " in
-  let klen = String.length key in
-  let n = String.length msg in
-  let rec find i =
-    if i + klen > n then msg
-    else if String.equal (String.sub msg i klen) key then String.sub msg 0 i
-    else find (i + 1)
+  let prefix = "error calling parser: " in
+  let msg =
+    if String.starts_with ~prefix msg then
+      String.sub msg (String.length prefix)
+        (String.length msg - String.length prefix)
+    else msg
   in
-  find 0
+  let digits = Re.(rep1 digit) in
+  let suffix =
+    Re.(
+      compile
+        (seq
+           [
+             str " character ";
+             digits;
+             str " position ";
+             digits;
+             str " returned: ";
+             digits;
+             eos;
+           ]))
+  in
+  match Re.exec_opt suffix msg with
+  | Some g -> String.sub msg 0 (Re.Group.start g 0)
+  | None -> msg
+
+(* libyaml gives no error position through this binding. For "found character
+   that cannot start any token" the offending character is the first tab or
+   control character, or [@] or backtick, after the last well-formed event:
+   find it. Comments are skipped. *)
+let bad_character text (line, column) =
+  let bad c =
+    c = '\t' || c = '@' || c = '`' || (Char.code c < 0x20 && c <> '\r')
+  in
+  let rec in_line s i =
+    if i >= String.length s then None
+    else if s.[i] = '#' && (i = 0 || s.[i - 1] = ' ' || s.[i - 1] = '\t') then
+      None
+    else if bad s.[i] then Some i
+    else in_line s (i + 1)
+  in
+  let rec go n = function
+    | [] -> None
+    | l :: rest -> (
+        match in_line l (if n = line then column - 1 else 0) with
+        | Some i -> Some (n, i + 1, l.[i])
+        | None -> go (n + 1) rest)
+  in
+  go 1
+    ( String.split_on_char '\n' text |> List.filteri (fun i _ -> i >= line - 1)
+    |> fun ls -> List.init (line - 1) (fun _ -> "") @ ls )
 
 (* {1 Scalars} *)
 
@@ -89,6 +133,10 @@ let resolve_plain v =
 type state = {
   next : unit -> (S.Event.t * (int * int), problem) result;
   table : (string, int * int) Hashtbl.t;
+  soft : problem list ref;
+      (** Mistakes that do not stop the parse: the first value of a duplicate
+          key is kept and an alias reads as null, so that the other mistakes of
+          the document are still found. Newest first. *)
 }
 
 let mark_of (pos : S.Event.pos) =
@@ -117,7 +165,14 @@ and node_of st path ev at =
   | Sequence_start _ -> items st path 0 []
   | Mapping_start _ -> fields st path at []
   | Alias { anchor } ->
-      problem at path (Printf.sprintf "aliases are not supported (*%s)" anchor)
+      st.soft :=
+        {
+          at;
+          ppath = path;
+          msg = Printf.sprintf "aliases are not supported (*%s)" anchor;
+        }
+        :: !(st.soft);
+      Ok Canon.null
   | Stream_start _ | Document_start _ | Document_end _ | Mapping_end
   | Stream_end | Sequence_end | Nothing ->
       problem at path "unexpected YAML event"
@@ -129,7 +184,7 @@ and items st path i acc =
   | Stream_start _ | Document_start _ | Document_end _ | Mapping_start _
   | Mapping_end | Stream_end | Scalar _ | Sequence_start _ | Alias _ | Nothing
     ->
-      let item_path = Printf.sprintf "%s[%d]" path i in
+      let item_path = Config_decode.index_path path i in
       register st item_path pos;
       let* v = node_of st item_path ev pos in
       items st path (i + 1) (v :: acc)
@@ -142,9 +197,18 @@ and fields st path at acc =
       | Ok c -> Ok c
       | Error e -> problem at path (Format.asprintf "%a" Canon.pp_error e))
   | Scalar { value = key; _ } ->
-      let kpath = join path key in
-      if List.mem_assoc key acc then
-        problem kpos kpath (Printf.sprintf "duplicate key %S" key)
+      let kpath = Config_decode.field_path path key in
+      if List.mem_assoc key acc then (
+        st.soft :=
+          {
+            at = kpos;
+            ppath = kpath;
+            msg = Printf.sprintf "duplicate key %S" key;
+          }
+          :: !(st.soft);
+        (* Read the repeated value without moving the first one's positions. *)
+        let* _ = node { st with table = Hashtbl.create 8 } kpath in
+        fields st path at acc)
       else (
         register st kpath kpos;
         let* v = node st kpath in
@@ -155,6 +219,7 @@ and fields st path at acc =
 
 let parse_text text =
   let table = Hashtbl.create 64 in
+  let soft = ref [] in
   let fail_at at msg = { at; ppath = ""; msg } in
   (* libyaml gives no error position through this binding, so a syntax error is
      reported where the last well-formed event ended. *)
@@ -167,9 +232,27 @@ let parse_text text =
         | Ok (ev, pos) ->
             last := (pos.end_mark.line + 1, pos.end_mark.column + 1);
             Ok (ev, mark_of pos)
-        | Error (`Msg m) -> Error (fail_at !last (describe m))
+        | Error (`Msg m) ->
+            let msg = describe m in
+            let at, msg =
+              if not (String.ends_with ~suffix:"cannot start any token" msg)
+              then (!last, msg)
+              else
+                match bad_character text !last with
+                | Some (l, c, '\t') ->
+                    ( (l, c),
+                      "tab characters are not allowed here, YAML must be \
+                       indented with spaces" )
+                | Some (l, c, ch) ->
+                    ( (l, c),
+                      Printf.sprintf
+                        "found character %s that cannot start any token"
+                        (String.escaped (String.make 1 ch)) )
+                | None -> (!last, msg)
+            in
+            Error { at; ppath = ""; msg }
       in
-      let st = { next; table } in
+      let st = { next; table; soft } in
       let expect_end () =
         let* ev, at = next () in
         match ev with
@@ -208,7 +291,7 @@ let parse_text text =
         | Scalar _ | Sequence_start _ | Sequence_end | Alias _ | Nothing ->
             problem at "" "unexpected YAML event"
       in
-      Ok (canon, table)
+      Ok (canon, table, List.rev !soft)
 
 (* {1 Public API} *)
 
@@ -217,45 +300,83 @@ let file_name path = snd path
 let locate ~file (line, column) ~path ~message =
   { file; line; column; path; message }
 
+let describe_io (e : exn) =
+  match e with
+  | Eio.Io (Eio.Fs.E fs, _) -> (
+      match fs with
+      | Not_found _ -> "no such file"
+      | Permission_denied _ -> "permission denied"
+      | Already_exists _ | File_too_large | Not_native _ | Symlink ->
+          Format.asprintf "%a" Eio.Exn.pp e)
+  | _ -> Format.asprintf "%a" Eio.Exn.pp e
+
 let read path =
   let file = file_name path in
   match Eio.Path.load path with
   | text -> Ok text
   | exception (Eio.Io _ as e) ->
-      Error
-        [
-          locate ~file (1, 1) ~path:""
-            ~message:(Format.asprintf "%a" Eio.Exn.pp e);
-        ]
+      Error [ locate ~file (1, 1) ~path:"" ~message:(describe_io e) ]
 
-let load path =
+let located ~file { at; ppath; msg } = locate ~file at ~path:ppath ~message:msg
+
+(* Errors of one file in the order a reader meets them. *)
+let by_position (errors : located_error list) =
+  List.stable_sort
+    (fun a b -> compare (a.line, a.column) (b.line, b.column))
+    errors
+
+let sort_errors errors =
+  let files =
+    List.fold_left
+      (fun seen (e : located_error) ->
+        if List.mem e.file seen then seen else seen @ [ e.file ])
+      [] errors
+  in
+  List.concat_map
+    (fun file ->
+      by_position
+        (List.filter
+           (fun (e : located_error) -> String.equal e.file file)
+           errors))
+    files
+
+(* The document, with the mistakes that did not stop the parse. *)
+let load_soft path =
   let file = file_name path in
   let* text = read path in
   match parse_text text with
-  | Ok (canon, table) -> Ok (canon, lookup table)
-  | Error { at; ppath; msg } ->
-      Error [ locate ~file at ~path:ppath ~message:msg ]
+  | Ok (canon, table, soft) ->
+      Ok (canon, lookup table, List.map (located ~file) soft)
+  | Error problem -> Error [ located ~file problem ]
 
-let load_with ?(validate = fun (_ : 'a) -> []) decode path =
+let load path =
+  let* canon, find, soft = load_soft path in
+  match soft with [] -> Ok (canon, find) | _ :: _ -> Error soft
+
+(* [check] sees the document even when it does not decode, so its errors come
+   out in the same round as the decoding ones. *)
+let load_with ?(check = fun (_ : Canon.t) -> []) decode path =
   let file = file_name path in
-  let* canon, find = load path in
-  match
-    Result.bind (decode canon) (fun v ->
-        match validate v with [] -> Ok v | errs -> Error errs)
-  with
-  | Ok v -> Ok v
-  | Error errs ->
-      Error
-        (List.map
-           (fun (e : Scenario.error) ->
-             locate ~file
-               (Option.value ~default:(1, 1) (find e.path))
-               ~path:e.path ~message:e.message)
-           errs)
+  let* canon, find, soft = load_soft path in
+  let decoded, decode_errors =
+    match decode canon with Ok v -> (Some v, []) | Error errs -> (None, errs)
+  in
+  let errors =
+    List.map
+      (fun (e : Scenario.error) ->
+        locate ~file
+          (Option.value ~default:(1, 1) (find e.path))
+          ~path:e.path ~message:e.message)
+      (decode_errors @ check canon)
+  in
+  match (decoded, soft @ errors) with
+  | Some v, [] -> Ok v
+  | (Some _ | None), (_ :: _ as all) -> Error (by_position all)
+  | None, [] -> Error []
 
 (* The fixtures directory is relative to the scenario file. *)
-let fixtures_exist path (s : Scenario.t) =
-  match (s.fixtures, Eio.Path.split path) with
+let fixtures_exist path canon =
+  match (Canon.str_member "fixtures" canon, Eio.Path.split path) with
   | Some dir, Some (parent, _)
     when not (Eio.Path.is_directory Eio.Path.(parent / dir)) ->
       [
@@ -267,7 +388,7 @@ let fixtures_exist path (s : Scenario.t) =
   | Some _, (Some _ | None) | None, (Some _ | None) -> []
 
 let load_scenario path =
-  load_with ~validate:(fixtures_exist path) Scenario.decode path
+  load_with ~check:(fixtures_exist path) Scenario.decode path
 
 let load_pricing path =
   Result.map Pricing.with_overrides (load_with Price_file.decode path)
@@ -299,6 +420,14 @@ let segment_matches pat s =
 let entries dir = try Eio.Path.read_dir_entries dir with Eio.Io _ -> []
 let rel_join rel name = if String.equal rel "" then name else rel ^ "/" ^ name
 
+(* Wildcards do not reach dot entries (editor swap files, [.bactrian], [.git])
+   unless the pattern segment starts with a dot, and [**] does not descend into
+   dependency or build directories. *)
+let hidden name = String.starts_with ~prefix:"." name
+
+let never_descended name =
+  hidden name || name = "node_modules" || name = "_build"
+
 let rec walk dir rel segs =
   match segs with
   | [] -> if Eio.Path.is_file dir then [ rel ] else []
@@ -307,6 +436,7 @@ let rec walk dir rel segs =
       @ List.concat_map
           (fun (kind, name) ->
             match kind with
+            | `Directory when never_descended name -> []
             | `Directory -> walk Eio.Path.(dir / name) (rel_join rel name) segs
             | `Unknown | `Fifo | `Character_special | `Regular_file | `Socket
             | `Symbolic_link | `Block_device ->
@@ -315,8 +445,8 @@ let rec walk dir rel segs =
   | seg :: rest when has_wildcard seg ->
       List.concat_map
         (fun (_, name) ->
-          if segment_matches seg name then
-            walk Eio.Path.(dir / name) (rel_join rel name) rest
+          if segment_matches seg name && ((not (hidden name)) || hidden seg)
+          then walk Eio.Path.(dir / name) (rel_join rel name) rest
           else [])
         (entries dir)
   | seg :: rest -> (

@@ -110,6 +110,128 @@ let test_missing_file () =
   | [ e ] -> Alcotest.(check bool) "named" true (String.length e.file > 0)
   | _ -> Alcotest.fail "one error expected"
 
+let contains text needle = Re.execp (Re.compile (Re.str needle)) text
+
+(* Review M8: libyaml's message is kept whole and a bad character is found. *)
+let test_tab_is_located () =
+  with_dir @@ fun dir ->
+  write dir "tab.yaml" "version: 1\nturns:\n\t- user: hi\n";
+  match errors (Loader.load Eio.Path.(dir / "tab.yaml")) with
+  | [ e ] ->
+      Alcotest.(check (pair int int)) "position" (3, 1) (e.line, e.column);
+      Alcotest.(check bool) "says tab" true (contains e.message "tab");
+      Alcotest.(check bool) "says spaces" true (contains e.message "spaces");
+      Alcotest.(check bool)
+        "no parser prefix" false
+        (contains e.message "error calling parser")
+  | _ -> Alcotest.fail "one error expected"
+
+let test_bad_character_is_located () =
+  with_dir @@ fun dir ->
+  write dir "at.yaml" "a: 1\nb: @x\n";
+  (match errors (Loader.load Eio.Path.(dir / "at.yaml")) with
+  | [ e ] ->
+      Alcotest.(check (pair int int)) "position" (2, 4) (e.line, e.column);
+      Alcotest.(check bool)
+        "whole description" true
+        (contains e.message "cannot start any token");
+      Alcotest.(check bool)
+        "no numbers from libyaml" false
+        (contains e.message "position")
+  | _ -> Alcotest.fail "one error expected");
+  write dir "indent.yaml" "a: b\n  c: d\n";
+  match errors (Loader.load Eio.Path.(dir / "indent.yaml")) with
+  | [ e ] ->
+      Alcotest.(check bool)
+        "keeps the description up to the first ' character'" true
+        (contains e.message "mapping values are not allowed in this context");
+      Alcotest.(check bool) "tidy" false (contains e.message "returned")
+  | _ -> Alcotest.fail "one error expected"
+
+(* Review m6: a duplicate key does not hide the other mistakes. *)
+let test_duplicate_key_keeps_going () =
+  with_dir @@ fun dir ->
+  write dir "s.yaml"
+    "version: 1\nid: x\nid: y\nturns:\n  - user: hi\ncolour: blue\n";
+  let lines =
+    List.map
+      (fun (e : Loader.located_error) -> e.line)
+      (errors (Loader.load_scenario Eio.Path.(dir / "s.yaml")))
+  in
+  Alcotest.(check (list int)) "both reported, in order" [ 3; 6 ] lines
+
+(* Review m4: a key with a dot is located at its own line. *)
+let test_dotted_key_location () =
+  with_dir @@ fun dir ->
+  write dir "e.yaml"
+    "version: 1\n\
+     name: x\n\
+     agent: { protocol: command, command: [a] }\n\
+     scenarios: [s]\n\
+     variants: { a: {} }\n\
+     egress:\n\
+    \  hosts:\n\
+    \    ok.example: record\n\
+    \    www.example.com: nope\n";
+  match errors (Loader.load_experiment Eio.Path.(dir / "e.yaml")) with
+  | [ e ] -> Alcotest.(check int) "the host's line" 9 e.line
+  | es -> Alcotest.failf "expected one error, got %d" (List.length es)
+
+(* Review m5, m1 *)
+let test_sorted_and_complete () =
+  with_dir @@ fun dir ->
+  write dir "s/sc.yaml"
+    "version: 1\n\
+     id: x\n\
+     colour: blue\n\
+     turns:\n\
+    \  - user: hi\n\
+     fixtures: ./nowhere\n\
+     assertions:\n\
+    \  - max_steps: lots\n";
+  let errs = errors (Loader.load_scenario Eio.Path.(dir / "s" / "sc.yaml")) in
+  let positions =
+    List.map (fun (e : Loader.located_error) -> (e.line, e.column)) errs
+  in
+  Alcotest.(check (list (pair int int)))
+    "every mistake, in file order"
+    (List.sort compare positions)
+    positions;
+  Alcotest.(check (list int))
+    "unknown field, fixtures and the assertion together" [ 3; 6; 8 ]
+    (List.map fst positions)
+
+(* Review m3 *)
+let test_missing_file_message () =
+  with_dir @@ fun dir ->
+  match errors (Loader.load Eio.Path.(dir / "nope.yaml")) with
+  | [ e ] ->
+      Alcotest.(check string) "message" "no such file" e.message;
+      Alcotest.(check bool) "no exception text" false (contains e.message "Eio")
+  | _ -> Alcotest.fail "one error expected"
+
+(* Review m20 *)
+let test_globs_skip_hidden_and_build_dirs () =
+  with_dir @@ fun dir ->
+  List.iter
+    (fun name -> write dir name "x: 1\n")
+    [
+      "a.yaml";
+      ".#a.yaml";
+      ".hidden.yaml";
+      ".bactrian/runs/x.yaml";
+      "node_modules/m/y.yaml";
+      "_build/z.yaml";
+      "sub/d.yaml";
+    ];
+  let expand pats = loaded (Loader.expand_globs ~base:dir pats) in
+  let strs = Alcotest.(list string) in
+  Alcotest.check strs "star skips dot files" [ "a.yaml" ] (expand [ "*.yaml" ]);
+  Alcotest.check strs "double star skips dot, build and dependency dirs"
+    [ "a.yaml"; "sub/d.yaml" ] (expand [ "**/*.yaml" ]);
+  Alcotest.check strs "a dot in the pattern opts in" [ ".hidden.yaml" ]
+    (expand [ ".hidden.*" ])
+
 let touch dir name = write dir name "x: 1\n"
 
 let test_globs () =
@@ -276,11 +398,24 @@ let () =
           Alcotest.test_case "duplicate key and alias" `Quick
             test_duplicate_key_and_alias;
           Alcotest.test_case "missing file" `Quick test_missing_file;
+          Alcotest.test_case "missing file message" `Quick
+            test_missing_file_message;
+          Alcotest.test_case "tab" `Quick test_tab_is_located;
+          Alcotest.test_case "bad character" `Quick
+            test_bad_character_is_located;
+          Alcotest.test_case "duplicate key keeps going" `Quick
+            test_duplicate_key_keeps_going;
+          Alcotest.test_case "dotted key location" `Quick
+            test_dotted_key_location;
+          Alcotest.test_case "sorted and complete" `Quick
+            test_sorted_and_complete;
         ] );
       ( "globs",
         [
           Alcotest.test_case "patterns" `Quick test_globs;
           Alcotest.test_case "no match" `Quick test_glob_nothing;
+          Alcotest.test_case "hidden and build directories" `Quick
+            test_globs_skip_hidden_and_build_dirs;
         ] );
       ( "decoding",
         [

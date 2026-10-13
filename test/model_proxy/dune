@@ -13,8 +13,8 @@
   (:standard -w -70)))
 
 (tests
- (names test_model_proxy test_reservation)
- (modules test_model_proxy test_reservation)
+ (names test_model_proxy test_model_proxy_replay test_reservation)
+ (modules test_model_proxy test_model_proxy_replay test_reservation)
  (package bactrian)
  (deps
   (source_tree ../fixtures/protocols))

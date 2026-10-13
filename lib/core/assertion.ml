@@ -203,7 +203,7 @@ let rec is_subsequence wanted have =
       else is_subsequence wanted hs
 
 let count x l = List.length (List.filter (String.equal x) l)
-let listing l = if l = [] then "(none)" else comma l
+let listing l = if List.is_empty l then "(none)" else comma l
 
 let check_sequence mode tools trace =
   let called = List.map fst (tool_calls trace) in
@@ -233,6 +233,20 @@ let check_sequence mode tools trace =
             (Printf.sprintf "tool_sequence contains: missing %s, %s"
                (comma missing) actual))
 
+(* Whether every expected element can be given its own actual element. *)
+let rec distinct_match matches expected have =
+  match expected with
+  | [] -> true
+  | e :: rest ->
+      let rec pick skipped = function
+        | [] -> false
+        | a :: after ->
+            matches e a
+            && distinct_match matches rest (List.rev_append skipped after)
+            || pick (a :: skipped) after
+      in
+      pick [] have
+
 (* The first place where [actual] does not contain [expected], as a message. *)
 let rec partial_mismatch path expected actual =
   let differs () =
@@ -255,16 +269,23 @@ let rec partial_mismatch path expected actual =
   | List items -> (
       match Canon.to_list_opt actual with
       | None -> differs ()
-      | Some have ->
-          List.find_map
-            (fun e ->
-              if List.exists (fun a -> partial_mismatch path e a = None) have
-              then None
+      | Some have -> (
+          let matches e a = Option.is_none (partial_mismatch path e a) in
+          match
+            List.find_opt (fun e -> not (List.exists (matches e) have)) items
+          with
+          | Some e ->
+              Some
+                (Printf.sprintf "%s: no element matches %s" path
+                   (Canon.to_string e))
+          | None ->
+              if distinct_match matches items have then None
               else
                 Some
-                  (Printf.sprintf "%s: no element matches %s" path
-                     (Canon.to_string e)))
-            items)
+                  (Printf.sprintf
+                     "%s: the expected elements need more distinct matches \
+                      than the actual list has (expected %s, got %s)"
+                     path (Canon.to_string expected) (Canon.to_string actual))))
   | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ ->
       if Canon.equal expected actual then None else differs ()
 
@@ -289,7 +310,7 @@ let check_args tool mode expected trace =
       (tool_calls trace)
   in
   let mismatches = List.map (args_mismatch mode expected) calls in
-  if calls = [] then
+  if List.is_empty calls then
     Fail
       (Printf.sprintf "tool_args: %s was never called (called: %s)" tool
          (listing (List.map fst (tool_calls trace))))
@@ -326,6 +347,18 @@ let tokens trace =
       | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
           acc)
     0 trace
+
+let without_usage trace =
+  List.length
+    (List.filter
+       (fun (e : Trace.entry) ->
+         match e.event with
+         | Model_call { usage = None; _ } -> true
+         | Model_call { usage = Some _; _ }
+         | Run_start _ | Turn_start _ | Tool_call _ | Tool_result _
+         | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+             false)
+       trace)
 
 let span_ms = function
   | [] -> 0
@@ -428,14 +461,19 @@ let check_output turn check trace =
              content expected)
   | Jsonpath { path; equals } -> check_json_reply ~turn ~path ~equals content
 
-let evaluate ~cost assertion trace =
+let evaluate ~cost ~egress_intercepted assertion trace =
   match assertion with
   | Tool_sequence { mode; tools } -> check_sequence mode tools trace
   | Tool_args { tool; mode; expected } -> check_args tool mode expected trace
   | Max_steps n ->
       limit "max_steps" ~actual:(steps trace) ~max:n ~show:string_of_int
-  | Max_tokens n ->
-      limit "max_tokens" ~actual:(tokens trace) ~max:n ~show:string_of_int
+  | Max_tokens n -> (
+      match without_usage trace with
+      | 0 ->
+          limit "max_tokens" ~actual:(tokens trace) ~max:n ~show:string_of_int
+      | 1 -> Fail "max_tokens: 1 model call has no usage"
+      | gaps ->
+          Fail (Printf.sprintf "max_tokens: %d model calls have no usage" gaps))
   | Max_latency_ms n ->
       limit "max_latency" ~actual:(span_ms trace) ~max:n ~show:(fun ms ->
           Printf.sprintf "%d ms" ms)
@@ -445,6 +483,10 @@ let evaluate ~cost assertion trace =
           Fail "max_cost_usd: the trace cannot be priced (a model has no price)"
       | Some actual ->
           limit "max_cost_usd" ~actual ~max ~show:(Printf.sprintf "$%g"))
+  | No_egress _ when not egress_intercepted ->
+      Fail
+        "no_egress: cannot be verified, egress is not intercepted so no HTTP \
+         call is recorded"
   | No_egress hosts -> check_egress hosts trace
   | Output { turn; check } -> (
       match check_output turn check trace with

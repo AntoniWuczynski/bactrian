@@ -19,6 +19,8 @@ type manifest = {
   name : string;
   experiment_file : string;
   seed : int;
+  fingerprint : Fingerprint.t;
+  previous_run_ids : (int * string list) list;
   summary : summary;
 }
 
@@ -74,6 +76,7 @@ type wire_run = {
   outcome : string option; [@default None]
   reason : string option; [@default None]
   run_id : string option; [@default None]
+  previous_run_ids : string list; [@default []]
 }
 [@@deriving yojson { strict = true }]
 
@@ -83,11 +86,12 @@ type wire = {
   experiment : string;
   experiment_file : string;
   seed : int;
+  fingerprint : Yojson.Safe.t;
   runs : wire_run list;
 }
 [@@deriving yojson { strict = true }]
 
-let wire_run ((p : planned), status, run_id) : wire_run =
+let wire_run (((p : planned), status, run_id), previous_run_ids) : wire_run =
   let status, outcome, reason =
     match status with
     | Pending -> ("pending", None, None)
@@ -103,6 +107,7 @@ let wire_run ((p : planned), status, run_id) : wire_run =
     outcome;
     reason;
     run_id;
+    previous_run_ids;
   }
 
 let outcome_of ~kind ~reason : (Run.outcome, string) result =
@@ -154,18 +159,29 @@ let read_manifest path =
                     Ok (x :: l))
                   (Ok []) w.runs
               with
-              | Ok runs ->
-                  Ok
-                    {
-                      name = w.experiment;
-                      experiment_file = w.experiment_file;
-                      seed = w.seed;
-                      summary =
+              | Ok runs -> (
+                  match Fingerprint.of_yojson w.fingerprint with
+                  | Error m -> bad ("fingerprint: " ^ m)
+                  | Ok fingerprint ->
+                      Ok
                         {
-                          experiment_id = w.experiment_id;
-                          runs = List.rev runs;
-                        };
-                    }
+                          name = w.experiment;
+                          experiment_file = w.experiment_file;
+                          seed = w.seed;
+                          fingerprint;
+                          previous_run_ids =
+                            List.filter_map
+                              (fun (r : wire_run) ->
+                                match r.previous_run_ids with
+                                | [] -> None
+                                | ids -> Some (r.index, ids))
+                              w.runs;
+                          summary =
+                            {
+                              experiment_id = w.experiment_id;
+                              runs = List.rev runs;
+                            };
+                        })
               | Error m -> bad m)))
 
 (* Preflight *)
@@ -211,18 +227,13 @@ let preflight ~caps ~keys ~upstream ~connector =
 
 (* Loading *)
 
-let located_all results =
-  match List.concat_map (function Ok _ -> [] | Error e -> e) results with
-  | [] -> Ok (List.filter_map Result.to_option results)
-  | errors -> Error (Configuration errors)
-
 let valid_id id =
   not
     (String.equal id "" || String.equal id "." || String.equal id ".."
    || String.contains id '/' || String.contains id '\000')
 
 let manifest_json ~experiment_id ~(experiment : Experiment.t) ~experiment_file
-    runs =
+    ~fingerprint runs =
   wire_to_yojson
     {
       version = 1;
@@ -230,6 +241,7 @@ let manifest_json ~experiment_id ~(experiment : Experiment.t) ~experiment_file
       experiment = experiment.name;
       experiment_file;
       seed = experiment.seed;
+      fingerprint = Fingerprint.to_yojson fingerprint;
       runs = List.map wire_run runs;
     }
 
@@ -250,71 +262,153 @@ type loaded = {
   turn_timeout : float;
   total_timeout : float;
   pricing : Pricing.table;
+  fingerprint : Fingerprint.t;
 }
 
+let strings_member key canon =
+  Option.bind (Canon.list_member key canon) (fun items ->
+      List.fold_right
+        (fun item acc ->
+          Option.bind acc (fun rest ->
+              Option.map (fun s -> s :: rest) (Canon.to_string_opt item)))
+        items (Some []))
+
+(* An error about the experiment file's own key [path]. *)
+let at_key ~experiment_file ~find path message : Config_loader.located_error =
+  let line, column = Option.value (find path) ~default:(1, 1) in
+  { file = experiment_file; line; column; path; message }
+
 (* [expand_globs] knows only the pattern: point at it in the experiment file. *)
-let locate_globs ~fs ~experiment_file (experiment : Experiment.t) errors =
-  let find =
-    match Config_loader.load Eio.Path.(fs / experiment_file) with
-    | Ok (_, find) -> find
-    | Error _ -> fun _ -> None
-  in
+let locate_globs ~experiment_file ~find ~globs errors =
   List.map
     (fun (e : Config_loader.located_error) ->
-      let index = List.find_index (String.equal e.path) experiment.scenarios in
       let path =
-        match index with
+        match List.find_index (String.equal e.path) globs with
         | Some i -> Printf.sprintf "scenarios[%d]" i
         | None -> "scenarios"
       in
-      let line, column = Option.value (find path) ~default:(1, 1) in
-      { e with file = experiment_file; line; column; path })
+      at_key ~experiment_file ~find path e.message)
     errors
 
-let load ~fs ~experiment_file =
-  let* experiment =
-    Result.map_error
-      (fun e -> Configuration e)
-      (Config_loader.load_experiment Eio.Path.(fs / experiment_file))
+(* Two scenario files with one [id] would run under one name and be merged in
+   the results: point at the second [id]. *)
+let duplicate_ids ~fs ~dir scenarios =
+  let rec go seen = function
+    | [] -> []
+    | (rel, (s : Scenario.t)) :: rest -> (
+        match List.assoc_opt s.id seen with
+        | None -> go ((s.id, rel) :: seen) rest
+        | Some first ->
+            let path = Eio.Path.(fs / dir / rel) in
+            let line, column =
+              match Config_loader.load path with
+              | Ok (_, find) -> Option.value (find "id") ~default:(1, 1)
+              | Error _ -> (1, 1)
+            in
+            {
+              Config_loader.file = snd path;
+              line;
+              column;
+              path = "id";
+              message =
+                Printf.sprintf "scenario id %S is already used by %s" s.id first;
+            }
+            :: go seen rest)
   in
+  go [] scenarios
+
+(* Every stage reports, so one round shows every mistake: the experiment, its
+   globs, each scenario and the price file. A stage that needs a field of an
+   experiment that did not decode reads it straight from the document. *)
+let load ~fs ~experiment_file =
+  let exp_path = Eio.Path.(fs / experiment_file) in
   let dir = Filename.dirname experiment_file in
   let base = Eio.Path.(fs / dir) in
-  let* files =
-    Result.map_error
-      (fun errors ->
-        Configuration (locate_globs ~fs ~experiment_file experiment errors))
-      (Config_loader.expand_globs ~base experiment.scenarios)
+  let experiment = Config_loader.load_experiment exp_path in
+  let document = Config_loader.load exp_path in
+  let find = match document with Ok (_, f) -> f | Error _ -> fun _ -> None in
+  let globs, pricing_file =
+    match (experiment, document) with
+    | Ok (e : Experiment.t), _ -> (Some e.scenarios, e.pricing)
+    | Error _, Ok (canon, _) ->
+        (strings_member "scenarios" canon, Canon.str_member "pricing" canon)
+    | Error _, Error _ -> (None, None)
   in
-  let* scenarios =
-    located_all
-      (List.map
-         (fun rel ->
-           Result.map
-             (fun s -> (rel, s))
-             (Config_loader.load_scenario Eio.Path.(base / rel)))
-         files)
+  let files, glob_errors =
+    (* One glob at a time, so a typo does not hide the files of the others. *)
+    let expanded =
+      List.map
+        (fun glob -> Config_loader.expand_globs ~base [ glob ])
+        (Option.value globs ~default:[])
+    in
+    ( List.sort_uniq String.compare
+        (List.concat_map
+           (function Ok files -> files | Error _ -> [])
+           expanded),
+      locate_globs ~experiment_file ~find
+        ~globs:(Option.value globs ~default:[])
+        (List.concat_map (function Ok _ -> [] | Error es -> es) expanded) )
   in
-  let* pricing =
-    match experiment.pricing with
+  let loaded_scenarios =
+    List.map
+      (fun rel ->
+        Result.map
+          (fun s -> (rel, s))
+          (Config_loader.load_scenario Eio.Path.(base / rel)))
+      files
+  in
+  let scenarios = List.filter_map Result.to_option loaded_scenarios in
+  let pricing =
+    match pricing_file with
     | None -> Ok Pricing.default
     | Some file ->
-        Result.map_error
-          (fun e -> Configuration e)
-          (Config_loader.load_pricing Eio.Path.(base / file))
+        if Eio.Path.is_file Eio.Path.(base / file) then
+          Config_loader.load_pricing Eio.Path.(base / file)
+        else
+          Error
+            [
+              at_key ~experiment_file ~find "pricing"
+                (Printf.sprintf "%s does not exist" file);
+            ]
   in
-  match experiment.agent with
-  | Http _ -> Error (Usage "http agents are not supported yet")
-  | Command { argv; turn_timeout; total_timeout } ->
-      Ok
-        {
-          experiment;
-          dir;
-          scenarios;
-          argv;
-          turn_timeout;
-          total_timeout;
-          pricing;
-        }
+  let errors =
+    Config_loader.sort_errors
+      (List.concat
+         [
+           (match experiment with Ok _ -> [] | Error es -> es);
+           glob_errors;
+           List.concat_map
+             (function Ok _ -> [] | Error es -> es)
+             loaded_scenarios;
+           duplicate_ids ~fs ~dir scenarios;
+           (match pricing with Ok _ -> [] | Error es -> es);
+         ])
+  in
+  match (errors, experiment, pricing, document) with
+  | _ :: _, _, _, _ -> Error (Configuration errors)
+  | [], Error es, _, _ | [], Ok _, Error es, _ -> Error (Configuration es)
+  | [], Ok _, Ok _, Error es -> Error (Configuration es)
+  | [], Ok experiment, Ok pricing, Ok (canon, _) -> (
+      let* fingerprint =
+        Result.map_error
+          (fun m -> Environment m)
+          (Fingerprint.compute ~base ~experiment:canon ~pricing_file
+             ~scenario_files:files)
+      in
+      match experiment.agent with
+      | Http _ -> Error (Usage "http agents are not supported yet")
+      | Command { argv; turn_timeout; total_timeout } ->
+          Ok
+            {
+              experiment;
+              dir;
+              scenarios;
+              argv;
+              turn_timeout;
+              total_timeout;
+              pricing;
+              fingerprint;
+            })
 
 (* Running *)
 
@@ -344,13 +438,90 @@ let run_config (l : loaded) (scenario : Scenario.t) ~scenario_dir
     normalise = l.experiment.normalise;
     redact = l.experiment.redact;
     pricing = l.pricing;
+    unenforced = Experiment.unenforced l.experiment;
     turn_timeout = l.turn_timeout;
     total_timeout = l.total_timeout;
   }
 
+(* One process runs an experiment at a time: two would both start the pending
+   runs and overwrite each other's manifest. *)
+let with_lock ~experiment_id dir f =
+  let path = Eio.Path.native_exn Eio.Path.(dir / "run.lock") in
+  match Unix.openfile path [ O_WRONLY; O_CREAT; O_CLOEXEC ] 0o600 with
+  | exception Unix.Unix_error (e, _, _) ->
+      Error (Environment (Printf.sprintf "%s: %s" path (Unix.error_message e)))
+  | fd -> (
+      Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
+      match Unix.lockf fd F_TLOCK 0 with
+      | exception Unix.Unix_error ((EAGAIN | EACCES | EWOULDBLOCK), _, _) ->
+          Error
+            (Usage
+               (Printf.sprintf
+                  "experiment %s is already running (another process holds %s)"
+                  experiment_id path))
+      | exception Unix.Unix_error (e, _, _) ->
+          Error
+            (Environment (Printf.sprintf "%s: %s" path (Unix.error_message e)))
+      | () -> f ())
+
+(* A resume repeats what has no outcome worth keeping: a run that was lost,
+   interrupted, stopped by a cap (missing data) or hit a fault of ours. The
+   others are final. Each repeated run keeps its old ID in its previous IDs. *)
+let for_resume (runs, previous) =
+  let reset ((p : planned), status, run_id) =
+    match status with
+    | Done (Passed | Failed _ | Diverged) -> ((p, status, run_id), [])
+    | Pending | Interrupted | Done (Errored _ | Not_run _) ->
+        ((p, Pending, None), Option.to_list run_id)
+  in
+  List.map
+    (fun (((p : planned), _, _) as run) ->
+      let run, old = reset run in
+      (run, Option.value ~default:[] (List.assoc_opt p.index previous) @ old))
+    runs
+
+let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
+    (l : loaded) planned =
+  match resume with
+  | None ->
+      let id =
+        Run.fresh_id ~random_bytes (Eio.Time.now (Eio.Stdenv.clock env))
+      in
+      Ok (id, List.map (fun p -> ((p, Pending, None), [])) planned)
+  | Some id when not (valid_id id) ->
+      Error (Usage (Printf.sprintf "invalid experiment ID %S" id))
+  | Some id -> (
+      let path = Eio.Path.(root / "experiments" / id / "manifest.json") in
+      match read_manifest path with
+      | Error None -> Error (Usage (Printf.sprintf "no experiment %S" id))
+      | Error (Some m) -> Error (Usage m)
+      | Ok m -> (
+          if
+            not
+              (same_plan (List.map (fun (p, _, _) -> p) m.summary.runs) planned)
+          then
+            Error
+              (Usage
+                 (Printf.sprintf
+                    "experiment %s was planned from different scenarios, \
+                     variants, repeats or seed than %s now gives"
+                    id experiment_file))
+          else
+            match Fingerprint.changes ~recorded:m.fingerprint l.fingerprint with
+            | [] -> Ok (id, for_resume (m.summary.runs, m.previous_run_ids))
+            | changes ->
+                Error
+                  (Usage
+                     (Printf.sprintf
+                        "experiment %s cannot be resumed because %s since it \
+                         was started: start a new experiment instead"
+                        id
+                        (String.concat ", " changes)))))
+
 let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
-    ?(announce = fun (_ : string) -> ()) ?keys ?(upstream = P.default_upstream)
-    ?connector ~env ~experiment_file ~resume () =
+    ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
+    ?(upstream = P.default_upstream) ?connector ~env ~experiment_file ~resume ()
+    =
   let fs = Eio.Stdenv.fs env in
   let root =
     match root with
@@ -359,6 +530,15 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   in
   let* l = load ~fs ~experiment_file in
   let experiment = l.experiment in
+  let* () =
+    match experiment.sandbox with
+    | `Strict ->
+        Error
+          (Environment
+             "sandbox: strict was asked for but this build has no sandbox, so \
+              runs would be unsandboxed: use sandbox: auto or off")
+    | `Auto | `Off -> Ok ()
+  in
   let planned =
     plan ~seed:experiment.seed ~scenarios:(List.map fst l.scenarios)
       ~variants:
@@ -369,29 +549,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     match keys with Some k -> k | None -> Run.keys_from_environment ()
   in
   let* experiment_id, initial =
-    match resume with
-    | None ->
-        let id =
-          Run.fresh_id ~random_bytes (Eio.Time.now (Eio.Stdenv.clock env))
-        in
-        Ok (id, List.map (fun p -> (p, Pending, None)) planned)
-    | Some id when not (valid_id id) ->
-        Error (Usage (Printf.sprintf "invalid experiment ID %S" id))
-    | Some id -> (
-        let path = Eio.Path.(root / "experiments" / id / "manifest.json") in
-        match read_manifest path with
-        | Error None -> Error (Usage (Printf.sprintf "no experiment %S" id))
-        | Error (Some m) -> Error (Usage m)
-        | Ok { summary = { runs; _ }; _ }
-          when same_plan (List.map (fun (p, _, _) -> p) runs) planned ->
-            Ok (id, runs)
-        | Ok _ ->
-            Error
-              (Usage
-                 (Printf.sprintf
-                    "experiment %s was planned from different scenarios, \
-                     variants, repeats or seed than %s now gives"
-                    id experiment_file)))
+    start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume l planned
   in
   let* () = preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector in
   let* jobs =
@@ -422,6 +580,8 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     |> Result.map List.rev
   in
   let dir = Eio.Path.(root / "experiments" / experiment_id) in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 dir;
+  with_lock ~experiment_id dir @@ fun () ->
   match
     Ledger.create
       ~path:Eio.Path.(dir / "ledger.jsonl")
@@ -442,8 +602,10 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           (P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env))
       in
       announce experiment_id;
+      List.iter warn (Experiment.unenforced experiment);
       let store = Store.create ~root in
-      let table = Array.of_list initial in
+      let table = Array.of_list (List.map fst initial) in
+      let previous = Array.of_list (List.map snd initial) in
       let lock = Eio.Mutex.create () in
       let write_manifest () =
         Eio.Mutex.use_rw ~protect:true lock (fun () ->
@@ -451,7 +613,8 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               Eio.Path.(dir / "manifest.json")
               (Yojson.Safe.pretty_to_string
                  (manifest_json ~experiment_id ~experiment ~experiment_file
-                    (Array.to_list table))
+                    ~fingerprint:l.fingerprint
+                    (List.combine (Array.to_list table) (Array.to_list previous)))
               ^ "\n"))
       in
       let set i f =

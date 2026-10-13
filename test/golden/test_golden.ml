@@ -1,5 +1,6 @@
 open Bactrian_core
 module G = Bactrian_runtime.Golden
+module Checks = Bactrian_runtime.Checks
 module Loader = Bactrian_runtime.Config_loader
 
 let with_dir f =
@@ -136,6 +137,54 @@ let test_unreadable_and_invalid_traces () =
     [ ("missing.jsonl", G.Pass); ("bad.jsonl", G.Fail) ]
     (offenders r)
 
+(* Review M6: assertions nobody exercised are not "ok". *)
+let test_no_golden_traces_is_an_error () =
+  with_dir @@ fun env dir ->
+  setup dir (scenario ~pass:"[]" ~fail:"[]" ());
+  let r = check env dir in
+  Alcotest.check offenders_t "no offender" [] (offenders r);
+  Alcotest.(check bool) "not passed" false (G.passed r);
+  Alcotest.(check bool)
+    "says so" true
+    (List.exists
+       (fun m -> Re.execp (Re.compile (Re.str "no golden traces")) m)
+       r.errors)
+
+let test_no_fail_trace_warns () =
+  with_dir @@ fun env dir ->
+  setup dir (scenario ~fail:"[]" ());
+  let r = check env dir in
+  Alcotest.(check bool) "still passes" true (G.passed r);
+  Alcotest.(check int) "one warning" 1 (List.length r.warnings);
+  Alcotest.(check bool)
+    "names the missing kind" true
+    (Re.execp (Re.compile (Re.str "golden.fail")) (List.hd r.warnings));
+  setup dir (scenario ());
+  Alcotest.(check (list string))
+    "no warning with both" [] (check env dir).warnings
+
+let test_nothing_to_check () =
+  with_dir @@ fun env dir ->
+  setup dir {|{"version": 1, "id": "bare", "turns": [{"user": "hi"}]}|};
+  let r = check env dir in
+  Alcotest.(check bool) "passes" true (G.passed r);
+  Alcotest.(check (list string)) "no warnings" [] r.warnings
+
+(* Review m7: the date a trace is priced at comes from the trace itself. *)
+let test_trace_date () =
+  let entries =
+    List.map
+      (fun line ->
+        match Trace.of_line line with
+        | Ok e -> e
+        | Error _ -> Alcotest.fail "trace line")
+      (String.split_on_char '\n' (String.trim (trace_text [])))
+  in
+  Alcotest.(check (option string))
+    "run start" (Some "2026-10-14")
+    (Checks.trace_date entries);
+  Alcotest.(check (option string)) "empty" None (Checks.trace_date [])
+
 let test_invalid_scenario () =
   with_dir @@ fun env dir ->
   write dir "s.json"
@@ -164,6 +213,12 @@ let () =
             test_checker_without_verdict;
           Alcotest.test_case "unreadable and invalid traces" `Quick
             test_unreadable_and_invalid_traces;
+          Alcotest.test_case "no golden traces" `Quick
+            test_no_golden_traces_is_an_error;
+          Alcotest.test_case "no fail trace warns" `Quick
+            test_no_fail_trace_warns;
+          Alcotest.test_case "nothing to check" `Quick test_nothing_to_check;
+          Alcotest.test_case "trace date" `Quick test_trace_date;
           Alcotest.test_case "invalid scenario" `Quick test_invalid_scenario;
         ] );
     ]

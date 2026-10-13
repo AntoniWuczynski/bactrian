@@ -20,6 +20,21 @@ let cost ?(table = Pricing.default) ~date entries =
           acc)
     (Some 0.) entries
 
+let trace_date entries =
+  List.find_map
+    (fun ({ event; _ } : Trace.entry) ->
+      match event with
+      | Run_start { sim_now; _ } when String.length sim_now >= 10 ->
+          Some (String.sub sim_now 0 10)
+      | Run_start _ | Turn_start _ | Model_call _ | Tool_call _ | Tool_result _
+      | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+          None)
+    entries
+
+(* Nothing intercepts a run's HTTP egress yet, so no HTTP call is ever recorded
+   and [no_egress] cannot be verified. *)
+let egress_intercepted = false
+
 let kind : Assertion.t -> string = function
   | Tool_sequence _ -> "tool_sequence"
   | Tool_args _ -> "tool_args"
@@ -34,7 +49,10 @@ let evaluate ?table ~process_mgr ~clock ~timeout ~cwd ~date ~assertions
     ~checkers entries =
   let assertion i a =
     let verdict =
-      match Assertion.evaluate ~cost:(cost ?table ~date) a entries with
+      match
+        Assertion.evaluate ~cost:(cost ?table ~date) ~egress_intercepted a
+          entries
+      with
       | Pass -> Pass
       | Fail reason -> Fail reason
     in
@@ -56,6 +74,14 @@ let evaluate ?table ~process_mgr ~clock ~timeout ~cwd ~date ~assertions
     }
   in
   List.mapi assertion assertions @ List.mapi checker checkers
+
+let checker_errors items =
+  List.filter_map
+    (fun { name; verdict } ->
+      match verdict with
+      | Checker_failed reason -> Some (Printf.sprintf "%s: %s" name reason)
+      | Pass | Fail _ -> None)
+    items
 
 let problems items =
   List.filter_map

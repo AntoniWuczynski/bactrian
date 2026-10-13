@@ -37,6 +37,11 @@ type manifest = {
   name : string;  (** The experiment's name. *)
   experiment_file : string;  (** As given to {!run_experiment}. *)
   seed : int;
+  fingerprint : Fingerprint.t;
+      (** What the experiment was started from, checked by a resume. *)
+  previous_run_ids : (int * string list) list;
+      (** By plan index: the IDs of earlier attempts of a run that a resume
+          repeated, oldest first. Only indices that have some. *)
   summary : summary;
 }
 
@@ -47,15 +52,18 @@ val read_manifest : _ Eio.Path.t -> (manifest, string option) result
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string
-      (** A spend cap of 0 everywhere, a missing key, no TLS. *)
+      (** A spend cap of 0 everywhere, a missing key, no TLS, [sandbox: strict]
+          (this build has no sandbox). *)
   | Usage of string
-      (** An unsupported agent, an unknown experiment to resume, a plan that no
-          longer matches the experiment being resumed. *)
+      (** An unsupported agent, an unknown experiment to resume, a plan or
+          fingerprint that no longer matches the experiment being resumed, an
+          experiment that another process is running. *)
 
 val run_experiment :
   ?root:Eio.Fs.dir_ty Eio.Path.t ->
   ?random_bytes:(int -> string) ->
   ?announce:(string -> unit) ->
+  ?warn:(string -> unit) ->
   ?keys:(Model_proxy.provider * string) list ->
   ?upstream:(Model_proxy.provider -> Uri.t) ->
   ?connector:Upstream.connector ->
@@ -64,12 +72,13 @@ val run_experiment :
   resume:string option ->
   unit ->
   (summary, error) result
-(** Loads the experiment and its scenarios (every configuration error is
-    collected), plans the runs and executes them with at most the experiment's
-    [concurrency] in flight. [root] is the [.bactrian] directory (default
-    [./.bactrian]). Scenario globs are relative to the experiment file's
-    directory, where the agent also runs. A scenario's checkers run in the
-    scenario file's directory.
+(** Loads the experiment and its scenarios (every configuration error of every
+    stage is collected and sorted by position: the experiment, the scenario
+    globs, each scenario, duplicate scenario IDs and the price file), plans the
+    runs and executes them with at most the experiment's [concurrency] in
+    flight. [root] is the [.bactrian] directory (default [./.bactrian]).
+    Scenario globs are relative to the experiment file's directory, where the
+    agent also runs. A scenario's checkers run in the scenario file's directory.
 
     [.bactrian/experiments/<id>/manifest.json] lists every planned run with its
     status and run ID and is rewritten atomically after every run. The
@@ -77,9 +86,22 @@ val run_experiment :
     from [caps_usd], so caps hold across a resume. Once a run is [Not_run]
     because a cap was reached, no further run is started (they stay [Pending]).
 
-    With [resume = Some id] the manifest of that experiment is read and every
-    run that is [Done] is skipped, the others are run again. The plan must be
-    the one the manifest holds.
+    With [resume = Some id] the manifest of that experiment is read. Runs that
+    are [Done] as [Passed], [Failed] or [Diverged] are never repeated. Every
+    other run is run again: not started, interrupted, [Not_run] (missing data,
+    typically after a cap was raised) and [Errored] (a fault of ours, or a
+    checker that gave no verdict). A repeated run gets a new run ID and keeps
+    the old one in the manifest's previous IDs. The resume is refused ([Usage])
+    when the plan differs or when the manifest's {!Fingerprint.t} does not match
+    the files now: the experiment (except [caps_usd] and [concurrency], which
+    may change), the agent, any scenario file or the price file. The message
+    names what changed. An exclusive lock on [experiments/<id>/run.lock] keeps a
+    second process from running the same experiment.
+
+    [sandbox: strict] is [Environment] (exit 69): this build has no sandbox.
+    [warn] is called once per setting that is accepted but not enforced (see
+    {!Bactrian_core.Experiment.unenforced}) before the first run, and the same
+    lines are recorded in every run's [meta.json].
 
     Cancelling the calling fibre (see {!Interrupt}) cancels the runs in flight,
     marks them [Interrupted], writes the manifest, and re-raises the

@@ -195,6 +195,52 @@ let test_message () =
   | [ { path = "colour"; message = "unknown field" } ] -> ()
   | es -> Alcotest.failf "got %a" pp_errors es
 
+(* Review M7: settings this build parses but does not enforce are listed. *)
+let test_unenforced () =
+  let names t =
+    List.map
+      (fun w -> List.hd (String.split_on_char ':' w))
+      (Experiment.unenforced t)
+  in
+  Alcotest.check strings "defaults"
+    [ "sandbox"; "egress"; "clock" ]
+    (names (decoded (doc "")));
+  Alcotest.check strings "mcp servers listed"
+    [ "sandbox"; "egress"; "mcp"; "clock" ]
+    (names (decoded (doc {|, "mcp": {"calendar": "record"}|})));
+  Alcotest.check strings "everything off" []
+    (names
+       (decoded
+          (doc
+             {|, "sandbox": "off", "intercept": ["model", "fixtures"], "clock": {"faketime": "off"}|})));
+  Alcotest.check strings "strict is refused elsewhere, not listed here"
+    [ "egress"; "clock" ]
+    (names (decoded (doc {|, "sandbox": "strict"|})))
+
+(* Review m16: a variant cannot set a variable bactrian sets itself. *)
+let test_reserved_env () =
+  let reserved = Experiment.reserved_env in
+  Alcotest.(check bool) "TZ" true (List.mem "TZ" reserved);
+  Alcotest.(check bool) "key" true (List.mem "OPENAI_API_KEY" reserved);
+  Alcotest.check strings "mapping form"
+    [ "variants.a.env.TZ"; "variants.b.env.BACTRIAN_RUN_ID" ]
+    (paths
+       (doc
+          ~variants:
+            {|"variants": {"a": {"env": {"TZ": "UTC", "OK": "1"}}, "b": {"env": {"BACTRIAN_RUN_ID": "x"}}}|}
+          ""));
+  Alcotest.check strings "list form"
+    [ "variants[0].env.SIM_NOW" ]
+    (paths
+       (doc ~variants:{|"variants": [{"name": "a", "env": {"SIM_NOW": "x"}}]|}
+          ""))
+
+(* Review m1: a bad baseline is reported together with the other errors. *)
+let test_baseline_with_other_errors () =
+  Alcotest.check strings "both reported"
+    [ "compare.baseline"; "repeats" ]
+    (paths (doc {|, "repeats": 0, "compare": {"baseline": "zzz"}|}))
+
 let five =
   {|{"version": 1, "name": 5, "bogus": 1,
      "agent": {"protocol": "command", "command": ["x"], "timeouts": {"turn": "soon"}},
@@ -214,12 +260,17 @@ let () =
           Alcotest.test_case "millisecond durations" `Quick test_ms_duration;
           Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
+          Alcotest.test_case "unenforced settings" `Quick test_unenforced;
         ] );
       ( "errors",
         [
           case "root not an object" [ "" ] "3";
           case "unknown field" [ "colour" ] (doc {|, "colour": 1|});
           Alcotest.test_case "unknown message" `Quick test_message;
+          Alcotest.test_case "reserved variant variables" `Quick
+            test_reserved_env;
+          Alcotest.test_case "baseline with other errors" `Quick
+            test_baseline_with_other_errors;
           case "unknown nested field" [ "agent.extra" ]
             (doc
                ~agent:

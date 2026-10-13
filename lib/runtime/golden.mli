@@ -11,8 +11,19 @@ type offender = {
   reason : string;
 }
 
-type report = { scenario : string; offenders : offender list }
+type report = {
+  scenario : string;
+  offenders : offender list;
+  errors : string list;
+      (** Problems with the scenario's golden set as a whole: it has assertions
+          or checkers and no golden trace at all. *)
+  warnings : string list;
+      (** It has golden [pass] traces and no [fail] trace. *)
+}
 (** [scenario] is the scenario file as given. *)
+
+val passed : report -> bool
+(** No offender and no error. Warnings do not fail a check. *)
 
 val check :
   env:Eio_unix.Stdenv.base ->

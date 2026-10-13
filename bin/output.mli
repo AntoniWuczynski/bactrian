@@ -26,8 +26,9 @@ val render_summary_json : Bactrian_runtime.Executor.summary -> string
     reason and run ID. *)
 
 val render_golden_text : colour:bool -> Bactrian_runtime.Golden.report -> string
-(** [ok FILE], or [FAIL FILE] followed by one line per offending golden trace.
-*)
+(** [ok FILE], or [FAIL FILE], then one line per error of the golden set and per
+    offending golden trace, then one [warning:] line per warning (also under
+    [ok]). *)
 
 val render_text : Bactrian_runtime.Run.result -> string
 

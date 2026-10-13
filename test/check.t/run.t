@@ -67,6 +67,29 @@ Several scenarios are checked in one go, and every offender is listed.
     golden/ok.jsonl (golden pass): expected to pass but assertions[0] tool_sequence: tool_sequence contains: missing calendar_delete, called: calendar_create
   [1]
 
+A scenario with assertions or checkers and no golden trace at all proves
+nothing, so it is not ok.
+
+  $ grep -v '^golden:\|^  pass:\|^  fail:' good.yaml > bare.yaml
+  $ bactrian check bare.yaml
+  FAIL bare.yaml
+    no golden traces: add golden.pass and golden.fail traces so the assertions and checkers are exercised
+  [1]
+
+With only pass traces an assertion that always passes would go unnoticed. That
+is a warning, and the check still succeeds.
+
+  $ grep -v '^  fail:' good.yaml > passonly.yaml
+  $ bactrian check passonly.yaml
+  ok passonly.yaml
+    warning: no golden.fail trace, so an assertion or checker that always passes would go unnoticed
+
+A scenario with nothing to check needs no golden traces.
+
+  $ printf 'version: 1\nid: bare\nturns:\n  - user: hi\n' > empty.yaml
+  $ bactrian check empty.yaml
+  ok empty.yaml
+
 A trace that cannot be read is an offender too.
 
   $ sed 's/golden\/ok.jsonl/golden\/nope.jsonl/' good.yaml > missing.yaml
@@ -92,8 +115,7 @@ path, and exit 64.
   broken.yaml:6:1: surprise: unknown field
   [64]
   $ bactrian check nothing-here.yaml
-  nothing-here.yaml:1:1: Eio.Io Fs Not_found Unix_error (No such file or directory, "openat", "nothing-here.yaml"),
-    opening <fs:nothing-here.yaml>
+  nothing-here.yaml:1:1: no such file
   [64]
   $ bactrian check 2> /dev/null
   [64]

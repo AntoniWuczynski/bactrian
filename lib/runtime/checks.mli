@@ -19,6 +19,10 @@ val cost :
     in [table] (default {!Bactrian_core.Pricing.default}) (["YYYY-MM-DD"]).
     [None] when a model call has no usage or no price. *)
 
+val trace_date : Trace.entry list -> string option
+(** The simulated date (["YYYY-MM-DD"]) of the trace's [Run_start], the date its
+    calls are priced at. [None] without a [Run_start]. *)
+
 val evaluate :
   ?table:Pricing.table ->
   process_mgr:_ Eio_unix.Process.mgr ->
@@ -32,6 +36,9 @@ val evaluate :
   item list
 (** Every assertion in order, then every checker. [timeout] bounds each checker
     and [cwd] is where it runs. *)
+
+val checker_errors : item list -> string list
+(** One line per {!Checker_failed} item, naming it and giving the reason. *)
 
 val problems : item list -> string list
 (** One line per item that is not {!Pass}, naming it and giving the reason. *)

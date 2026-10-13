@@ -70,16 +70,25 @@ type config = {
       (** The variant's variables, given to the agent after the passthrough
           ones. They cannot replace bactrian's own variables. *)
   checks : checks option;
-      (** Evaluated over the trace of a run that otherwise passed; the result is
-          written to [verdicts.json] (atomically) in the run directory. [None]
-          for record and replay from the command line. *)
+      (** Evaluated over the trace of a run that passed, failed or diverged, and
+          written to [verdicts.json] (atomically) in the run directory. Only a
+          run that otherwise passed is judged by them: a failing assertion or
+          checker makes it [Failed], and a checker that gives no verdict makes
+          it [Errored] ("checker: ..."). [None] for record and replay from the
+          command line. *)
+  unenforced : string list;
+      (** Experiment settings this build does not enforce yet, one line each,
+          recorded in [meta.json]. *)
   fixtures : string option;
       (** A directory whose files are copied, recursively, into the state
           directory before the agent starts (spec §5 step 1). Symbolic links are
           not followed. *)
   normalise : string list;
-      (** Experiment [normalise] patterns, see {!Model_proxy.run}. *)
-  redact : string list;  (** Experiment [redact] patterns. *)
+      (** Experiment [normalise] patterns, see {!Model_proxy.run}. Saved in
+          [meta.json]. A replay ignores them and uses its recording's. *)
+  redact : string list;
+      (** Experiment [redact] patterns. Saved in [meta.json]. A replay ignores
+          them and uses its recording's. *)
   pricing : Pricing.table;
       (** For the run's reservations, settlement and [max_cost_usd]. *)
   turn_timeout : float;
@@ -91,8 +100,11 @@ type result = {
   outcome : outcome;
   run_dir : string;  (** Absolute. *)
   findings : Model_proxy.findings;
-  spend : (string * float) list;
-      (** USD this run added to the ledger, per provider that is not zero. *)
+  spend : float;
+      (** USD the ledger attributes to this run ({!Ledger.spent_by}): what its
+          model calls settled at plus its usage gaps, whatever other runs spend
+          at the same time. Written to [meta.json] as [cost_usd], beside
+          [latency_ms] and [tokens] (null when the trace has no model call). *)
 }
 
 val execute :

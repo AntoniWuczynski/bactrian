@@ -6,7 +6,7 @@ The name comes from the two-humped camel. Most of what bactrian does is compare 
 
 ## Status
 
-Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. MCP interception, the sandbox and the MCP server are also still to come.
+Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. MCP interception, the sandbox and the MCP server are also still to come. Until then the settings that ask for them (`sandbox`, `egress`, `intercept`, `mcp` and `clock`) are read but not enforced. `sandbox: strict` stops with exit status 69 because there is no sandbox to be strict about, and every other unenforced setting is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 ## Recording and replaying an agent
 
@@ -25,7 +25,7 @@ bactrian replay <run-id> -- node examples/agents/typescript/dist/agent.js
 bactrian replay <run-id> --mode until-divergence -- uv run --project examples/agents/python examples/agents/python/agent.py
 ```
 
-Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json` and the agent's stderr. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
+Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json`, `divergences.json` and the agent's stderr. `meta.json` also carries the run's cost in US dollars as the ledger attributed it, the total latency and token count of its model calls, and the `normalise` and `redact` patterns it was recorded under. A replay applies those patterns, whatever the command line says, so requests that a pattern changed still match. `divergences.json` lists each replay divergence with its kind, the nearest recorded exchange, the similarity and the paths that differ. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
 
 ## Experiments
 
@@ -65,16 +65,16 @@ caps_usd: { openai: 10, gemini: 20 }
 seed: 1
 ```
 
-Check the assertions and checkers against the scenario's golden traces before trusting them (every `pass` trace must pass and every `fail` trace must fail), then run the experiment:
+Check the assertions and checkers against the scenario's golden traces before trusting them (every `pass` trace must pass and every `fail` trace must fail), then run the experiment. A scenario that has assertions or checkers must have golden traces, and a scenario with `pass` traces and no `fail` trace gets a warning, because an assertion that always passes would go unnoticed:
 
 ```sh
 bactrian check scenarios/*.yaml
 bactrian run experiment.yaml
 ```
 
-`check` exits 1 and lists the offending traces otherwise, and both commands exit 64 on a configuration error, printing every mistake as `file:line:column`. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`: runs that finished are not repeated. Each run directory also gets a `verdicts.json` with the result of every assertion and checker. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls real providers, so for now it needs HTTPS support that is not built yet.
+`check` exits 1 and lists the offending traces (or the missing golden traces) otherwise, and both commands exit 64 on a configuration error, printing every mistake of every file as `file:line:column` in the order it appears. `run` allocates the runs in a seeded, blocked and interleaved order, keeps its progress in `./.bactrian/experiments/<id>/manifest.json`, stops starting runs once a spend cap is reached, and prints a line per run (`--json` for one JSON object). Interrupt it with Ctrl-C and carry on later with `bactrian run experiment.yaml --resume <id>`. A run that passed, failed or diverged is never repeated. A run that never started, was interrupted, was not run because a spend cap was reached or errored (a fault of bactrian's own, or a checker that could not give a verdict) is run again under a new run ID, and the manifest keeps the old one under `previous_run_ids`. So raising `caps_usd` and resuming fills in the runs that the cap held back. The resume is refused, naming what changed, if the experiment file (apart from `caps_usd` and `concurrency`), the agent, a scenario file or the price file is different from when the experiment started. Only one process can run an experiment at a time. Each finished run's directory also gets a `verdicts.json` with the result of every assertion and checker. A failing assertion or checker makes a passing run `failed`, while a checker that crashes, hangs or prints something that is not a verdict makes it `errored`, which is left out of the pass rates and listed separately. `run` exits 70 if any run errored, so a continuous integration job sees it. The checker commands run in the scenario file's directory and the agent in the experiment file's. Like recording, `run` calls real providers, so for now it needs HTTPS support that is not built yet.
 
-Four more fields shape a run. A scenario's `fixtures` names a directory, relative to the scenario file, whose files are copied into the run's `BACTRIAN_STATE_DIR` before the agent starts, and a directory that does not exist is a configuration error. In the experiment, `normalise` lists regular expressions that are masked out of each model request before it is keyed, so two runs that differ only in, say, a date still match on replay, and each run's `meta.json` counts the masks that fired in `findings.normalise_masks`. `redact` lists further regular expressions whose matches are replaced by numbered placeholders in the cassette, on top of the provider key formats. `pricing` names a YAML file, relative to the experiment, that overrides or extends the built-in price table:
+Four more fields shape a run. A scenario's `fixtures` names a directory, relative to the scenario file, whose files are copied into the run's `BACTRIAN_STATE_DIR` before the agent starts, and a directory that does not exist is a configuration error. In the experiment, `normalise` lists regular expressions that are masked out of each model request before it is keyed, so two runs that differ only in, say, a date still match on replay, and each run's `meta.json` counts the masks that fired in `findings.normalise_masks`. `redact` lists further regular expressions whose matches are replaced by numbered placeholders in the cassette, on top of the provider key formats. They are matched against the strings inside the JSON of each request and response, one string at a time, so a wide pattern such as `Bearer .+` stops at the end of its string and cannot damage the JSON around it. `normalise` leaves those placeholders alone. `pricing` names a YAML file, relative to the experiment, that overrides or extends the built-in price table:
 
 ```yaml
 # prices.yaml (USD per million tokens)
@@ -98,7 +98,7 @@ Once an experiment has run, `compare` turns its runs into a verdict per metric, 
 bactrian compare <experiment-id> --baseline luna --candidate flash --gate
 ```
 
-The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required and the gate is the pass rate with a threshold of 0.
+The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required. Every gate metric needs a threshold under `thresholds`. None is ever assumed, so a missing one (including a missing experiment file or `compare` section) is a usage error, exit 64, naming the metric.
 
 ```yaml
 compare:

@@ -35,11 +35,18 @@ val decode : Canon.t -> (t, Config_error.error list) result
     relative to the assertion (["tool_args.tool"]). *)
 
 val evaluate :
-  cost:(Trace.entry list -> float option) -> t -> Trace.entry list -> outcome
-(** [cost] prices a trace (supplied by the caller, from Pricing). Schema mode
-    supports a documented subset of JSON Schema: type, properties, required,
-    enum, items, additionalProperties false. Jsonpath supports $, .key, [n] and
-    ["key"]. A step is a model call.
+  cost:(Trace.entry list -> float option) ->
+  egress_intercepted:bool ->
+  t ->
+  Trace.entry list ->
+  outcome
+(** [cost] prices a trace (supplied by the caller, from Pricing).
+    [egress_intercepted] says whether the run's HTTP egress was intercepted (and
+    so recorded in the trace as HTTP calls). When it was not, [No_egress] fails
+    as unverifiable instead of passing vacuously. Schema mode supports a
+    documented subset of JSON Schema: type, properties, required, enum, items,
+    additionalProperties false. Jsonpath supports $, .key, [n] and ["key"]. A
+    step is a model call.
 
     Semantics worth knowing:
     - [Exact] needs the called tools to equal [tools]. [In_order] needs [tools]
@@ -47,9 +54,14 @@ val evaluate :
       at least as many times as it is listed, in any order.
     - [Tool_args] passes when at least one call of [tool] matches. [Partial]
       means every expected field is present with a partially matching value, and
-      every expected list element is matched by some actual element.
+      every expected list element is matched by an actual element of its own
+      (each actual element is used at most once, so expecting [a] twice needs
+      two [a]). An empty [match] object matches any call of the tool.
     - [Output] checks the reply of the given turn (counting from 1), or the last
       reply. No such reply is a failure.
-    - [Max_tokens] sums input and output tokens over model calls that report
-      usage. [Max_latency_ms] is the span from the first to the last entry.
-    - An unpriced trace fails [Max_cost_usd]. *)
+    - [Max_tokens] sums input and output tokens over the model calls, and fails
+      when any call has no usage (an interrupted stream, a provider that omits
+      it), like [Max_cost_usd]. [Max_latency_ms] is the span from the first to
+      the last entry.
+    - An unpriced trace, or one with a model call that has no usage, fails
+      [Max_cost_usd]. *)

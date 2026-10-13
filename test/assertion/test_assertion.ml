@@ -50,13 +50,14 @@ let outcome_pp ppf = function
   | A.Pass -> Format.pp_print_string ppf "Pass"
   | A.Fail r -> Format.fprintf ppf "Fail %S" r
 
-let is_pass ?(cost = no_cost) name a trace =
-  match A.evaluate ~cost a trace with
+let is_pass ?(cost = no_cost) ?(egress_intercepted = true) name a trace =
+  match A.evaluate ~cost ~egress_intercepted a trace with
   | A.Pass -> ()
   | A.Fail r -> Alcotest.failf "%s: expected Pass, got Fail %S" name r
 
-let fails ?(cost = no_cost) ?(mentions = []) name a trace =
-  match A.evaluate ~cost a trace with
+let fails ?(cost = no_cost) ?(egress_intercepted = true) ?(mentions = []) name a
+    trace =
+  match A.evaluate ~cost ~egress_intercepted a trace with
   | A.Pass -> Alcotest.failf "%s: expected Fail, got %a" name outcome_pp A.Pass
   | A.Fail r ->
       Alcotest.(check bool) (name ^ ": reason not empty") true (r <> "");
@@ -264,11 +265,29 @@ let test_max_steps () =
 
 let test_max_tokens () =
   let t =
-    entries
-      [ model ~usage:(usage 100 20) (); model (); model ~usage:(usage 10 5) () ]
+    entries [ model ~usage:(usage 100 20) (); model ~usage:(usage 10 5) () ]
   in
   is_pass "at limit" (A.Max_tokens 135) t;
   fails "over" ~mentions:[ "135" ] (A.Max_tokens 134) t
+
+(* Review M9: a call without usage must not pass a token limit. *)
+let test_max_tokens_usage_gap () =
+  let t =
+    entries
+      [
+        model ~usage:(usage 100 20) ();
+        model ();
+        model ();
+        model ~usage:(usage 10 5) ();
+      ]
+  in
+  fails "usage gap"
+    ~mentions:[ "2 model calls have no usage" ]
+    (A.Max_tokens 1_000_000) t;
+  fails "singular"
+    ~mentions:[ "1 model call has no usage" ]
+    (A.Max_tokens 1_000_000)
+    (entries [ model () ])
 
 let test_max_cost () =
   let t = entries [ model () ] in
@@ -295,6 +314,23 @@ let test_no_egress () =
   fails "hit (case-insensitive)" ~mentions:[ "Evil.example" ]
     (A.No_egress [ "evil.example" ]) t;
   is_pass "empty trace" (A.No_egress [ "evil.example" ]) (entries [ Done ])
+
+(* Review M7: nothing intercepts egress yet, so a clean trace proves nothing. *)
+let test_no_egress_unverifiable () =
+  fails "not intercepted" ~egress_intercepted:false
+    ~mentions:[ "cannot be verified"; "not intercepted" ]
+    (A.No_egress [ "evil.example" ]) (entries [ Done ])
+
+(* Review m14: list elements are matched multiset-wise. *)
+let test_args_partial_multiset () =
+  let two = {|{"attendees":["bob@x","bob@x"]}|} in
+  let one = {|{"attendees":["bob@x"]}|} in
+  let call_with a = entries [ call "cal" a ] in
+  fails "expected twice, present once" (targs Partial two) (call_with one);
+  is_pass "expected twice, present twice" (targs Partial two) (call_with two);
+  is_pass "order is free"
+    (targs Partial {|{"attendees":["b","a"]}|})
+    (call_with {|{"attendees":["a","b"]}|})
 
 (* output *)
 
@@ -466,9 +502,15 @@ let () =
         [
           Alcotest.test_case "max_steps" `Quick test_max_steps;
           Alcotest.test_case "max_tokens" `Quick test_max_tokens;
+          Alcotest.test_case "max_tokens usage gap" `Quick
+            test_max_tokens_usage_gap;
           Alcotest.test_case "max_cost_usd" `Quick test_max_cost;
           Alcotest.test_case "max_latency" `Quick test_max_latency;
           Alcotest.test_case "no_egress" `Quick test_no_egress;
+          Alcotest.test_case "no_egress unverifiable" `Quick
+            test_no_egress_unverifiable;
+          Alcotest.test_case "partial multiset" `Quick
+            test_args_partial_multiset;
         ] );
       ( "output",
         [

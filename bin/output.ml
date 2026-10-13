@@ -1,4 +1,3 @@
-open Bactrian_core
 open Bactrian_runtime
 
 let exit_ok = 0
@@ -14,65 +13,6 @@ let exit_code : Run.outcome -> int = function
   | Not_run _ -> exit_not_run
   | Errored _ -> exit_internal
 
-let change_json (c : Diff.change) =
-  `Assoc
-    [
-      ("path", `String c.path);
-      ( "change",
-        `String
-          (match c.kind with
-          | Changed -> "changed"
-          | Added -> "added"
-          | Removed -> "removed") );
-    ]
-
-let divergence_json : Matcher.divergence -> Yojson.Safe.t = function
-  | Missing_request { request = _; nearest } ->
-      `Assoc
-        (("kind", `String "missing_request")
-        ::
-        (match nearest with
-        | Some (e, changes, similarity) ->
-            [
-              ( "nearest",
-                `Assoc
-                  [
-                    ("seq", `Int e.seq);
-                    ("similarity", `Float similarity);
-                    ("changes", `List (List.map change_json changes));
-                  ] );
-            ]
-        | None -> []))
-  | Unconsumed e ->
-      `Assoc [ ("kind", `String "unconsumed"); ("seq", `Int e.seq) ]
-  | Reordered { request = _; expected } ->
-      `Assoc
-        [ ("kind", `String "reordered"); ("expected_seq", `Int expected.seq) ]
-  | Shape_mismatch { request = _; recorded } ->
-      `Assoc
-        [
-          ("kind", `String "shape_mismatch"); ("recorded_seq", `Int recorded.seq);
-        ]
-
-let divergence_text (d : Matcher.divergence) =
-  match d with
-  | Missing_request { request = _; nearest = Some (e, changes, similarity) } ->
-      Printf.sprintf
-        "missing request (nearest recorded #%d, similarity %.2f, differs at %s)"
-        e.seq similarity
-        (String.concat ", "
-           (List.map
-              (fun (c : Diff.change) ->
-                if String.equal c.path "" then "<root>" else c.path)
-              changes))
-  | Missing_request { request = _; nearest = None } ->
-      "missing request (nothing left to compare)"
-  | Unconsumed e -> Printf.sprintf "recorded #%d was never requested" e.seq
-  | Reordered { request = _; expected } ->
-      Printf.sprintf "request out of order (expected #%d)" expected.seq
-  | Shape_mismatch { request = _; recorded } ->
-      Printf.sprintf "streaming differs from recorded #%d" recorded.seq
-
 let render_json (r : Run.result) =
   let f = r.findings in
   Yojson.Safe.to_string
@@ -87,7 +27,11 @@ let render_json (r : Run.result) =
              (match Run.outcome_reason r.outcome with
              | Some reason -> [ ("reason", `String reason) ]
              | None -> [])) );
-         ("divergences", `List (List.map divergence_json f.divergences));
+         ( "divergences",
+           `List
+             (List.map
+                (fun d -> Divergences.to_json (Divergences.of_matcher d))
+                f.divergences) );
          ( "findings",
            `Assoc
              [
@@ -98,8 +42,7 @@ let render_json (r : Run.result) =
                ("cap_refusals", `Int (List.length f.cap_refusals));
                ("errors", `List (List.map (fun e -> `String e) f.errors));
              ] );
-         ( "spend_usd",
-           `Assoc (List.map (fun (p, usd) -> (p, `Float usd)) r.spend) );
+         ("spend_usd", `Float r.spend);
        ])
 
 let render_text (r : Run.result) =
@@ -112,10 +55,11 @@ let render_text (r : Run.result) =
     | None -> "");
   line "directory: %s" r.run_dir;
   List.iter
-    (fun d -> line "divergence: %s" (divergence_text d))
+    (fun d ->
+      line "divergence: %s" (Divergences.describe (Divergences.of_matcher d)))
     r.findings.divergences;
   List.iter (fun e -> line "error: %s" e) r.findings.errors;
-  List.iter (fun (p, usd) -> line "spent: %.6f USD on %s" usd p) r.spend;
+  if r.spend > 0. then line "spent: %.6f USD" r.spend;
   Buffer.contents b
 
 (* Experiments *)
@@ -212,14 +156,19 @@ let render_summary_json (s : Executor.summary) =
        ])
 
 let render_golden_text ~colour (r : Golden.report) =
-  match r.offenders with
-  | [] -> Printf.sprintf "%s %s\n" (paint ~colour "32" "ok") r.scenario
-  | offenders ->
-      Printf.sprintf "%s %s\n" (paint ~colour "31" "FAIL") r.scenario
-      ^ String.concat ""
+  let head =
+    if Golden.passed r then paint ~colour "32" "ok"
+    else paint ~colour "31" "FAIL"
+  in
+  let indented = List.map (fun l -> "  " ^ l ^ "\n") in
+  Printf.sprintf "%s %s\n" head r.scenario
+  ^ String.concat ""
+      (indented r.errors
+      @ indented
           (List.map
              (fun (o : Golden.offender) ->
-               Printf.sprintf "  %s (golden %s): %s\n" o.trace
+               Printf.sprintf "%s (golden %s): %s" o.trace
                  (match o.expected with Pass -> "pass" | Fail -> "fail")
                  o.reason)
-             offenders)
+             r.offenders)
+      @ indented (List.map (fun w -> "warning: " ^ w) r.warnings))
