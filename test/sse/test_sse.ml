@@ -98,6 +98,34 @@ let unit_tests =
         Alcotest.check_raises "cr"
           (Invalid_argument "Sse.serialise: data contains a carriage return")
           (fun () -> ignore (Sse.serialise (ev "a\rb"))));
+    test_case "serialise rejects what does not round trip" `Quick (fun () ->
+        Alcotest.check_raises "negative retry"
+          (Invalid_argument "Sse.serialise: retry is negative") (fun () ->
+            ignore (Sse.serialise (ev ~retry:(-5) "a")));
+        Alcotest.check_raises "NUL in id"
+          (Invalid_argument "Sse.serialise: id contains a NUL") (fun () ->
+            ignore (Sse.serialise (ev ~id:"a\000b" "a"))));
+    test_case "one 1 MB line in small chunks is linear" `Quick (fun () ->
+        let chunk = String.make 16 'x' in
+        let n = 1_000_000 / String.length chunk in
+        let t0 = Sys.time () in
+        let st, _ = Sse.feed Sse.init "data: " in
+        let st = ref st in
+        for _ = 1 to n do
+          st := fst (Sse.feed !st chunk)
+        done;
+        let st, items = Sse.feed !st "\n\n" in
+        let dt = Sys.time () -. t0 in
+        (match items with
+        | [ Sse.Event e ] ->
+            Alcotest.(check int)
+              "length"
+              (n * String.length chunk)
+              (String.length e.data)
+        | [] | [ Sse.Comment _ ] | _ :: _ :: _ ->
+            Alcotest.fail "expected one event");
+        Alcotest.(check finish_testable) "fin" `Clean (Sse.finish st);
+        if dt > 1.0 then Alcotest.failf "parsing took %.2f s" dt);
   ]
 
 (* Generators *)

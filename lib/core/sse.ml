@@ -10,7 +10,9 @@ type item = Event of event | Comment of string
 type state = {
   at_start : bool;
       (** Still deciding whether a byte order mark opens the stream. *)
-  line : string;  (** Bytes of the current, unterminated line. *)
+  line_rev : string list;
+      (** Pieces of the current, unterminated line, newest first. *)
+  line_len : int;  (** Total length of [line_rev]. *)
   last_cr : bool;  (** The previous byte ended a line with ['\r']. *)
   block_bytes : int;
       (** Bytes of completed lines in the current unfinished block. *)
@@ -23,7 +25,8 @@ type state = {
 let init =
   {
     at_start = true;
-    line = "";
+    line_rev = [];
+    line_len = 0;
     last_cr = false;
     block_bytes = 0;
     event_type = None;
@@ -38,7 +41,21 @@ let strip_space v =
   if String.starts_with ~prefix:" " v then String.sub v 1 (String.length v - 1)
   else v
 
-let is_digits v = v <> "" && String.for_all (fun c -> c >= '0' && c <= '9') v
+let push_line st piece =
+  if String.equal piece "" then st
+  else
+    {
+      st with
+      line_rev = piece :: st.line_rev;
+      line_len = st.line_len + String.length piece;
+    }
+
+let take_line st =
+  ( String.concat "" (List.rev st.line_rev),
+    { st with line_rev = []; line_len = 0 } )
+
+let is_digits v =
+  (not (String.equal v "")) && String.for_all (fun c -> c >= '0' && c <= '9') v
 
 let reset st =
   {
@@ -64,9 +81,8 @@ let apply_field st name value =
 
 (* Handle one complete line; returns the new state and the item it completes. *)
 let end_line st terminator_len =
-  let l = st.line in
-  let st = { st with line = "" } in
-  if l = "" then
+  let l, st = take_line st in
+  if String.equal l "" then
     match st.data_rev with
     | [] -> (reset st, None)
     | _ :: _ ->
@@ -79,7 +95,7 @@ let end_line st terminator_len =
           }
         in
         (reset st, Some (Event ev))
-  else if l.[0] = ':' then
+  else if Char.equal l.[0] ':' then
     (st, Some (Comment (strip_space (String.sub l 1 (String.length l - 1)))))
   else
     let st =
@@ -120,9 +136,9 @@ let rec scan st s i acc =
   else
     let st = { st with last_cr = false } in
     match next_terminator s i with
-    | None -> ({ st with line = st.line ^ String.sub s i (n - i) }, acc)
+    | None -> (push_line st (String.sub s i (n - i)), acc)
     | Some j ->
-        let st = { st with line = st.line ^ String.sub s i (j - i) } in
+        let st = push_line st (String.sub s i (j - i)) in
         let st, item = end_line st 1 in
         let st = { st with last_cr = Char.equal s.[j] '\r' } in
         scan st s (j + 1) (match item with None -> acc | Some it -> it :: acc)
@@ -130,11 +146,10 @@ let rec scan st s i acc =
 let feed st chunk =
   let st, s =
     if st.at_start then
-      let s = st.line ^ chunk in
-      let st = { st with line = "" } in
+      let pending, st = take_line st in
+      let s = pending ^ chunk in
       let n = String.length s in
-      if n < 3 && String.starts_with ~prefix:s bom then
-        ({ st with line = s }, "")
+      if n < 3 && String.starts_with ~prefix:s bom then (push_line st s, "")
       else
         let s =
           if String.starts_with ~prefix:bom s then String.sub s 3 (n - 3) else s
@@ -146,9 +161,7 @@ let feed st chunk =
   (st, List.rev acc)
 
 let finish st =
-  match st.block_bytes + String.length st.line with
-  | 0 -> `Clean
-  | n -> `Truncated n
+  match st.block_bytes + st.line_len with 0 -> `Clean | n -> `Truncated n
 
 let no_break s = not (String.contains s '\r' || String.contains s '\n')
 
@@ -173,6 +186,14 @@ let serialise item =
         e.id;
       if String.contains e.data '\r' then
         invalid_arg "Sse.serialise: data contains a carriage return";
+      Option.iter
+        (fun v ->
+          if String.contains v '\000' then
+            invalid_arg "Sse.serialise: id contains a NUL")
+        e.id;
+      Option.iter
+        (fun n -> if n < 0 then invalid_arg "Sse.serialise: retry is negative")
+        e.retry;
       Option.iter (field "event") e.event;
       List.iter (field "data") (String.split_on_char '\n' e.data);
       Option.iter (field "id") e.id;

@@ -30,7 +30,8 @@ val serialise : item -> string
 (** Wire form: [event:], one [data:] line per ['\n']-separated piece, [id:],
     [retry:], then a blank line. A comment is [": text\n"].
     @raise Invalid_argument
-      if [event] or [id] contains ['\r'] or ['\n'], or [data] or a comment
-      contains ['\r'], or a comment contains ['\n']. *)
+      if [event] or [id] contains ['\r'] or ['\n'], [id] contains a NUL, [retry]
+      is negative, [data] or a comment contains ['\r'], or a comment contains
+      ['\n']. These values would not parse back unchanged. *)
 
 val equal_item : item -> item -> bool
