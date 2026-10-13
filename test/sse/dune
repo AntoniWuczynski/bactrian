@@ -1,0 +1,5 @@
+(test
+ (name test_sse)
+ (flags
+  (:standard -w -70))
+ (libraries bactrian_core alcotest qcheck-core qcheck-alcotest))
