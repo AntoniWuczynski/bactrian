@@ -1,0 +1,6 @@
+(test
+ (name test_plan_sim)
+ (package bactrian)
+ (libraries bactrian.core alcotest)
+ (flags
+  (:standard -w -70)))
