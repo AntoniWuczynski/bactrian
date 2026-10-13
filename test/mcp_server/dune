@@ -1,0 +1,17 @@
+(tests
+ (names test_mcp_dispatch test_mcp_server)
+ (package bactrian)
+ (libraries
+  bactrian.server
+  bactrian.app
+  bactrian.core
+  bactrian.runtime
+  eio
+  eio.unix
+  eio_main
+  mirage-crypto-rng.unix
+  unix
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))

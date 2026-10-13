@@ -1,0 +1,16 @@
+(library
+ (name bactrian_server)
+ (public_name bactrian.server)
+ (libraries
+  bactrian.app
+  bactrian.core
+  bactrian.runtime
+  eio
+  eio.unix
+  mirage-crypto-rng
+  mirage-crypto-rng.unix
+  unix
+  yojson
+  ppx_deriving_yojson.runtime)
+ (preprocess
+  (pps ppx_deriving_yojson)))

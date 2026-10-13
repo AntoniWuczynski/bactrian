@@ -1,0 +1,198 @@
+open Bactrian_core
+
+let modern_version = "2026-07-28"
+let latest_legacy = "2025-11-25"
+let legacy_versions = [ latest_legacy; "2025-06-18"; "2025-03-26" ]
+
+type era = Undecided | Legacy of string | Modern
+
+type server = {
+  name : string;
+  version : string;
+  instructions : string;
+  tools : (string * Canon.t) list;
+}
+
+type t = { server : server; mutable era : era }
+
+let create server = { server; era = Undecided }
+let era t = t.era
+
+type action =
+  | Reply of Mcp_msg.message
+  | Call of { id : Mcp_msg.id; name : string; arguments : Canon.t option }
+  | Cancel of Mcp_msg.id
+  | Ignore
+
+let obj fields =
+  List.fold_left
+    (fun o (k, v) -> Canon.set_member k v o)
+    Canon.empty_object fields
+
+let strings l = Canon.list (List.map Canon.string l)
+let reply id result = Reply (Response { id; result })
+
+let error ?data id code message =
+  Reply (Error_response { id = Some id; code; message; data })
+
+let invalid_params id message = error id (-32602) message
+let method_not_found id m = error id (-32601) ("Method not found: " ^ m)
+let version_key = "io.modelcontextprotocol/protocolVersion"
+let capabilities_key = "io.modelcontextprotocol/clientCapabilities"
+
+let server_info s =
+  obj [ ("name", Canon.string s.name); ("version", Canon.string s.version) ]
+
+let capabilities = ("capabilities", obj [ ("tools", Canon.empty_object) ])
+let instructions s = ("instructions", Canon.string s.instructions)
+
+(* The tool list does not change while the server runs, and holds nothing
+   specific to a user. *)
+let cacheable fields =
+  ("ttlMs", Canon.int 3_600_000)
+  :: ("cacheScope", Canon.string "public")
+  :: fields
+
+let complete fields = ("resultType", Canon.string "complete") :: fields
+
+let discover s =
+  obj
+    (complete
+       (cacheable
+          [
+            ("supportedVersions", strings [ modern_version ]);
+            capabilities;
+            instructions s;
+            ( "_meta",
+              obj [ ("io.modelcontextprotocol/serverInfo", server_info s) ] );
+          ]))
+
+let initialize t id params =
+  match Option.bind params (Canon.str_member "protocolVersion") with
+  | None -> invalid_params id "initialize needs a protocolVersion string"
+  | Some requested ->
+      let version =
+        if List.exists (String.equal requested) legacy_versions then requested
+        else latest_legacy
+      in
+      t.era <- Legacy version;
+      reply id
+        (obj
+           [
+             ("protocolVersion", Canon.string version);
+             capabilities;
+             ("serverInfo", server_info t.server);
+             instructions t.server;
+           ])
+
+let tools_list t id params =
+  match Option.bind params (Canon.member "cursor") with
+  | Some _ -> invalid_params id "Invalid cursor: tools/list has a single page"
+  | None -> (
+      let tools = ("tools", Canon.list (List.map snd t.server.tools)) in
+      match t.era with
+      | Modern -> reply id (obj (complete (cacheable [ tools ])))
+      | Legacy _ | Undecided -> reply id (obj [ tools ]))
+
+let tools_call t id params =
+  match Option.bind params (Canon.str_member "name") with
+  | None -> invalid_params id "tools/call needs a tool name"
+  | Some name when not (List.mem_assoc name t.server.tools) ->
+      invalid_params id ("Unknown tool: " ^ name)
+  | Some name ->
+      Call
+        { id; name; arguments = Option.bind params (Canon.member "arguments") }
+
+let modern_methods = [ "server/discover"; "tools/list"; "tools/call" ]
+
+let modern t id method_ params =
+  let meta key =
+    Option.bind (Option.bind params (Canon.member "_meta")) (Canon.member key)
+  in
+  match Option.map Canon.to_string_opt (meta version_key) with
+  | Some (Some v) when not (String.equal v modern_version) ->
+      error id (-32022) "Unsupported protocol version"
+        ~data:
+          (obj
+             [
+               ("supported", strings [ modern_version ]);
+               ("requested", Canon.string v);
+             ])
+  | Some None -> invalid_params id (version_key ^ " in _meta must be a string")
+  | (Some (Some _) | None) as version -> (
+      if not (List.exists (String.equal method_) modern_methods) then
+        method_not_found id method_
+      else if Option.is_none version then
+        invalid_params id ("_meta needs " ^ version_key)
+      else if Option.is_none (meta capabilities_key) then
+        invalid_params id ("_meta needs " ^ capabilities_key)
+      else
+        match method_ with
+        | "server/discover" -> reply id (discover t.server)
+        | "tools/list" -> tools_list t id params
+        | _ -> tools_call t id params)
+
+let legacy t id method_ params =
+  match method_ with
+  | "initialize" -> error id (-32600) "Invalid Request: already initialized"
+  | "ping" -> reply id Canon.empty_object
+  | "tools/list" -> tools_list t id params
+  | "tools/call" -> tools_call t id params
+  | _ -> method_not_found id method_
+
+let undecided t msg id method_ params =
+  match (Mcp_msg.era_of_request msg, method_) with
+  | Some Legacy, _ -> initialize t id params
+  | Some Modern, _ ->
+      t.era <- Modern;
+      modern t id method_ params
+  | None, "ping" -> reply id Canon.empty_object
+  | None, _ ->
+      error id (-32600)
+        ("Invalid Request: open with initialize (MCP 2025-11-25 and earlier) \
+          or carry " ^ version_key ^ " in _meta (MCP 2026-07-28)")
+        ~data:
+          (obj [ ("supported", strings (modern_version :: legacy_versions)) ])
+
+let request_id v =
+  match (Canon.to_int_opt v, Canon.to_string_opt v) with
+  | Some n, _ -> Some (Mcp_msg.Int_id n)
+  | None, Some s -> Some (Mcp_msg.String_id s)
+  | None, None -> None
+
+let receive t (msg : Mcp_msg.message) =
+  match msg with
+  | Response _ | Error_response _ -> Ignore
+  | Notification { method_ = "notifications/cancelled"; params } -> (
+      match
+        Option.bind (Option.bind params (Canon.member "requestId")) request_id
+      with
+      | Some id -> Cancel id
+      | None -> Ignore)
+  | Notification _ -> Ignore
+  | Request { id; method_; params } -> (
+      match t.era with
+      | Undecided -> undecided t msg id method_ params
+      | Legacy _ -> legacy t id method_ params
+      | Modern -> modern t id method_ params)
+
+let tool_reply t id result =
+  let result =
+    match t.era with
+    | Modern -> Canon.set_member "resultType" (Canon.string "complete") result
+    | Legacy _ | Undecided -> result
+  in
+  Mcp_msg.Response { id; result }
+
+let undecodable : Mcp_msg.error -> Mcp_msg.message = function
+  | Invalid_json m ->
+      Error_response
+        { id = None; code = -32700; message = "Parse error: " ^ m; data = None }
+  | Not_jsonrpc m ->
+      Error_response
+        {
+          id = None;
+          code = -32600;
+          message = "Invalid Request: " ^ m;
+          data = None;
+        }
