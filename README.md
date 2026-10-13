@@ -10,6 +10,8 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
+Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
+
 ## Recording and replaying an agent
 
 An agent talks to bactrian over a small JSON Lines protocol on stdin and stdout: it receives `start`, one `turn` per user message and `end`, and answers each turn with a `reply`. bactrian points the agent's model SDK at its own proxy through the usual base-URL variables (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) and gives it placeholder API keys. The real keys are never placed in the agent's environment and are added to requests on their way upstream. The agent runs inside a sandbox (see [Sandbox](#sandbox)), which stops it from reaching anything but bactrian's proxy and from writing outside its run. [`examples/agents/`](examples/agents/) has a TypeScript agent (build it with `pnpm install --dir examples/agents/typescript` and `pnpm --dir examples/agents/typescript build`) and a Python agent managed by uv.
@@ -204,6 +206,33 @@ macOS runs are always contract-only. System Integrity Protection removes the var
 An [HTTP-mode agent](#http-mode-agents) is a server that is already running, so bactrian does not start its process and cannot preload anything into it. Its runs are `contract-only` with the reason `http-mode`, whatever `faketime` says. The `env` object of its `start` message carries `SIM_NOW` and `TZ` as before, and never `LD_PRELOAD` or any `FAKETIME` variable. Start the server with `libfaketime` yourself if it needs a faked clock.
 
 Each run says which it was. `meta.json` has `clock: {mode, reason}`, where `mode` is `enforced` or `contract_only`, and the trace header repeats the mode. A report, `compare` and the `--json` output of `record` and `replay` flag the runs that were contract-only with the reason: `macos`, `faketime-off`, `library-not-found`, `library-hidden`, `invalid-sim-now`, `static-binary`, `go-binary`, `unreadable-executable` or `http-mode`. `enforced` means the library was injected and the agent's program (the command's first word, or the interpreter of a `#!` script) is a dynamically linked, non-Go ELF file. It does not prove the agent read the faked clock. Go programs and statically linked ones ignore the preload. So can runtimes that read the clock without the C library or cache it at start. The reasoning is in [`docs/decisions/0009-agent-clock.md`](docs/decisions/0009-agent-clock.md).
+
+## Checking the host
+
+`bactrian doctor` checks that a run can start, without running an agent or contacting anything. It prints one line per check: `ok`, `warn`, `fail` or `skip`, the check's name and a short message. It exits with status 69 when any check fails, and 0 otherwise.
+
+```sh
+bactrian doctor
+bactrian doctor --experiment experiment.yaml
+bactrian doctor --json
+```
+
+```text
+warn  key-openai: OPENAI_API_KEY is not set
+ok    loopback: a port on 127.0.0.1 can be bound
+ok    sandbox: the sandbox works on this host
+skip  tls: HTTPS support is not built in
+```
+
+- `key-<provider>`: whether the provider's key variable is set. Only the variable's name is printed, never any part of its value. A missing key is a `warn`. With `--experiment` it is a `fail` for a provider whose `caps_usd` is above 0, because the experiment calls that provider live, and a `skip` for the others.
+- `loopback`: a port on 127.0.0.1 can be bound.
+- `agent` (with `--experiment`): the agent command is found on `PATH`, or relative to the experiment file's directory. For an HTTP-mode agent the URL is well-formed. It is not contacted.
+- `sandbox`: the sandbox works here. It runs the same probe as a run's preflight and prints the same cause and fix, including the two AppArmor commands on Linux. An unavailable sandbox is a `fail` under `sandbox: strict` in the experiment and a `warn` otherwise. `off` and HTTP-mode agents are `skip`.
+- `clock`: with an experiment, the clock label its command agent would get (`enforced`, or `contract-only` with the reason). Without one, whether `libfaketime` is found on Linux. Contract-only on macOS is expected and is `ok`.
+- `tls`: `skip` while this build has no HTTPS support, or `fail` when the experiment calls a provider or an agent over HTTPS.
+- `ca` and `node`: `skip`, because egress interception is not built.
+
+`--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file is reported with its location and exits 64, as for `bactrian run`.
 
 ## Comparing variants
 

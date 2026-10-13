@@ -2,7 +2,7 @@
 
 This document describes how bactrian is designed. Sections are numbered so that code comments can point at them. Parts of the design that the current build does not implement are marked as planned. The README's Status section says what works today, and [`decisions/`](decisions/) records individual choices with their reasons.
 
-Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), HTTPS for HTTP-mode agents, the `doctor` and `ca` commands, published JSON Schemas, and the MCP server mode (`serve-mcp`).
+Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), HTTPS for HTTP-mode agents, the `ca` command, published JSON Schemas, and the MCP server mode (`serve-mcp`).
 
 ## 1. Purpose
 
@@ -90,7 +90,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 
 ### `bin/`
 
-`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check` and `mcp-shim`. `doctor`, `ca` and `serve-mcp` are planned. The MCP server maps one-to-one onto the command line.
+`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check`, `doctor` and `mcp-shim`. `ca` and `serve-mcp` are planned. The MCP server maps one-to-one onto the command line.
 
 Every library module has an interface file (`.mli`). No source file is over 1000 lines.
 
@@ -358,7 +358,7 @@ Modules return `result` with their own error types, chained with `let*`. Excepti
 | Class | Handling |
 |---|---|
 | Configuration | Every error is collected, each with file, line, column, document path and a suggested fix. Unknown fields are rejected. A glob matching nothing is an error. Exit 64. |
-| Environment | A sandbox preflight failure (section 5.3) is never silent: under `auto` it warns and labels every run `unsandboxed`, under `strict` it stops with exit 69. `doctor` (planned) and every run check: missing key variables for providers that will be called live (named), unbindable ports, the CA (created if missing), an agent command that cannot be found, `libfaketime` being unavailable (a warning, and the clock becomes contract-only), and a Node version too old for `NODE_USE_ENV_PROXY` when egress is on (a warning). Exit 69. |
+| Environment | A sandbox preflight failure (section 5.3) is never silent: under `auto` it warns and labels every run `unsandboxed`, under `strict` it stops with exit 69. `doctor` and every run check: missing key variables for providers that will be called live (named), unbindable ports, an agent command that cannot be found, `libfaketime` being unavailable (a warning, and the clock becomes contract-only), and, once egress is intercepted, the CA (created if missing) and a Node version too old for `NODE_USE_ENV_PROXY` (a warning). Exit 69. `doctor [--experiment FILE] [--json]` runs the checks without an agent, one line each (`ok`, `warn`, `fail` or `skip`), and exits 69 when any is `fail`. A missing key is a warning, or a failure for a provider the experiment's `caps_usd` calls live. The sandbox check is the preflight probe of section 5.3, with the same cause and fix, and is a failure under `strict` and a warning under `auto`. The CA and Node version checks are `skip` while egress is not built. So is the HTTPS support check, unless the experiment needs HTTPS, which is a failure. |
 | Agent | `Failed` with a reason: `Exit_nonzero`, `Timeout` (turn or total), `Protocol_violation` (with the offending line), `Crashed`. |
 | Provider | 429 and 5xx responses pass through unchanged and are recorded. bactrian never retries on the agent's behalf. An unreachable provider gives the agent a 502 with a bactrian error body, recorded as an upstream error. |
 | bactrian itself | `Errored` with an error ID and a stack trace in the run's `bactrian-error.log`. Other runs are unaffected. Exit 70 if the whole command fails. |
