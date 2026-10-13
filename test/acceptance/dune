@@ -9,6 +9,7 @@
   bactrian.core
   bactrian.runtime
   fake_upstream
+  denials
   eio_main
   mirage-crypto-rng.unix
   unix

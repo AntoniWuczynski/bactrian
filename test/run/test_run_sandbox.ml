@@ -200,26 +200,15 @@ let test_escapes_fail =
   | Not_collected m -> Alcotest.failf "violations not collected: %s" m
   | Collected { items = vs; coverage = Seatbelt_log; gaps } ->
       Alcotest.(check bool) "labelled a lower bound" true (gaps <> []);
-      List.iter
-        (fun (v : Sandbox_log.violation) ->
-          Printf.printf "violation: %s %s\n" v.kind v.detail)
-        vs;
-      let seen kind needle =
-        List.exists
-          (fun (v : Sandbox_log.violation) ->
-            String.equal v.kind kind && contains v.detail needle)
-          vs
-      in
-      Alcotest.(check bool) "network" true (seen "network-outbound" ":443");
-      Alcotest.(check bool)
-        "home write" true
-        (seen "file-write-create" (Filename.basename home_file));
-      Alcotest.(check bool)
-        "secret read" true
-        (seen "file-read-data" "/secret/key");
-      Alcotest.(check bool)
-        "another run's port" true
-        (seen "network-outbound" (Printf.sprintf ":%d" other_port));
+      Denials.check vs
+        [
+          ("network", "network-outbound", ":443");
+          ("home write", "file-write-create", Filename.basename home_file);
+          ("secret read", "file-read-data", "/secret/key");
+          ( "another run's port",
+            "network-outbound",
+            Printf.sprintf ":%d" other_port );
+        ];
       Alcotest.(check bool)
         "in the trace" true
         (List.mem "sandbox_violation" (trace_types r))

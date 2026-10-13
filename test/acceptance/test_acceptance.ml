@@ -599,19 +599,7 @@ let escapes agent () =
   | Collected { items = vs; coverage = Seatbelt_log; gaps } ->
       Alcotest.(check bool) "labelled a lower bound" true (gaps <> []);
       (* Seatbelt logs each denial, with the remote host shown as [*]. *)
-      List.iter
-        (fun (v : Sandbox_log.violation) ->
-          Printf.printf "violation: %s %s\n" v.kind v.detail)
-        vs;
-      let seen kind needle =
-        List.exists
-          (fun (v : Sandbox_log.violation) ->
-            String.equal v.kind kind && contains v.detail needle)
-          vs
-      in
-      List.iter
-        (fun (what, kind, needle) ->
-          Alcotest.(check bool) what true (seen kind needle))
+      Denials.check vs
         [
           ("https", "network-outbound", ":443");
           ("tcp", "network-outbound", ":853");
