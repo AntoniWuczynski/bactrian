@@ -244,8 +244,8 @@ let test_jobs () =
   Alcotest.check canon_t "cancelled, with the ID to resume"
     (canon
        (Printf.sprintf
-          {|{"job_id":"%s","kind":"run","state":"cancelled","progress":{"done":1,"total":1},"exit":130,"error":{"error":"interrupted by signal %d","exit":130,"experiment_id":"exp-1"}}|}
-          running Sys.sigint))
+          {|{"job_id":"%s","kind":"run","state":"cancelled","progress":{"done":1,"total":1},"exit":130,"error":{"error":"interrupted by SIGINT","exit":130,"experiment_id":"exp-1"}}|}
+          running))
     (job_status jobs running);
   Option.iter Jobs.cancel (Jobs.find jobs ok);
   Alcotest.check state_t "cancelling a finished job changes nothing" Succeeded

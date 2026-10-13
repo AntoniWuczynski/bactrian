@@ -34,7 +34,7 @@ let kill_group clock pgid =
 
 let describe_status = function
   | `Exited code -> Printf.sprintf "exited with status %d" code
-  | `Signaled signal -> Printf.sprintf "was killed by signal %d" signal
+  | `Signaled signal -> "was killed by " ^ Proc_util.signal_name signal
 
 type outcome = Output of string | Too_long | Timed_out
 

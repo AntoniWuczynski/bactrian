@@ -37,6 +37,30 @@ let already_gone () =
   Alcotest.(check bool) "term" false (Pg.signal pgid Sys.sigterm);
   Alcotest.(check bool) "probe" false (Pg.signal pgid 0)
 
+let describe_exit status = Bactrian_runtime.Proc_util.describe_exit status
+
+let describes_a_killed_process_by_signal_name () =
+  with_env @@ fun ~sw ~mgr ~clock:_ ->
+  List.iter
+    (fun (signal, name) ->
+      let proc = spawn ~sw mgr "sleep 60" in
+      Alcotest.(check bool)
+        "signalled" true
+        (Pg.signal (Eio.Process.pid proc) signal);
+      Alcotest.(check string)
+        name ("killed by " ^ name)
+        (describe_exit (Eio.Process.await proc)))
+    [
+      (Sys.sigkill, "SIGKILL"); (Sys.sigterm, "SIGTERM"); (Sys.sigint, "SIGINT");
+    ]
+
+let names_signals () =
+  let name = Bactrian_runtime.Proc_util.signal_name in
+  Alcotest.(check string) "SIGINT" "SIGINT" (name Sys.sigint);
+  Alcotest.(check string) "SIGABRT" "SIGABRT" (name Sys.sigabrt);
+  Alcotest.(check string) "a system number" "signal 64" (name 64);
+  Alcotest.(check string) "an unknown OCaml number" "signal -99" (name (-99))
+
 let () =
   Alcotest.run "process_group"
     [
@@ -45,5 +69,8 @@ let () =
           Alcotest.test_case "group that exits" `Quick exits;
           Alcotest.test_case "leader ignores SIGTERM" `Quick ignores_sigterm;
           Alcotest.test_case "already gone" `Quick already_gone;
+          Alcotest.test_case "a killed process is named by its signal" `Quick
+            describes_a_killed_process_by_signal_name;
+          Alcotest.test_case "signal names" `Quick names_signals;
         ] );
     ]

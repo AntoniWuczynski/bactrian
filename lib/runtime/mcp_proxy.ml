@@ -213,7 +213,7 @@ let deliver p ~note ~refuse line =
 
 let describe_status = function
   | `Exited n -> Printf.sprintf "exited with status %d" n
-  | `Signaled s -> Printf.sprintf "was killed by signal %d" s
+  | `Signaled s -> "was killed by " ^ Proc_util.signal_name s
 
 let read_lines flow f =
   let r = Eio.Buf_read.of_flow ~max_size:max_line flow in

@@ -18,7 +18,7 @@ let message = function
   | Configuration errors ->
       String.concat "\n" (List.map Config_loader.located_line errors)
   | Interrupted { signal; _ } ->
-      Printf.sprintf "interrupted by signal %d" signal
+      "interrupted by " ^ Proc_util.signal_name signal
 
 let located_json (e : Config_loader.located_error) =
   `Assoc

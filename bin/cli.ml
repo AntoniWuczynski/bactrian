@@ -24,7 +24,8 @@ let fail_with ~json ?(resume = fun _ -> "") (e : Command_error.t) =
   (match e with
   | Interrupted { signal; experiment_id } ->
       prerr_endline
-        (Printf.sprintf "bactrian: interrupted by signal %d%s" signal
+        (Printf.sprintf "bactrian: interrupted by %s%s"
+           (Proc_util.signal_name signal)
            (match experiment_id with Some id -> resume id | None -> ""))
   | Configuration errors when not json ->
       List.iter (fun e -> prerr_endline (Config_loader.located_line e)) errors

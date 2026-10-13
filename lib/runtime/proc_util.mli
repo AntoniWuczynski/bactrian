@@ -17,5 +17,10 @@ val find_executable :
     (relative to [cwd]), any other is looked up in the directories of [path], a
     [PATH] value, in order. *)
 
+val signal_name : int -> string
+(** The name of a signal given by its OCaml number, as [Sys.sigint] and Eio's
+    [`Signaled] carry it: ["SIGINT"] for [Sys.sigint]. A number that is none of
+    OCaml's portable signals is a system number, and gives ["signal N"]. *)
+
 val describe_exit : Eio.Process.exit_status -> string
-(** ["exit status N"] or ["killed by signal N"]. *)
+(** ["exit status N"] or ["killed by SIGKILL"] (see {!signal_name}). *)
