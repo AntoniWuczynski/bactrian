@@ -1,0 +1,6 @@
+(test
+ (name test_agent_driver)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime eio_main unix alcotest)
+ (flags
+  (:standard -w -70)))
