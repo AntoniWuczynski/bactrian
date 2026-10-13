@@ -6,6 +6,7 @@
   bactrian.app
   bactrian.core
   bactrian.runtime
+  bactrian.server
   cmdliner
   eio_main
   unix
