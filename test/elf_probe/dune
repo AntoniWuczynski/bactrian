@@ -1,0 +1,6 @@
+(test
+ (name test_elf_probe)
+ (package bactrian)
+ (libraries bactrian.core elf_fixture alcotest)
+ (flags
+  (:standard -w -70)))
