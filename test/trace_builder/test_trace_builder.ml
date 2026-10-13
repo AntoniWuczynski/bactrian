@@ -258,6 +258,284 @@ let test_exchanges_before_first_turn () =
     ]
     (kinds entries)
 
+(* MCP joins (spec section 6) *)
+
+let chat_calls ~seq ~t_ms calls =
+  let base = exchange ~seq ~t_ms "luna_nonstream" in
+  let call i (name, arguments) =
+    `Assoc
+      [
+        ("id", `String (Printf.sprintf "call_%d" i));
+        ("type", `String "function");
+        ( "function",
+          `Assoc [ ("name", `String name); ("arguments", `String arguments) ] );
+      ]
+  in
+  let body =
+    `Assoc
+      [
+        ("id", `String "x");
+        ("object", `String "chat.completion");
+        ("created", `Int 1);
+        ("model", `String "gpt-6-luna");
+        ( "choices",
+          `List
+            [
+              `Assoc
+                [
+                  ("index", `Int 0);
+                  ( "message",
+                    `Assoc
+                      [
+                        ("role", `String "assistant");
+                        ("content", `Null);
+                        ("tool_calls", `List (List.mapi call calls));
+                      ] );
+                  ("finish_reason", `String "tool_calls");
+                ];
+            ] );
+        ( "usage",
+          `Assoc
+            [
+              ("prompt_tokens", `Int 1);
+              ("completion_tokens", `Int 1);
+              ("total_tokens", `Int 2);
+            ] );
+      ]
+  in
+  {
+    base with
+    outcome =
+      Response
+        {
+          status = 200;
+          headers = [ ("content-type", "application/json") ];
+          body =
+            Whole
+              { payload = Inline (Yojson.Safe.to_string body); complete = true };
+        };
+  }
+
+let mcp_request ~seq ~t_ms ?(server = "weather") ?(transport_error = false)
+    method_ params : Cassette.exchange =
+  let message =
+    Mcp_msg.Request { id = Int_id seq; method_; params = Some (canon params) }
+  in
+  let canonical =
+    match Mcp_msg.canonical_request message with
+    | Some c -> c
+    | None -> Alcotest.fail "no canonical form"
+  in
+  {
+    seq;
+    t_ms;
+    channel = Mcp;
+    protocol = "mcp";
+    meth = "POST";
+    path = "/mcp/" ^ server;
+    query = [];
+    key = "m" ^ string_of_int seq;
+    occurrence = 0;
+    canonical;
+    request = Inline (Mcp_msg.encode message);
+    outcome =
+      (if transport_error then Transport_error "server crashed"
+       else
+         Response
+           {
+             status = 200;
+             headers = [];
+             body = Whole { payload = Inline "{}"; complete = true };
+           });
+  }
+
+let mcp_tool ~seq ~t_ms ?server ?transport_error tool arguments =
+  mcp_request ~seq ~t_ms ?server ?transport_error "tools/call"
+    (Printf.sprintf {|{"name":%S,"arguments":%s}|} tool arguments)
+
+let join_name : Trace.join -> string = function
+  | Joined -> "joined"
+  | Joined_by_order -> "joined_by_order"
+  | Unjoined -> "unjoined"
+
+(* Every tool call as "name join", then every MCP-only event as its data. *)
+let joins entries =
+  List.filter_map
+    (fun (e : Trace.entry) ->
+      match e.event with
+      | Tool_call { name; mcp; _ } -> Some (name ^ " " ^ join_name mcp)
+      | Run_start _ | Turn_start _ | Model_call _ | Tool_result _ | Http_call _
+      | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+          None)
+    entries
+
+let unjoined_mcp entries =
+  List.filter_map
+    (fun (e : Trace.entry) ->
+      match e.event with
+      | Agent_event { name = "mcp_call"; data; _ } ->
+          Some (Canon.to_string data)
+      | Run_start _ | Turn_start _ | Model_call _ | Tool_call _ | Tool_result _
+      | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+          None)
+    entries
+
+let one_turn = [ B.Sent_turn { t_ms = 0; turn = 1; content = "x" } ]
+
+let build_with exchanges agent =
+  B.build (input ~cassette:(cassette exchanges) agent)
+
+let paris = {|{"city":"Paris"}|}
+let paris_args = {|{"city": "Paris"}|}
+
+let test_join_single () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100 [ ("get_weather", paris) ];
+        mcp_tool ~seq:1 ~t_ms:120 "get_weather" paris_args;
+      ]
+      one_turn
+  in
+  Alcotest.check strs "joined" [ "get_weather joined" ] (joins entries);
+  Alcotest.check strs "nothing on its own" [] (unjoined_mcp entries);
+  Alcotest.check strs "no extra entries"
+    [
+      "run_start";
+      "turn_start 1";
+      "model_call 1";
+      "tool_call 1 get_weather";
+      "done";
+    ]
+    (kinds entries)
+
+let test_join_by_order () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100
+          [ ("get_weather", paris); ("get_weather", paris) ];
+        mcp_tool ~seq:1 ~t_ms:120 "get_weather" paris_args;
+        mcp_tool ~seq:2 ~t_ms:121 "get_weather" paris_args;
+      ]
+      one_turn
+  in
+  Alcotest.check strs "several identical candidates"
+    [ "get_weather joined_by_order"; "get_weather joined_by_order" ]
+    (joins entries);
+  Alcotest.check strs "nothing on its own" [] (unjoined_mcp entries)
+
+let test_join_arguments_decide () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100
+          [ ("get_weather", paris); ("get_weather", {|{"city":"Rome"}|}) ];
+        mcp_tool ~seq:1 ~t_ms:120 "get_weather" {|{"city": "Rome"}|};
+        mcp_tool ~seq:2 ~t_ms:121 "get_time" paris_args;
+      ]
+      one_turn
+  in
+  Alcotest.check strs "only the Rome call has an MCP record"
+    [ "get_weather unjoined"; "get_weather joined" ]
+    (joins entries);
+  Alcotest.check strs "the other MCP call appears on its own"
+    [ {|{"arguments":{"city":"Paris"},"server":"weather","tool":"get_time"}|} ]
+    (unjoined_mcp entries)
+
+let test_join_surplus () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100 [ ("get_weather", paris) ];
+        mcp_tool ~seq:1 ~t_ms:120 "get_weather" paris_args;
+        mcp_tool ~seq:2 ~t_ms:130 "get_weather" paris_args;
+      ]
+      one_turn
+  in
+  Alcotest.check strs "the first record joins, by order"
+    [ "get_weather joined_by_order" ]
+    (joins entries);
+  Alcotest.(check int)
+    "the second is on its own" 1
+    (List.length (unjoined_mcp entries))
+
+let test_join_within_the_turn () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100 [ ("get_weather", paris) ];
+        mcp_tool ~seq:1 ~t_ms:1100 "get_weather" paris_args;
+      ]
+      [
+        B.Sent_turn { t_ms = 0; turn = 1; content = "a" };
+        Got_reply { t_ms = 500; turn = 1; content = "b" };
+        Sent_turn { t_ms = 1000; turn = 2; content = "c" };
+        Got_reply { t_ms = 1500; turn = 2; content = "d" };
+      ]
+  in
+  Alcotest.check strs "a record in turn 2 cannot join turn 1's call"
+    [ "get_weather unjoined" ] (joins entries);
+  Alcotest.check strs "and appears in turn 2"
+    [
+      "run_start";
+      "turn_start 1";
+      "model_call 1";
+      "tool_call 1 get_weather";
+      "reply 1";
+      "turn_start 2";
+      "event mcp_call";
+      "reply 2";
+      "done";
+    ]
+    (kinds entries)
+
+let test_join_ignores_other_traffic () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100 [ ("get_weather", paris) ];
+        mcp_request ~seq:1 ~t_ms:110 "tools/list" "{}";
+        mcp_request ~seq:2 ~t_ms:111 "server/discover" "{}";
+        mcp_tool ~seq:3 ~t_ms:120 ~transport_error:true "get_weather" paris_args;
+      ]
+      one_turn
+  in
+  Alcotest.check strs "a failed call still joins" [ "get_weather joined" ]
+    (joins entries);
+  Alcotest.check strs "no entry for the other methods" [] (unjoined_mcp entries)
+
+let test_join_in_time_order () =
+  let entries =
+    build_with
+      [
+        chat_calls ~seq:0 ~t_ms:100 [ ("get_weather", paris) ];
+        mcp_tool ~seq:1 ~t_ms:150 "get_time" "{}";
+        exchange ~seq:2 ~t_ms:300 "luna_turn2";
+      ]
+      one_turn
+  in
+  Alcotest.check strs "between the model calls"
+    [
+      "run_start";
+      "turn_start 1";
+      "model_call 1";
+      "tool_call 1 get_weather";
+      "event mcp_call";
+      "tool_result 1 #0";
+      "model_call 1";
+      "done";
+    ]
+    (kinds entries);
+  Alcotest.(check bool)
+    "t_ms never decreases" true
+    (let ts = List.map (fun (e : Trace.entry) -> e.t_ms) entries in
+     List.sort Int.compare ts = ts)
+
+let test_no_mcp_means_unjoined () =
+  Alcotest.check strs "unchanged" [ "get_weather unjoined" ]
+    (joins (build_with two_calls one_turn))
+
 let () =
   Alcotest.run "trace_builder"
     [
@@ -274,5 +552,22 @@ let () =
             test_agent_error_and_no_turns;
           Alcotest.test_case "exchange before the first turn" `Quick
             test_exchanges_before_first_turn;
+        ] );
+      ( "mcp join",
+        [
+          Alcotest.test_case "one record, one call" `Quick test_join_single;
+          Alcotest.test_case "identical candidates join by order" `Quick
+            test_join_by_order;
+          Alcotest.test_case "arguments and name decide" `Quick
+            test_join_arguments_decide;
+          Alcotest.test_case "surplus record is on its own" `Quick
+            test_join_surplus;
+          Alcotest.test_case "joins stay within the turn" `Quick
+            test_join_within_the_turn;
+          Alcotest.test_case "other methods and failures" `Quick
+            test_join_ignores_other_traffic;
+          Alcotest.test_case "placed in time order" `Quick
+            test_join_in_time_order;
+          Alcotest.test_case "no MCP traffic" `Quick test_no_mcp_means_unjoined;
         ] );
     ]

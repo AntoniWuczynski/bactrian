@@ -45,7 +45,9 @@ let test_full () =
          "repeats": 20, "concurrency": 4,
          "intercept": ["model", "egress"],
          "egress": {"default": "replay", "hosts": {"www.googleapis.com": "record"}},
-         "mcp": {"calendar": "passthrough"},
+         "mcp": {"calendar": {"command": ["python3", "cal.py", "--x"], "policy": "passthrough",
+                              "env": {"TOKEN": "t"}, "cwd": "tools"},
+                 "search": {"url": "https://search.example.com/mcp"}},
          "normalise": ["\\d{4}-\\d{2}-\\d{2}"], "redact": ["tok_[a-z]+"],
          "sandbox": "strict", "clock": {"faketime": "off"},
          "caps_usd": {"openai": 10, "gemini": 20.5}, "pricing": "./prices.yaml",
@@ -83,7 +85,25 @@ let test_full () =
     (t.egress_hosts = [ ("www.googleapis.com", Experiment.Record) ]);
   Alcotest.(check bool)
     "mcp" true
-    (t.mcp = [ ("calendar", Experiment.Passthrough) ]);
+    (t.mcp
+    = [
+        ( "calendar",
+          {
+            Experiment.transport =
+              Mcp_stdio
+                {
+                  argv = [ "python3"; "cal.py"; "--x" ];
+                  env = [ ("TOKEN", "t") ];
+                  cwd = Some "tools";
+                };
+            policy = Passthrough;
+          } );
+        ( "search",
+          {
+            transport = Mcp_http { url = "https://search.example.com/mcp" };
+            policy = Record;
+          } );
+      ]);
   Alcotest.(check int) "normalise" 1 (List.length t.normalise);
   Alcotest.(check int) "redact" 1 (List.length t.redact);
   Alcotest.(check bool) "sandbox" true (t.sandbox = `Strict);
@@ -205,9 +225,9 @@ let test_unenforced () =
   Alcotest.check strings "defaults"
     [ "sandbox"; "egress"; "clock" ]
     (names (decoded (doc "")));
-  Alcotest.check strings "mcp servers listed"
-    [ "sandbox"; "egress"; "mcp"; "clock" ]
-    (names (decoded (doc {|, "mcp": {"calendar": "record"}|})));
+  Alcotest.check strings "mcp servers are enforced"
+    [ "sandbox"; "egress"; "clock" ]
+    (names (decoded (doc {|, "mcp": {"calendar": {"command": ["c"]}}|})));
   Alcotest.check strings "everything off" []
     (names
        (decoded
@@ -222,12 +242,24 @@ let test_reserved_env () =
   let reserved = Experiment.reserved_env in
   Alcotest.(check bool) "TZ" true (List.mem "TZ" reserved);
   Alcotest.(check bool) "key" true (List.mem "OPENAI_API_KEY" reserved);
+  Alcotest.(check bool) "mcp url" true (List.mem "BACTRIAN_MCP_URL" reserved);
+  Alcotest.(check bool)
+    "mcp http prefix" true
+    (Experiment.is_reserved_env "BACTRIAN_MCP_HTTP_SEARCH");
+  Alcotest.(check bool) "unrelated" false (Experiment.is_reserved_env "MCP_X");
   Alcotest.check strings "mapping form"
     [ "variants.a.env.TZ"; "variants.b.env.BACTRIAN_RUN_ID" ]
     (paths
        (doc
           ~variants:
             {|"variants": {"a": {"env": {"TZ": "UTC", "OK": "1"}}, "b": {"env": {"BACTRIAN_RUN_ID": "x"}}}|}
+          ""));
+  Alcotest.check strings "mcp variables"
+    [ "variants.a.env.BACTRIAN_MCP_HTTP_X"; "variants.a.env.BACTRIAN_MCP_URL" ]
+    (paths
+       (doc
+          ~variants:
+            {|"variants": {"a": {"env": {"BACTRIAN_MCP_URL": "u", "BACTRIAN_MCP_HTTP_X": "u"}}}|}
           ""));
   Alcotest.check strings "list form"
     [ "variants[0].env.SIM_NOW" ]
@@ -319,8 +351,38 @@ let () =
           case "unknown host policy"
             [ "egress.hosts[\"a.example.com\"]" ]
             (doc {|, "egress": {"hosts": {"a.example.com": "maybe"}}|});
-          case "unknown mcp policy" [ "mcp.calendar" ]
-            (doc {|, "mcp": {"calendar": "maybe"}|});
+          case "unknown mcp policy" [ "mcp.calendar.policy" ]
+            (doc
+               {|, "mcp": {"calendar": {"command": ["c"], "policy": "maybe"}}|});
+          case "replay mcp policy" [ "mcp.calendar.policy" ]
+            (doc
+               {|, "mcp": {"calendar": {"command": ["c"], "policy": "replay"}}|});
+          case "mcp server as a bare policy" [ "mcp.calendar" ]
+            (doc {|, "mcp": {"calendar": "record"}|});
+          case "mcp server without command or url" [ "mcp.calendar" ]
+            (doc {|, "mcp": {"calendar": {"policy": "record"}}|});
+          case "mcp server with command and url" [ "mcp.calendar" ]
+            (doc
+               {|, "mcp": {"calendar": {"command": ["c"], "url": "http://x"}}|});
+          case "mcp command must not be empty" [ "mcp.calendar.command" ]
+            (doc {|, "mcp": {"calendar": {"command": []}}|});
+          case "mcp url must be http" [ "mcp.s.url" ]
+            (doc {|, "mcp": {"s": {"url": "ftp://x"}}|});
+          case "mcp url with a scheme only" [ "mcp.s.url" ]
+            (doc {|, "mcp": {"s": {"url": "https://"}}|});
+          case "mcp http server with env and cwd"
+            [ "mcp.s.cwd"; "mcp.s.env" ]
+            (doc
+               {|, "mcp": {"s": {"url": "http://x", "env": {"A": "b"}, "cwd": "d"}}|});
+          case "mcp env value must be a string" [ "mcp.s.env.A" ]
+            (doc {|, "mcp": {"s": {"command": ["c"], "env": {"A": 1}}}|});
+          case "mcp unknown field" [ "mcp.s.timeout" ]
+            (doc {|, "mcp": {"s": {"command": ["c"], "timeout": 1}}|});
+          case "mcp server name with a slash" [ "mcp[\"a/b\"]" ]
+            (doc {|, "mcp": {"a/b": {"command": ["c"]}}|});
+          case "mcp http servers sharing a variable" [ "mcp.a-b"; "mcp.a_b" ]
+            (doc
+               {|, "mcp": {"a-b": {"url": "http://x"}, "a_b": {"url": "http://y"}}|});
           case "unknown protocol" [ "agent.protocol" ]
             (doc
                ~agent:

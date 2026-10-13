@@ -12,16 +12,7 @@ type policy = Record | Replay | Passthrough | Block
 type config = { name : string; server : server; policy : policy }
 
 let url_variable = "BACTRIAN_MCP_URL"
-
-let http_variable name =
-  "BACTRIAN_MCP_HTTP_"
-  ^ String.map
-      (fun c ->
-        match c with
-        | 'a' .. 'z' -> Char.uppercase_ascii c
-        | 'A' .. 'Z' | '0' .. '9' -> c
-        | _ -> '_')
-      name
+let http_variable = Experiment.mcp_http_variable
 
 type serving =
   | Live of { record : bool }

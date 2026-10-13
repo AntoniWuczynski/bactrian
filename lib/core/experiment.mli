@@ -14,6 +14,17 @@ type agent =
 type variant = { name : string; env : (string * string) list }
 type policy = Record | Replay | Passthrough | Block
 
+type mcp_transport =
+  | Mcp_stdio of {
+      argv : string list;  (** Non-empty. *)
+      env : (string * string) list;  (** The server's declared environment. *)
+      cwd : string option;  (** Relative to the experiment file. *)
+    }
+  | Mcp_http of { url : string }  (** An [http://] or [https://] URL. *)
+
+type mcp_server = { transport : mcp_transport; policy : policy }
+(** [policy] is never [Replay]: an experiment's runs record. *)
+
 type compare = {
   baseline : string;
   confidence : float;
@@ -32,7 +43,7 @@ type t = {
   intercept : [ `Model | `Mcp | `Fixtures | `Egress ] list;
   egress_default : policy;  (** default Block *)
   egress_hosts : (string * policy) list;
-  mcp : (string * policy) list;
+  mcp : (string * mcp_server) list;  (** By server name, in name order. *)
   normalise : string list;  (** Regexes masked before hashing. *)
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
@@ -59,7 +70,11 @@ val decode : Canon.t -> (t, error list) result
       (where duplicate names are possible and an error).
     - [repeats] (default 1), [concurrency] (default 1), [seed] (default 0)
     - [intercept] (default all four), [egress: {default: block, hosts: {h: p}}],
-      [mcp: {server: policy}], policies [record|replay|passthrough|block]
+      [mcp: {server: {command | url, policy, env, cwd}}], policies
+      [record|replay|passthrough|block]. A server has either a [command] (stdio,
+      with optional [env] and [cwd]) or a [url] (Streamable HTTP), and a
+      [policy] (default [record], never [replay]). Names are letters, digits,
+      ['_'] and ['-'], and no two HTTP servers may share a {!mcp_http_variable}.
     - [normalise], [redact]: lists of regular expressions
     - [sandbox: auto|strict|off] (default auto), [clock: {faketime: auto|off}]
       (default auto), [caps_usd: {provider: n}] ([provider] is one of
@@ -68,14 +83,26 @@ val decode : Canon.t -> (t, error list) result
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
 
 val reserved_env : string list
-(** The variables bactrian sets in every run's environment: [SIM_NOW], [TZ],
+(** The variables bactrian sets in a run's environment: [SIM_NOW], [TZ],
     [BACTRIAN_RUN_ID], [BACTRIAN_STATE_DIR], the four provider base URLs and the
-    four provider key placeholders. A variant that sets one is a configuration
-    error at [variants.<name>.env.<KEY>], because it would be dropped without a
-    word. *)
+    four provider key placeholders, and, in a run with MCP servers,
+    [BACTRIAN_MCP_URL]. See also {!reserved_env_prefixes}. *)
+
+val reserved_env_prefixes : string list
+(** Prefixes of further variables bactrian sets: [BACTRIAN_MCP_HTTP_]. *)
+
+val is_reserved_env : string -> bool
+(** Whether a name is in {!reserved_env} or starts with a reserved prefix. A
+    variant that sets one is a configuration error at
+    [variants.<name>.env.<KEY>], because it would be dropped without a word. *)
+
+val mcp_http_variable : string -> string
+(** [mcp_http_variable name] is [BACTRIAN_MCP_HTTP_] followed by [name]
+    uppercased, with every character outside [A-Z0-9] written as ['_']: the
+    variable that carries an HTTP server's proxied URL to the agent. *)
 
 val unenforced : t -> string list
 (** One line per setting this build accepts but does not enforce yet (spec §5.3:
-    the sandbox under [auto], egress, MCP interception and faketime), each
-    starting with the setting's name and a colon. [sandbox: strict] is not
-    listed: it is refused outright where the run starts. *)
+    the sandbox under [auto], egress and faketime), each starting with the
+    setting's name and a colon. [sandbox: strict] is not listed: it is refused
+    outright where the run starts. *)

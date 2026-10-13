@@ -412,7 +412,32 @@ let load ~fs ~experiment_file =
 
 (* Running *)
 
-let run_config (l : loaded) (scenario : Scenario.t) ~scenario_dir
+(* A stdio server runs where the agent does, in the experiment's directory,
+   unless it names another one. *)
+let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
+    Mcp_proxy.config =
+  let server : Mcp_proxy.server =
+    match s.transport with
+    | Mcp_stdio { argv; env; cwd } ->
+        let dir =
+          match cwd with
+          | None -> l.dir
+          | Some d when Filename.is_relative d -> Filename.concat l.dir d
+          | Some d -> d
+        in
+        Stdio { argv; env; cwd = Some Eio.Path.(fs / dir) }
+    | Mcp_http { url } -> Http { url = Uri.of_string url }
+  in
+  let policy : Mcp_proxy.policy =
+    match s.policy with
+    | Record -> Record
+    | Replay -> Replay
+    | Passthrough -> Passthrough
+    | Block -> Block
+  in
+  { name; server; policy }
+
+let run_config ~fs (l : loaded) (scenario : Scenario.t) ~scenario_dir
     (variant : Experiment.variant) : Run.config =
   {
     agent = l.argv;
@@ -441,7 +466,10 @@ let run_config (l : loaded) (scenario : Scenario.t) ~scenario_dir
     unenforced = Experiment.unenforced l.experiment;
     turn_timeout = l.turn_timeout;
     total_timeout = l.total_timeout;
-    mcp = [];
+    mcp =
+      (if List.mem `Mcp l.experiment.intercept then
+         List.map (mcp_config ~fs l) l.experiment.mcp
+       else []);
   }
 
 (* One process runs an experiment at a time: two would both start the pending
@@ -565,7 +593,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         | Some scenario, Some variant ->
             Ok
               ( i,
-                run_config l scenario
+                run_config ~fs l scenario
                   ~scenario_dir:
                     (Filename.concat l.dir (Filename.dirname p.scenario))
                   variant )

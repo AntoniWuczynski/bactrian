@@ -155,6 +155,111 @@ let model_call_entries ~resolve ~turn st (ex : Cassette.exchange) =
   in
   (st, result_entries @ (call :: call_entries))
 
+(* MCP calls and the join with the model's tool calls (spec section 6) *)
+
+type mcp_call = {
+  at : int;
+  server : string;
+  tool : string;
+  arguments : Canon.t;
+}
+
+let request_message resolve (ex : Cassette.exchange) =
+  match
+    Option.bind (resolve ex.request) (fun s ->
+        Result.to_option (Mcp_msg.decode s))
+  with
+  | Some _ as m -> m
+  | None ->
+      Option.map
+        (fun method_ ->
+          Mcp_msg.Request
+            {
+              id = Int_id 0;
+              method_;
+              params = Canon.member "params" ex.canonical;
+            })
+        (Canon.str_member "method" ex.canonical)
+
+let server_of_path path =
+  let prefix = "/mcp/" in
+  if String.starts_with ~prefix path then
+    String.sub path (String.length prefix)
+      (String.length path - String.length prefix)
+  else path
+
+let mcp_call resolve (ex : Cassette.exchange) =
+  Option.bind (request_message resolve ex) (fun m ->
+      Option.map
+        (fun (tool, arguments) ->
+          { at = ex.t_ms; server = server_of_path ex.path; tool; arguments })
+        (Mcp_msg.tool_call m))
+
+let same_call (name, args) (name', args') =
+  String.equal name name' && Canon.equal args args'
+
+let count_same key keys = List.length (List.filter (same_call key) keys)
+
+(* The k-th call with a key joins the k-th record with it. The join is exact
+   when the key is unique on both sides and by order otherwise. *)
+let join_turn (body : (int * Trace.event) list) (calls : mcp_call list) =
+  let model_key : Trace.event -> (string * Canon.t) option = function
+    | Tool_call { name; arguments; _ } -> Some (name, arguments)
+    | Run_start _ | Turn_start _ | Model_call _ | Tool_result _ | Http_call _
+    | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+        None
+  in
+  let mcp_key c = (c.tool, c.arguments) in
+  let model_keys = List.filter_map (fun (_, e) -> model_key e) body in
+  let mcp_keys = List.map mcp_key calls in
+  let _, joined =
+    List.fold_left
+      (fun (seen, acc) (t, (event : Trace.event)) ->
+        match event with
+        | Tool_call c ->
+            let key = (c.name, c.arguments) in
+            let records = count_same key mcp_keys in
+            let mcp : Trace.join =
+              if count_same key seen >= records then Unjoined
+              else if count_same key model_keys = 1 && records = 1 then Joined
+              else Joined_by_order
+            in
+            (key :: seen, (t, Trace.Tool_call { c with mcp }) :: acc)
+        | Run_start _ | Turn_start _ | Model_call _ | Tool_result _
+        | Http_call _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+            (seen, (t, event) :: acc))
+      ([], []) body
+  in
+  let _, lonely =
+    List.fold_left
+      (fun (seen, acc) c ->
+        let key = mcp_key c in
+        if count_same key seen < count_same key model_keys then
+          (key :: seen, acc)
+        else (key :: seen, c :: acc))
+      ([], []) calls
+  in
+  (List.rev joined, List.rev lonely)
+
+let mcp_event ~turn c =
+  match
+    Canon.obj
+      [
+        ("server", Canon.string c.server);
+        ("tool", Canon.string c.tool);
+        ("arguments", c.arguments);
+      ]
+  with
+  | Ok data -> [ (c.at, Trace.Agent_event { turn; name = "mcp_call"; data }) ]
+  | Error _ -> []
+
+(* Inserts before the first entry that happened later. *)
+let rec insert_by_time ((t, _) as entry) = function
+  | [] -> [ entry ]
+  | ((t', _) as head) :: rest ->
+      if t' > t then entry :: head :: rest
+      else head :: insert_by_time entry rest
+
 type item = Exchange of Cassette.exchange | Say of int * Trace.event
 
 let item_time = function Exchange ex -> ex.t_ms | Say (t, _) -> t
@@ -180,6 +285,14 @@ let build (i : input) =
     List.filter
       (fun (e : Cassette.exchange) ->
         match e.channel with Model -> true | Mcp | Http -> false)
+      i.cassette.exchanges
+  in
+  let mcp_calls =
+    List.filter_map
+      (fun (e : Cassette.exchange) ->
+        match e.channel with
+        | Mcp -> mcp_call i.resolve e
+        | Model | Http -> None)
       i.cassette.exchanges
   in
   let events_of turn =
@@ -224,7 +337,19 @@ let build (i : input) =
               (st, List.rev_append es acc))
         (st, []) timeline
     in
-    (st, start @ List.rev body @ closing_of turn)
+    let body, lonely =
+      join_turn (List.rev body)
+        (List.filter (fun c -> turn_of_time c.at = turn) mcp_calls)
+    in
+    let body =
+      List.fold_left
+        (fun body c ->
+          List.fold_left
+            (fun body entry -> insert_by_time entry body)
+            body (mcp_event ~turn c))
+        body lonely
+    in
+    (st, start @ body @ closing_of turn)
   in
   let groups =
     match sent with

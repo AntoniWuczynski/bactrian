@@ -144,10 +144,13 @@ let test_environment =
     (fun n ->
       if not (List.mem n allowed) then Alcotest.failf "unexpected variable %s" n)
     names;
+  (* The MCP variable only exists in a run that has MCP servers. *)
   List.iter
     (fun k ->
       Alcotest.(check bool) (k ^ " is set by bactrian") true (List.mem k names))
-    Experiment.reserved_env;
+    (List.filter
+       (fun k -> not (String.equal k Mcp_proxy.url_variable))
+       Experiment.reserved_env);
   let value k = Yojson.Safe.Util.to_string (List.assoc k env) in
   Alcotest.(check string) "passthrough" "yes" (value "PASSED_THROUGH");
   Alcotest.(check string) "run id" r.run_id (value "BACTRIAN_RUN_ID");

@@ -392,6 +392,76 @@ let test_missing_fixtures =
   | Ok _ | Error (E.Configuration _ | E.Environment _ | E.Usage _) ->
       Alcotest.fail "expected one configuration error"
 
+(* MCP servers reach the run: the agent learns where they are, and they are
+   started only when it uses them (these commands do not exist). *)
+
+let mcp_extra =
+  {|, "mcp": {"calendar": {"command": ["no-such-server"], "env": {"K": "v"}, "cwd": "tools"},
+              "search": {"url": "https://search.example.com/mcp", "policy": "passthrough"}}|}
+
+let agent_env ctx s =
+  match run_ids s with
+  | id :: _ ->
+      Yojson.Safe.from_string
+        (read ctx (Printf.sprintf ".bactrian/runs/%s/state/env.json" id))
+  | [] -> Alcotest.fail "no run"
+
+let test_mcp_environment =
+  settings_ctx "mcp" @@ fun ctx ->
+  write ctx "exp.json" (experiment_json ctx ~extra:mcp_extra ());
+  let s = ok (go ctx) in
+  Alcotest.(check (list string))
+    "all passed"
+    [ "passed"; "passed"; "passed"; "passed" ]
+    (kinds s);
+  let env = agent_env ctx s in
+  let has_infix infix v =
+    Re.execp (Re.compile (Re.str infix)) (Yojson.Safe.Util.to_string v)
+  in
+  Alcotest.(check bool)
+    "shim target" true
+    (has_infix "/mcp" (member "BACTRIAN_MCP_URL" env));
+  Alcotest.(check bool)
+    "HTTP server's proxied URL" true
+    (has_infix "/mcp-http/search" (member "BACTRIAN_MCP_HTTP_SEARCH" env));
+  Alcotest.(check bool)
+    "no variable for the stdio server" true
+    (member "BACTRIAN_MCP_HTTP_CALENDAR" env = `Null);
+  let unenforced =
+    Yojson.Safe.Util.(
+      to_list (member "unenforced" (run_meta ctx (List.hd (run_ids s)))))
+  in
+  Alcotest.(check bool)
+    "mcp is no longer listed as unenforced" false
+    (List.exists
+       (fun w ->
+         String.starts_with ~prefix:"mcp:" (Yojson.Safe.Util.to_string w))
+       unenforced)
+
+let test_mcp_not_intercepted =
+  settings_ctx "mcpoff" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx
+       ~extra:({|, "intercept": ["model", "fixtures"]|} ^ mcp_extra)
+       ());
+  let env = agent_env ctx (ok (go ctx)) in
+  Alcotest.(check bool)
+    "no shim target" true
+    (member "BACTRIAN_MCP_URL" env = `Null)
+
+let test_mcp_replay_refused =
+  settings_ctx "mcpreplay" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx
+       ~extra:{|, "mcp": {"calendar": {"command": ["c"], "policy": "replay"}}|}
+       ());
+  match go ctx with
+  | Error (E.Configuration [ e ]) ->
+      Alcotest.(check string) "path" "mcp.calendar.policy" e.path;
+      Alcotest.(check bool) "located in the file" true (e.line > 1)
+  | Ok _ | Error (E.Configuration _ | E.Environment _ | E.Usage _) ->
+      Alcotest.fail "expected one configuration error"
+
 let prices =
   {|version: 1
 prices:
@@ -464,6 +534,12 @@ let () =
             test_fixtures_and_normalise;
           Alcotest.test_case "missing fixtures" `Slow test_missing_fixtures;
           Alcotest.test_case "pricing file" `Slow test_pricing_file;
+          Alcotest.test_case "mcp servers reach the run" `Slow
+            test_mcp_environment;
+          Alcotest.test_case "mcp not intercepted" `Slow
+            test_mcp_not_intercepted;
+          Alcotest.test_case "replay policy refused" `Slow
+            test_mcp_replay_refused;
         ] );
       ("caps", [ Alcotest.test_case "caps respected" `Slow test_caps ]);
     ]

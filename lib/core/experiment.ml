@@ -16,6 +16,16 @@ type agent =
 type variant = { name : string; env : (string * string) list }
 type policy = Record | Replay | Passthrough | Block
 
+type mcp_transport =
+  | Mcp_stdio of {
+      argv : string list;
+      env : (string * string) list;
+      cwd : string option;
+    }
+  | Mcp_http of { url : string }
+
+type mcp_server = { transport : mcp_transport; policy : policy }
+
 type compare = {
   baseline : string;
   confidence : float;
@@ -34,7 +44,7 @@ type t = {
   intercept : [ `Model | `Mcp | `Fixtures | `Egress ] list;
   egress_default : policy;
   egress_hosts : (string * policy) list;
-  mcp : (string * policy) list;
+  mcp : (string * mcp_server) list;
   normalise : string list;
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
@@ -101,6 +111,97 @@ let agent ~path c =
           (Http { url; namespace_header; turn_timeout; total_timeout }, env))
 
 let env_vars = assoc string
+
+(* An experiment's runs all record, so a server cannot be served from a
+   recording that does not exist. *)
+let mcp_policy ~path c =
+  let* p = policy ~path c in
+  match p with
+  | Replay ->
+      fail ~path
+        "replay needs a recording and an experiment's runs record: use record \
+         or passthrough"
+  | Record | Passthrough | Block -> Ok p
+
+let mcp_url ~path c =
+  let* url = non_empty_string ~path c in
+  let after prefix =
+    String.starts_with ~prefix url && String.length url > String.length prefix
+  in
+  if after "http://" || after "https://" then Ok url
+  else fail ~path "expected an http:// or https:// URL"
+
+let mcp_server ~path c =
+  object_ ~path c (fun r ->
+      let+ policy = default r "policy" Record mcp_policy
+      and+ transport =
+        match
+          ( optional r "command" (non_empty_list string),
+            optional r "url" mcp_url )
+        with
+        | Ok (Some argv), Ok None ->
+            let+ env = default r "env" [] env_vars
+            and+ cwd = optional r "cwd" non_empty_string in
+            Mcp_stdio { argv; env; cwd }
+        | Ok None, Ok (Some url) ->
+            let+ () = forbidden r "env" ~protocol:"http"
+            and+ () = forbidden r "cwd" ~protocol:"http" in
+            Mcp_http { url }
+        | Ok (Some _), Ok (Some _) ->
+            fail ~path:(Config_decode.path r)
+              "command and url are mutually exclusive"
+        | Ok None, Ok None ->
+            fail ~path:(Config_decode.path r)
+              "needs a command (stdio) or a url (HTTP)"
+        | Error e, Ok _ | Ok _, Error e -> Error e
+        | Error e, Error e' -> Error (e @ e')
+      in
+      { transport; policy })
+
+(* The names become URL path segments and, for HTTP servers, environment
+   variable suffixes. *)
+let mcp_http_prefix = "BACTRIAN_MCP_HTTP_"
+
+let mcp_http_variable name =
+  mcp_http_prefix
+  ^ String.map
+      (function
+        | ('A' .. 'Z' | '0' .. '9') as c -> c
+        | 'a' .. 'z' as c -> Char.uppercase_ascii c
+        | _ -> '_')
+      name
+
+let valid_mcp_name name =
+  name <> ""
+  && String.for_all
+       (function
+         | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
+       name
+
+let mcp_servers ~path c =
+  let* servers = assoc mcp_server ~path c in
+  let variable (name, s) =
+    match s.transport with
+    | Mcp_http _ -> Some (name, mcp_http_variable name)
+    | Mcp_stdio _ -> None
+  in
+  let variables = List.filter_map variable servers in
+  let check (name, s) =
+    let at message = fail ~path:(field_path path name) message in
+    if not (valid_mcp_name name) then
+      at "a server name has letters, digits, '_' and '-' only"
+    else
+      match variable (name, s) with
+      | Some (_, v)
+        when List.exists
+               (fun (other, w) ->
+                 (not (String.equal other name)) && String.equal v w)
+               variables ->
+          at (Printf.sprintf "%s would also be another server's variable" v)
+      | Some _ | None -> Ok ()
+  in
+  let+ (_ : unit list) = collect (List.map check servers) in
+  servers
 
 let variant_body ~path c =
   object_ ~path c (fun r -> default r "env" [] env_vars)
@@ -213,6 +314,7 @@ let reserved_env =
     "TZ";
     "BACTRIAN_RUN_ID";
     "BACTRIAN_STATE_DIR";
+    "BACTRIAN_MCP_URL";
     "OPENAI_BASE_URL";
     "ANTHROPIC_BASE_URL";
     "GOOGLE_GEMINI_BASE_URL";
@@ -222,6 +324,14 @@ let reserved_env =
     "GEMINI_API_KEY";
     "OPENROUTER_API_KEY";
   ]
+
+let reserved_env_prefixes = [ mcp_http_prefix ]
+
+let is_reserved_env key =
+  List.mem key reserved_env
+  || List.exists
+       (fun prefix -> String.starts_with ~prefix key)
+       reserved_env_prefixes
 
 (* [named] says how the variant is written in the document, as a path. *)
 let env_not_reserved ~mapping_form (variants : variant list) =
@@ -235,7 +345,7 @@ let env_not_reserved ~mapping_form (variants : variant list) =
          collect
            (List.filter_map
               (fun (key, _) ->
-                if List.mem key reserved_env then
+                if is_reserved_env key then
                   Some
                     (fail
                        ~path:(field_path (field_path base "env") key)
@@ -287,7 +397,7 @@ let decode c =
       and+ intercept =
         default r "intercept" [ `Model; `Mcp; `Fixtures; `Egress ] intercept
       and+ egress_default, egress_hosts = default r "egress" (Block, []) egress
-      and+ mcp = default r "mcp" [] (assoc policy)
+      and+ mcp = default r "mcp" [] mcp_servers
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
       and+ sandbox = default r "sandbox" `Auto sandbox
@@ -332,9 +442,6 @@ let unenforced t =
          [
            "egress: the agent's network access is neither blocked nor recorded";
          ]
-       else []);
-      (if List.mem `Mcp t.intercept && not (List.is_empty t.mcp) then
-         [ "mcp: MCP traffic is not intercepted" ]
        else []);
       (if t.faketime then
          [

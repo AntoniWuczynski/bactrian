@@ -6,7 +6,7 @@ The name comes from the two-humped camel. Most of what bactrian does is compare 
 
 ## Status
 
-Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. MCP interception, the sandbox and the MCP server are also still to come. Until then the settings that ask for them (`sandbox`, `egress`, `intercept`, `mcp` and `clock`) are read but not enforced. `sandbox: strict` stops with exit status 69 because there is no sandbox to be strict about, and every other unenforced setting is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works. Live recording against real providers does not work yet, because it needs HTTPS support that is not built. Egress recording and the sandbox are also still to come. Until then the settings that ask for them (`sandbox`, `egress` and `clock`) are read but not enforced. `sandbox: strict` stops with exit status 69 because there is no sandbox to be strict about, and every other unenforced setting is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 ## Recording and replaying an agent
 
@@ -89,6 +89,42 @@ prices:
 ```
 
 An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
+
+## MCP tools
+
+Agents often reach their tools through the Model Context Protocol (MCP). bactrian records those calls next to the model calls and replays them, so a replay needs neither the real server nor the network. It handles servers that speak the 2026-07-28 revision (stateless) and the 2025-11-25 one and earlier (which opens with `initialize`), over stdio and over Streamable HTTP.
+
+Declare the servers in the experiment:
+
+```yaml
+mcp:
+  calendar:
+    command: ["python3", "tools/calendar_server.py"]  # a stdio server
+    env: { CALENDAR_DB: fixtures/calendar.db }
+    cwd: tools
+    policy: record
+  search:
+    url: https://search.example.com/mcp               # a Streamable HTTP server
+    policy: passthrough
+```
+
+A server has either a `command` or a `url`, and a name made of letters, digits, `_` and `-`. `env` and `cwd` belong to stdio servers. bactrian starts a stdio server itself the first time the agent uses it, outside the agent's process group, and stops it when the run ends. The server gets only the `env` you declare plus `PATH`, `HOME` and `LANG`, so it never sees the placeholder provider keys or bactrian's own variables. `cwd` is relative to the experiment file, which is also where the server runs if you leave it out.
+
+The `policy` says what happens to the server's traffic. `record` is the default and follows the run: the server is live and recorded when the run records, and answered from the recording when the run replays. `passthrough` is always live and never recorded. `block` refuses every request, with a JSON-RPC error `-32601` on stdio and HTTP status 403 on HTTP. `replay` is accepted by the format but refused in an experiment, with the position of the line, because an experiment's runs record and there is nothing yet to replay from.
+
+The agent has to talk to bactrian instead of the real server. For a stdio server, put `bactrian mcp-shim <name>` where the agent's MCP configuration has the server's own command:
+
+```json
+{ "mcpServers": { "calendar": { "command": "bactrian", "args": ["mcp-shim", "calendar"] } } }
+```
+
+The shim reads JSON-RPC lines on its stdin, hands each one to bactrian and writes the replies to its stdout. It finds bactrian through `BACTRIAN_MCP_URL`, which bactrian sets for the agent, and exits when its stdin closes. For an HTTP server, give the agent the URL in `BACTRIAN_MCP_HTTP_<NAME>` as the server's address. The name is upper-cased and every character that is not a letter or a digit becomes `_`, so `search` is `BACTRIAN_MCP_HTTP_SEARCH`. Both variables are set only when `intercept` includes `mcp` (it does by default) and the experiment has servers, and a variant cannot set them. The example agents read `AGENT_MCP_COMMAND` (a JSON array such as `["bactrian", "mcp-shim", "weather"]`) and `AGENT_MCP_PROTOCOL` (`2026-07-28` by default, or `2025-11-25`), and then run their weather tool on that server.
+
+Each request and its response become one exchange in the cassette. The key is built from the server, the method and the parameters, without the JSON-RPC id and without the `_meta` entries that change from one client or run to the next (client information, trace context, progress tokens). Matching ignores order, so parallel calls answered in a different order still replay, and a replayed answer carries the id of the request it answers. A request that was never recorded is a divergence, and when it is a handshake (a legacy client against a modern recording, or the reverse) the divergence says so. Notifications have no response and are not recorded.
+
+In the trace, a `tools/call` is joined to the model's tool call of the same turn by tool name and equal arguments. The tool call's `mcp` field says `joined`, `joined_by_order` (several identical calls, matched in order) or `unjoined` (no MCP record, as for any tool that is not on an MCP server). An MCP call with no model call to join shows up as an agent event named `mcp_call`, and assertions count only the model's tool calls.
+
+Known limits. HTTP replies are buffered, so an event stream answering a POST reaches the agent whole. GET and DELETE answer 405, which means no server-to-client stream and no session termination. A legacy stdio server cannot send requests of its own (sampling, roots) through the shim, and they are dropped. `bactrian record` and `bactrian replay` do not set up MCP servers, so MCP traffic is recorded and replayed through `bactrian run` only. The servers run as the same user as bactrian until the sandbox arrives.
 
 ## Comparing variants
 

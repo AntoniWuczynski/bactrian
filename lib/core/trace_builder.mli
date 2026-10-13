@@ -28,7 +28,17 @@ val build : input -> Trace.entry list
     body cannot be parsed by their adapter become a Model_call with no usage and
     a status as recorded (0 for a transport error).
 
-    Only model-channel exchanges are used. Tool call indexes count from 0 over
-    the whole run and are the indexes [Protocol.tool_result.call_index] reports.
-    Tool calls carry [mcp = Unjoined] until MCP traffic is recorded. [t_ms] of a
-    Model_call is the request time and never decreases along the trace. *)
+    Model-channel exchanges make the model calls and tool calls. MCP-channel
+    exchanges are used only for [tools/call] requests, which are joined to the
+    model's tool calls of the same turn (the turn in progress at the exchange's
+    [t_ms]) by tool name and equal arguments (spec §6). The k-th call with a
+    given name and arguments takes the k-th MCP record with them: [Joined] when
+    each side has exactly one, [Joined_by_order] when there are several, and a
+    call without a record stays [Unjoined]. An MCP call with no model call to
+    join appears on its own, as an [Agent_event] named ["mcp_call"] with the
+    fields ["server"], ["tool"] and ["arguments"], placed by time. It is not a
+    tool call, so assertions, which count the model's, never count it twice.
+
+    Tool call indexes count from 0 over the whole run and are the indexes
+    [Protocol.tool_result.call_index] reports. [t_ms] of a Model_call is the
+    request time and never decreases along the trace. *)
