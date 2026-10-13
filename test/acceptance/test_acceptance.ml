@@ -591,6 +591,10 @@ let escapes agent () =
   | Not_collected m -> Alcotest.failf "violations not collected: %s" m
   | Collected vs when macos ->
       (* Seatbelt logs each denial, with the remote host shown as [*]. *)
+      List.iter
+        (fun (v : Sandbox_log.violation) ->
+          Printf.printf "violation: %s %s\n" v.kind v.detail)
+        vs;
       let seen kind needle =
         List.exists
           (fun (v : Sandbox_log.violation) ->
