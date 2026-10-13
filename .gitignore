@@ -1,0 +1,7 @@
+_build/
+_opam/
+*.install
+.bactrian/
+.env
+.env.*
+!.env.example
