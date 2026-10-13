@@ -463,6 +463,11 @@ let refuse_spend st (refusal : Ledger.refusal) =
       locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
       refusal_response st ~status:402 ~type_:"bactrian_unknown_model"
         (Printf.sprintf "no price is known for model %S" model)
+  | Unreadable { line; reason } ->
+      locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
+      refusal_response st ~status:500 ~type_:"bactrian_ledger_unreadable"
+        (Printf.sprintf "the spend ledger cannot be read (line %d: %s)" line
+           reason)
   | Cap_reached { provider; cap; spent; requested } ->
       locked st (fun () -> st.cap_refusals <- refusal :: st.cap_refusals);
       refusal_response st ~status:402 ~type_:"bactrian_cap_reached"

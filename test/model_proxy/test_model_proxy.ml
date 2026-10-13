@@ -397,7 +397,7 @@ let unknown_model =
   (match findings.cap_refusals with
   | [ Ledger.Unknown_model m ] ->
       Alcotest.(check string) "model" "no-such-model" m
-  | [ Ledger.Cap_reached _ ] | [] | _ :: _ :: _ ->
+  | [ (Ledger.Cap_reached _ | Ledger.Unreadable _) ] | [] | _ :: _ :: _ ->
       Alcotest.fail "expected one Unknown_model refusal");
   Alcotest.(check int) "nothing forwarded" 0 (List.length (F.requests up));
   Alcotest.(check int)

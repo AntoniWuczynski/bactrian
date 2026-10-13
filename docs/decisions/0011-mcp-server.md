@@ -62,7 +62,7 @@ This is not a sandbox. `record_start` and `replay_start` run the agent command t
 
 ### Money
 
-Live calls need the spend caps (`BACTRIAN_CAP_<PROVIDER>`) in the server's own environment. No tool takes a cap, so no client can raise one.
+Live calls need the spend caps (`BACTRIAN_CAP_<PROVIDER>`) in the server's own environment. No tool takes a cap, so no client can raise one. Concurrent jobs, and a terminal running `bactrian record` beside the server, share `.bactrian/ledger.jsonl`: each reservation takes a `lockf` lock on the file and reads what the others appended before it checks the cap, so the cap bounds their total rather than each job's own.
 
 ## Consequences
 

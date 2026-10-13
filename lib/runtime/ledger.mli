@@ -14,7 +14,13 @@
     On {!create} the file is replayed: a line without an ["event"] (the format
     the capture script wrote) counts as settled spend of its ["usd"], a
     reservation with no settle line counts at its reserved amount. All
-    operations are safe to call from many fibres. *)
+    operations are safe to call from many fibres.
+
+    Several processes (two terminals, or the MCP server's jobs) can share one
+    file. {!reserve} and {!settle} take an exclusive [lockf] lock on it, read
+    the lines appended since their last read, and only then check the cap,
+    number a reservation and append, so the cap holds across processes and no
+    two reservations get one id. The file format is unchanged by this. *)
 
 type t
 type reservation
@@ -29,6 +35,9 @@ type refusal =
   | Unknown_model of string
       (** Never returned by the ledger itself, which does not price models.
           Callers that price a request and find no price use it to refuse. *)
+  | Unreadable of { line : int; reason : string }
+      (** A line another process appended cannot be read, so the spend is no
+          longer known: every later reservation is refused. *)
 
 exception Corrupt of { line : int; reason : string }
 (** Raised by {!create} when the existing file has a line that cannot be read.
@@ -48,9 +57,10 @@ val reserve :
   (reservation, refusal) result
 (** Charges [usd] against the provider's cap and attributes it to [owner] (a run
     ID), whose share {!spent_by} reports, or refuses with [Cap_reached] (also
-    for a negative or non-finite [usd]). Raises [Eio.Io] if the event cannot be
-    written, in which case nothing is charged and the ledger is disabled (later
-    calls raise [Eio.Mutex.Poisoned]). *)
+    for a negative or non-finite [usd]) or [Unreadable]. The cap is checked
+    against the file as it is now, other processes' spend included. Raises
+    [Eio.Io] if the event cannot be written, in which case nothing is charged
+    and the ledger is disabled (later calls raise [Eio.Mutex.Poisoned]). *)
 
 val settle : t -> reservation -> actual:float option -> unit
 (** Replaces the reservation by [actual]. [None] (or a negative or non-finite

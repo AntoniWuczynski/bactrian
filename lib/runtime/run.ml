@@ -146,6 +146,8 @@ let describe_refusal : Ledger.refusal -> string = function
         "cap reached for %s (cap %.4f USD, spent %.4f, requested %.4f)" provider
         cap spent requested
   | Unknown_model m -> "no price for model " ^ m
+  | Unreadable { line; reason } ->
+      Printf.sprintf "the spend ledger cannot be read (line %d: %s)" line reason
 
 (* The recording a replay reads *)
 
@@ -353,14 +355,18 @@ let refusing ~allow_reorder : Matcher.divergence -> bool = function
   | Missing_request _ | Unconsumed _ | Shape_mismatch _ -> true
 
 let decide_outcome ~replay (findings : P.findings) failure =
-  (* An unpriced model is a configuration problem, not missing data. *)
+  (* An unpriced model is a configuration problem and an unreadable ledger a
+     fault, not missing data. *)
   let unpriced =
     List.find_map
-      (function Ledger.Unknown_model m -> Some m | Cap_reached _ -> None)
+      (function
+        | (Ledger.Unknown_model _ as r) | (Unreadable _ as r) ->
+            Some (describe_refusal r)
+        | Cap_reached _ -> None)
       findings.cap_refusals
   in
   match (unpriced, findings.cap_refusals, failure) with
-  | Some m, _, _ -> Errored ("no price for model " ^ m)
+  | Some m, _, _ -> Errored m
   | None, r :: _, _ -> Not_run (describe_refusal r)
   | None, [], _ -> (
       let diverged =

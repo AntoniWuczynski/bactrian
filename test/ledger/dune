@@ -1,6 +1,13 @@
+(executable
+ (name ledger_worker)
+ (modules ledger_worker)
+ (libraries bactrian.runtime eio_main))
+
 (test
  (name test_ledger)
+ (modules test_ledger)
  (package bactrian)
- (libraries bactrian.core bactrian.runtime eio_main alcotest)
+ (deps ledger_worker.exe)
+ (libraries bactrian.core bactrian.runtime eio_main alcotest unix)
  (flags
   (:standard -w -70)))

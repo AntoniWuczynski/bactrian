@@ -88,7 +88,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Proc_util`, `Process_group`, `Interrupt` | Helpers shared by the modules that start processes: paths, finding an executable on `PATH`, exit-status text, ending a process group (SIGTERM, then SIGKILL), and signal handlers, or a per-caller stop trigger in their place (the MCP server's jobs). |
 | `Checker_runner` | Runs external checker commands with the trace on standard input. Running checkers sandboxed is planned. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
-| `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |
+| `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex within a process and by a `lockf` lock on the file across processes: every reservation and settlement first reads what other processes appended. |
 | `Executor` | Expands experiments, schedules runs with a concurrency limit, one Eio switch per run so a failing run is torn down alone. |
 
 ### `bactrian.app`
@@ -394,7 +394,7 @@ Modules return `result` with their own error types, chained with `let*`. Excepti
 | Spend cap | Refused requests end their run `Not_run (cap reached)`, and remaining runs are not started. Usage gaps from interrupted streams are reported. |
 | Interrupt | Ctrl-C cancels the experiment's switch: agents are killed, unfinished cassettes are marked `partial`, the ledger is flushed and a report is written for completed runs. Exit 130. The MCP server's `job_cancel` does the same to one job through a stop trigger, without signal handlers. `run --resume <id>` skips runs whose outcome is Passed, Failed or Diverged, re-runs `Not_run` and `Errored` runs, and refuses if the experiment, its scenarios, the agent command or the price file changed since the manifest was written. |
 
-Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per record. `meta.json` and `verdicts.json` are written to a temporary file and renamed. Shared state (the ledger, the CA's per-host certificate cache) is guarded by Eio mutexes. Authorisation headers are removed before storage, secrets are never logged, and an invalid redaction pattern is a configuration error.
+Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per record. `meta.json` and `verdicts.json` are written to a temporary file and renamed. Shared state (the ledger, the CA's per-host certificate cache) is guarded by Eio mutexes. The ledger file is also locked with `lockf` for each reservation and settlement, which first read the lines other processes appended, so two terminals, or the MCP server's jobs, share one cap and never number two reservations alike. Authorisation headers are removed before storage, secrets are never logged, and an invalid redaction pattern is a configuration error.
 
 ## 10. Testing
 

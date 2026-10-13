@@ -14,12 +14,13 @@ let reserve ?(provider = "openai") ?(owner = "run-a") l usd =
 
 let granted what = function
   | Ok r -> r
-  | Error (Ledger.Cap_reached _ | Ledger.Unknown_model _) ->
+  | Error (Ledger.Cap_reached _ | Ledger.Unknown_model _ | Ledger.Unreadable _)
+    ->
       Alcotest.failf "%s: unexpectedly refused" what
 
 let is_refused = function
   | Error (Ledger.Cap_reached _) -> true
-  | Ok _ | Error (Ledger.Unknown_model _) -> false
+  | Ok _ | Error (Ledger.Unknown_model _ | Ledger.Unreadable _) -> false
 
 let check_usd what expected actual =
   Alcotest.(check (float 1e-9)) what expected actual
@@ -37,7 +38,8 @@ let test_refuses_past_cap () =
       check_usd "cap" 1.0 cap;
       check_usd "spent" 0.6 spent;
       check_usd "requested" 0.5 requested
-  | Ok _ | Error (Ledger.Unknown_model _) -> Alcotest.fail "expected refusal");
+  | Ok _ | Error (Ledger.Unknown_model _ | Ledger.Unreadable _) ->
+      Alcotest.fail "expected refusal");
   check_usd "refusal charges nothing" 0.6 (Ledger.spent l ~provider:"openai");
   ignore (granted "exactly the cap" (reserve l 0.4));
   Alcotest.(check bool) "nothing more" true (is_refused (reserve l 0.000001))
@@ -90,7 +92,10 @@ let test_concurrent_never_exceeds () =
              Atomic.incr granted_count;
              Eio.Fiber.yield ();
              Ledger.settle l r ~actual:None
-         | Error (Ledger.Cap_reached _ | Ledger.Unknown_model _) -> ()));
+         | Error
+             ( Ledger.Cap_reached _ | Ledger.Unknown_model _
+             | Ledger.Unreadable _ ) ->
+             ()));
   Alcotest.(check int) "exactly the cap's worth" 100 (Atomic.get granted_count);
   check_usd "spent" 100.0 (Ledger.spent l ~provider:"openai");
   Alcotest.(check bool) "full" true (is_refused (reserve l 1.0))
@@ -160,6 +165,104 @@ let test_corrupt () =
   | exception Ledger.Corrupt { line; _ } ->
       Alcotest.(check int) "line number" 2 line
 
+(* The ids of every reservation in the file, in order. *)
+let reserve_ids dir =
+  Eio.Path.load Eio.Path.(dir / "ledger.jsonl")
+  |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+      match Bactrian_core.Canon.of_string line with
+      | Error _ -> None
+      | Ok v -> (
+          match Bactrian_core.Canon.str_member "event" v with
+          | Some "reserve" -> Bactrian_core.Canon.int_member "id" v
+          | Some _ | None -> None))
+
+let check_unique what ids =
+  Alcotest.(check int)
+    what (List.length ids)
+    (List.length (List.sort_uniq Int.compare ids))
+
+(* Two ledgers on one file, as two processes would hold them: each sees what
+   the other appended before it reserves. *)
+let test_two_handles () =
+  with_tmp "two-handles" @@ fun dir ->
+  let a = mk dir () and b = mk dir () in
+  let ra = granted "a" (reserve a 0.4) in
+  let rb = granted "b sees a's 0.4" (reserve b 0.4) in
+  Alcotest.(check bool) "a sees b's 0.4" true (is_refused (reserve a 0.3));
+  Ledger.settle b rb ~actual:(Some 0.1);
+  ignore (granted "a sees b's settlement" (reserve a 0.3));
+  Ledger.settle a ra ~actual:None;
+  check_usd "a's total" 0.8 (Ledger.spent a ~provider:"openai");
+  check_usd "b's total once it reads again" 0.8
+    (match reserve b 0.3 with
+    | Ok _ -> Alcotest.fail "b exceeded the cap"
+    | Error (Ledger.Cap_reached { spent; _ }) -> spent
+    | Error (Ledger.Unknown_model _ | Ledger.Unreadable _) ->
+        Alcotest.fail "unexpected refusal");
+  check_unique "no id is used twice" (reserve_ids dir);
+  check_usd "a reload agrees" 0.8 (Ledger.spent (mk dir ()) ~provider:"openai")
+
+(* The same across processes: two workers reserve 0.25 at a time against a cap
+   of 25 in one file, 80 times each. Without the lock each would see only its
+   own spend and both would get all 80. *)
+let test_two_processes () =
+  with_tmp "two-processes" @@ fun dir ->
+  let file = Eio.Path.native_exn Eio.Path.(dir / "ledger.jsonl") in
+  let start owner =
+    let stdin_r, stdin_w = Unix.pipe ~cloexec:true () in
+    let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
+    let pid =
+      Unix.create_process "./ledger_worker.exe"
+        [| "./ledger_worker.exe"; file; "25"; "0.25"; "80"; owner |]
+        stdin_r stdout_w Unix.stderr
+    in
+    Unix.close stdin_r;
+    Unix.close stdout_w;
+    (pid, stdin_w, stdout_r)
+  in
+  let workers = [ start "first"; start "second" ] in
+  List.iter (fun (_, w, _) -> Unix.close w) workers;
+  let granted =
+    List.map
+      (fun (pid, _, r) ->
+        let ic = Unix.in_channel_of_descr r in
+        let line = In_channel.input_line ic in
+        In_channel.close ic;
+        let rec reap () =
+          try Unix.waitpid [] pid
+          with Unix.Unix_error (EINTR, _, _) -> reap ()
+        in
+        (match reap () with
+        | _, WEXITED 0 -> ()
+        | _, (WEXITED _ | WSIGNALED _ | WSTOPPED _) ->
+            Alcotest.fail "a worker failed");
+        Option.bind line int_of_string_opt |> Option.value ~default:(-1))
+      workers
+  in
+  Alcotest.(check int)
+    "the cap's worth in all" 100
+    (List.fold_left ( + ) 0 granted);
+  let ids = reserve_ids dir in
+  Alcotest.(check int) "one line per grant" 100 (List.length ids);
+  check_unique "no id is used twice" ids;
+  check_usd "a reload agrees" 25.
+    (Ledger.spent (mk dir ~caps:[ ("openai", 25.) ] ()) ~provider:"openai")
+
+(* A line another process wrote that cannot be read stops further spending. *)
+let test_unreadable_tail () =
+  with_tmp "unreadable" @@ fun dir ->
+  let l = mk dir () in
+  ignore (granted "before" (reserve l 0.1));
+  Eio.Path.save ~append:true ~create:(`If_missing 0o600)
+    Eio.Path.(dir / "ledger.jsonl")
+    "not json\n";
+  match reserve l 0.1 with
+  | Error (Ledger.Unreadable { line; _ }) ->
+      Alcotest.(check int) "the line" 2 line
+  | Ok _ | Error (Ledger.Cap_reached _ | Ledger.Unknown_model _) ->
+      Alcotest.fail "expected the reservation to be refused"
+
 let () =
   Alcotest.run "ledger"
     [
@@ -180,5 +283,10 @@ let () =
             test_reload_legacy;
           Alcotest.test_case "spend by owner" `Quick test_spent_by_owner;
           Alcotest.test_case "corrupt line" `Quick test_corrupt;
+          Alcotest.test_case "two handles on one file" `Quick test_two_handles;
+          Alcotest.test_case "two processes on one file" `Quick
+            test_two_processes;
+          Alcotest.test_case "a line another process broke" `Quick
+            test_unreadable_tail;
         ] );
     ]
