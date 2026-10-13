@@ -25,4 +25,5 @@ val message : t -> string
 
 val to_json : t -> Yojson.Safe.t
 (** [{"error": message, "exit": code}], or for [Configuration]
-    [{"errors": [{file, line, column, path, message}…], "exit": code}]. *)
+    [{"errors": [{file, line, column, path, message}…], "exit": code}]. An
+    interruption adds the ["experiment_id"] to resume, if one had started. *)

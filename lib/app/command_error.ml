@@ -38,5 +38,13 @@ let to_json e =
           ("errors", `List (List.map located_json errors));
           ("exit", `Int (exit_code e));
         ]
-  | Usage _ | Environment _ | Internal _ | Interrupted _ ->
+  | Interrupted { experiment_id = Some id; _ } ->
+      `Assoc
+        [
+          ("error", `String (message e));
+          ("exit", `Int (exit_code e));
+          ("experiment_id", `String id);
+        ]
+  | Usage _ | Environment _ | Internal _
+  | Interrupted { experiment_id = None; _ } ->
       `Assoc [ ("error", `String (message e)); ("exit", `Int (exit_code e)) ]
