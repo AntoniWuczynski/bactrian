@@ -12,10 +12,15 @@ type t = {
   data : Bactrian_core.Report_data.t;  (** What the report shows. *)
 }
 
-val run : env:Eio_unix.Stdenv.base -> request -> (t, Command_error.t) result
-(** Compares the variants as {!Comparison.analyse} does (an inconclusive gate
-    metric is not a failure here) and writes the report atomically. A file that
-    cannot be written is [Environment]. *)
+val run :
+  ?compute:Compute.t ->
+  env:Eio_unix.Stdenv.base ->
+  request ->
+  (t, Command_error.t) result
+(** Compares the variants as {!Comparison.analyse} does, and renders the HTML,
+    through [compute] (an inconclusive gate metric is not a failure here) and
+    writes the report atomically. A file that cannot be written is
+    [Environment]. *)
 
 val to_json : t -> Yojson.Safe.t
 (** [{"output": FILE, "summary": …}], the summary being what

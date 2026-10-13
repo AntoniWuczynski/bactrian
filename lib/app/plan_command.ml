@@ -85,6 +85,9 @@ let rates_from ~env ~experiment_id ~variant =
            (fun (s, (passes, n)) -> (s, float_of_int passes /. float_of_int n))
            bindings)
 
+let max_scenarios = 10_000
+let max_work = 100_000_000
+
 (* The scenarios and their baseline rates, from the flags or from [--from]. *)
 let baseline_rates ~env ~rates ~scenarios ~from ~variant =
   match from with
@@ -115,6 +118,8 @@ let baseline_rates ~env ~rates ~scenarios ~from ~variant =
       in
       let* () =
         if count < 1 then Error "--scenarios must be at least 1"
+        else if count > max_scenarios then
+          Error (Printf.sprintf "--scenarios must be at most %d" max_scenarios)
         else if
           List.compare_length_with rates 1 > 0
           && List.compare_length_with rates count <> 0
@@ -158,6 +163,21 @@ let validate_assumption (a : Plan_sim.assumption) =
     else Ok ()
   in
   let* () =
+    (* Each repeat count tried simulates every scenario's runs [simulations]
+       times. In floating point, as the product of three ints can overflow. *)
+    let work =
+      Float.of_int count *. Float.of_int a.simulations
+      *. Float.of_int a.max_repeats
+    in
+    if work > Float.of_int max_work then
+      Error
+        (Printf.sprintf
+           "scenarios x --simulations x --max-repeats is %.0f, more than the \
+            %d a plan may simulate: lower --simulations or --max-repeats"
+           work max_work)
+    else Ok ()
+  in
+  let* () =
     if a.gate_metrics < 1 || a.gate_metrics > max_gate_metrics then
       Error
         (Printf.sprintf "--gate-metrics must be from 1 to %d" max_gate_metrics)
@@ -171,7 +191,7 @@ let validate_assumption (a : Plan_sim.assumption) =
         Error "--population scenarios needs at least 10 --scenarios"
       else non_negative "--between-sd" sd
 
-let plan ~env r =
+let plan ~compute ~env r =
   let* baseline_rates =
     baseline_rates ~env ~rates:r.rates ~scenarios:r.scenarios ~from:r.from
       ~variant:r.variant
@@ -192,9 +212,16 @@ let plan ~env r =
     }
   in
   let* () = validate_assumption assumption in
-  Ok { assumption; answer = Plan_sim.plan assumption }
+  Ok
+    {
+      assumption;
+      answer =
+        compute.Compute.run (fun ~check -> Plan_sim.plan ~check assumption);
+    }
 
-let run ~env r = Result.map_error (fun m -> Command_error.Usage m) (plan ~env r)
+let run ?(compute = Compute.inline) ~env r =
+  Result.map_error (fun m -> Command_error.Usage m) (plan ~compute ~env r)
+
 let exit_code (_ : t) = Exit_code.ok
 let population_name = function `Suite -> "suite" | `Scenarios -> "scenarios"
 let target_name a = Report_data.verdict_name (Plan_sim.target a)

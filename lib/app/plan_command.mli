@@ -52,9 +52,21 @@ val default_gate_metrics : int
 
 type t = { assumption : Plan_sim.assumption; answer : Plan_sim.answer }
 
-val run : env:Eio_unix.Stdenv.base -> request -> (t, Command_error.t) result
-(** Validates the request, then simulates {!Bactrian_core.Plan_sim.plan}. Every
-    error is [Usage]. *)
+val max_scenarios : int
+(** 10,000. *)
+
+val max_work : int
+(** 100,000,000: the most scenarios x simulations x max repeats a request may
+    ask for, which bounds how long a plan takes. *)
+
+val run :
+  ?compute:Compute.t ->
+  env:Eio_unix.Stdenv.base ->
+  request ->
+  (t, Command_error.t) result
+(** Validates the request, then simulates {!Bactrian_core.Plan_sim.plan} through
+    [compute] (default {!Compute.inline}). Every error is [Usage], including
+    more scenarios than {!max_scenarios} or more work than {!max_work}. *)
 
 val target_name : Plan_sim.assumption -> string
 (** The verdict the plan aims for, as {!Bactrian_core.Report_data.verdict_name}

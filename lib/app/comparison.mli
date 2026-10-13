@@ -2,6 +2,7 @@
     [compare] and [report] share. *)
 
 val analyse :
+  compute:Compute.t ->
   env:Eio_unix.Stdenv.base ->
   experiment_id:string ->
   baseline:string option ->
@@ -10,5 +11,6 @@ val analyse :
   (Bactrian_core.Report_data.t, Command_error.t) result
 (** Reads [./.bactrian/experiments/<experiment_id>] and compares [candidate]
     with [baseline] (see {!Bactrian_runtime.Results.settings} for the defaults).
-    An invalid experiment file is [Configuration], an unknown experiment or
-    unusable settings are [Usage], and unreadable results are [Internal]. *)
+    The comparison runs through [compute]. An invalid experiment file is
+    [Configuration], an unknown experiment or unusable settings are [Usage], and
+    unreadable results are [Internal]. *)

@@ -10,7 +10,8 @@ let results_error (e : Results.error) : Command_error.t =
   | Bad_manifest _ | Bad_run _ ->
       Internal (Format.asprintf "%a" Results.pp_error e)
 
-let analyse ~env ~experiment_id ~baseline ~candidate ~fail_on_inconclusive =
+let analyse ~(compute : Compute.t) ~env ~experiment_id ~baseline ~candidate
+    ~fail_on_inconclusive =
   let* loaded =
     Results.load ~fs:(Eio.Stdenv.fs env)
       ~root:Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")
@@ -21,9 +22,10 @@ let analyse ~env ~experiment_id ~baseline ~candidate ~fail_on_inconclusive =
     Results.settings loaded ~baseline ~candidate ~fail_on_inconclusive
     |> Result.map_error (fun m -> Command_error.Usage m)
   in
+  compute.run @@ fun ~check ->
   let* result =
     Compare.run settings |> Result.map_error (fun m -> Command_error.Usage m)
   in
   Ok
-    (Report_data.build ~experiment_id ~experiment:loaded.manifest.name ~settings
-       ~result loaded.runs)
+    (Report_data.build ~check ~experiment_id ~experiment:loaded.manifest.name
+       ~settings ~result loaded.runs)

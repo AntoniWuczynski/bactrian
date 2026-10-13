@@ -264,7 +264,7 @@ let summary ~dropped runs variant =
            mine);
   }
 
-let metric_row (settings : Compare.input) (m : Compare.metric_result) =
+let metric_row ~check (settings : Compare.input) (m : Compare.metric_result) =
   let delta =
     Compare.threshold_of m.metric (settings.gate @ settings.report_metrics)
     |> Option.value ~default:0.
@@ -286,7 +286,7 @@ let metric_row (settings : Compare.input) (m : Compare.metric_result) =
     match m.verdict with
     | Inconclusive _ when m.in_gate && Option.is_none m.undefined ->
         Some
-          (Plan_sim.extra_runs_needed settings ~metric:m.metric
+          (Plan_sim.extra_runs_needed ~check settings ~metric:m.metric
             :> extra_repeats)
     | Inconclusive _ | Regression | Improvement | No_change -> None
   in
@@ -446,8 +446,8 @@ let arms (settings : Compare.input) ~level runs scenario_names =
            [ settings.baseline; settings.candidate ])
        scenario_names)
 
-let build ~experiment_id ~experiment ~(settings : Compare.input)
-    ~(result : Compare.result) runs =
+let build ?(check = ignore) ~experiment_id ~experiment
+    ~(settings : Compare.input) ~(result : Compare.result) runs =
   let order =
     List.stable_sort (fun (a : run) b -> Int.compare a.index b.index) runs
   in
@@ -487,7 +487,7 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
     exit = result.exit;
     metrics =
       List.map
-        (metric_row { settings with runs = List.map compare_run runs })
+        (metric_row ~check { settings with runs = List.map compare_run runs })
         result.metrics;
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
     arms = arms settings ~level:arms_level runs scenario_names;

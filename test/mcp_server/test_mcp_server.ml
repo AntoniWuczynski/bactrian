@@ -444,6 +444,11 @@ let test_arguments () =
         "argument population: must be one of suite, scenarios" );
       ( {|{"threshold":0.1,"baseline_rates":["x"]}|},
         "argument baseline_rates: must be an array of numbers" );
+      ( {|{"threshold":0.1,"baseline_rates":[0.5],"scenarios":4611686018427387903}|},
+        "--scenarios must be at most 10000" );
+      ( {|{"threshold":0.1,"baseline_rates":[0.5],"scenarios":20,"simulations":20000,"max_repeats":2000}|},
+        "scenarios x --simulations x --max-repeats is 800000000, more than the \
+         100000000 a plan may simulate: lower --simulations or --max-repeats" );
       ("[]", "arguments: must be an object");
     ];
   check_refused "no arguments" "missing argument experiment"
@@ -536,6 +541,59 @@ let test_same_as_commands () =
   check_refused "no such run" {|no run "r2"|}
     (call "divergences" (Some {|{"run":"r2"}|}))
 
+(* A plan that takes minutes runs off the event loop: the server answers
+   other requests meanwhile, a cancellation stops it, and the end of input
+   ends the server with another one in flight. The timeouts only bound a
+   failure. *)
+let test_plan_off_loop () =
+  with_context @@ fun context _ ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock context.env in
+  let r, w = Eio_unix.pipe sw in
+  let out = Buffer.create 256 in
+  let send line = Eio.Flow.copy_string (line ^ "\n") w in
+  let replied id = List.mem (`Result id) (replies (Buffer.contents out)) in
+  let await_reply id =
+    Eio.Time.with_timeout_exn clock 30. (fun () ->
+        while not (replied id) do
+          Eio.Time.sleep clock 0.01
+        done)
+  in
+  let plan id =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{%s,"name":"plan","arguments":{"threshold":0.05,"baseline_rates":[0.5],"scenarios":20,"simulations":20000,"max_repeats":200}}}|}
+      id meta
+  in
+  let list id =
+    Printf.sprintf
+      {|{"jsonrpc":"2.0","id":%d,"method":"tools/list","params":{%s}}|} id meta
+  in
+  let ended =
+    Eio.Fiber.pair
+      (fun () ->
+        Mcp_server.serve
+          ~server:{ server with tools = Mcp_tools.definitions }
+          ~call:(Mcp_tools.call context) ~stop:(Interrupt.trigger ())
+          ~log:ignore ~input:r ~output:(Eio.Flow.buffer_sink out))
+      (fun () ->
+        send (plan 1);
+        send (list 2);
+        await_reply 2;
+        send (cancel_line 1);
+        send (plan 3);
+        send (list 4);
+        await_reply 4;
+        Eio.Flow.close w)
+    |> fst
+  in
+  Alcotest.(check bool)
+    "ended by the input" true
+    (match ended with Input_closed -> true | Stopped _ -> false);
+  Alcotest.(check (list reply_t))
+    "only the lists were answered"
+    [ `Result 2; `Result 4 ]
+    (List.sort compare (replies (Buffer.contents out)))
+
 (* A job beyond the limit is refused, and names the flag that raises it. *)
 let test_job_limit () =
   with_context ~policy:{ Policy.max_jobs = 1 } @@ fun context call ->
@@ -576,5 +634,7 @@ let () =
           Alcotest.test_case "argument errors" `Quick test_arguments;
           Alcotest.test_case "the commands' JSON" `Quick test_same_as_commands;
           Alcotest.test_case "the job limit" `Quick test_job_limit;
+          Alcotest.test_case "a long plan off the event loop" `Quick
+            test_plan_off_loop;
         ] );
     ]

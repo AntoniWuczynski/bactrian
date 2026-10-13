@@ -137,9 +137,10 @@ let one_simulation setup ~stream ~n ~index =
       | Some verdict -> hit setup.target verdict
       | None -> invalid_arg "Plan_sim: no pass rate verdict")
 
-let power_of setup ~stream n =
+let power_of ~check setup ~stream n =
   let hits = ref 0 in
   for index = 0 to setup.simulations - 1 do
+    check ();
     if one_simulation setup ~stream ~n ~index then incr hits
   done;
   float_of_int !hits /. float_of_int setup.simulations
@@ -151,13 +152,13 @@ let mc_se ~power ~simulations =
    until one does, then bisection between the last failure and that success.
    Powers are memoised, and each is a pure function of [n], so the result does
    not depend on the order of evaluation. *)
-let search setup ~required ~max_repeats =
+let search ~check setup ~required ~max_repeats =
   let cache = Hashtbl.create 16 in
   let power n =
     match Hashtbl.find_opt cache n with
     | Some p -> p
     | None ->
-        let p = power_of setup ~stream:Search n in
+        let p = power_of ~check setup ~stream:Search n in
         Hashtbl.add cache n p;
         p
   in
@@ -175,7 +176,7 @@ let search setup ~required ~max_repeats =
   in
   match double 0 1 with
   | Some n ->
-      let p = power_of setup ~stream:Report n in
+      let p = power_of ~check setup ~stream:Report n in
       Repeats
         {
           n;
@@ -224,13 +225,14 @@ let target (a : assumption) : Compare.verdict =
   | Want_improvement -> Improvement
   | Want_no_change -> No_change
 
-let plan (a : assumption) =
+let plan ?(check = ignore) (a : assumption) =
   check_positive "max_repeats" a.max_repeats;
-  search (setup_of_assumption a) ~required:a.power ~max_repeats:a.max_repeats
+  search ~check (setup_of_assumption a) ~required:a.power
+    ~max_repeats:a.max_repeats
 
 let power_at a ~repeats =
   check_positive "repeats" repeats;
-  power_of (setup_of_assumption a) ~stream:Report repeats
+  power_of ~check:ignore (setup_of_assumption a) ~stream:Report repeats
 
 let extra_power = 0.8
 let extra_simulations = 200
@@ -285,7 +287,7 @@ let observed_setup (input : Compare.input) ~threshold ~level =
       simulations = extra_simulations;
     } )
 
-let extra_runs_needed (input : Compare.input) ~metric =
+let extra_runs_needed ?(check = ignore) (input : Compare.input) ~metric =
   let declared = Compare.threshold_of metric in
   (* The level [Compare] judges the metric at: Bonferroni across the gate
      family for a gate metric, the confidence itself otherwise. *)
@@ -309,7 +311,7 @@ let extra_runs_needed (input : Compare.input) ~metric =
           | [], _, _ -> `Cannot_resolve
           | _, current, setup -> (
               match
-                search setup ~required:extra_power
+                search ~check setup ~required:extra_power
                   ~max_repeats:extra_max_repeats
               with
               | Unreachable _ -> `Cannot_resolve

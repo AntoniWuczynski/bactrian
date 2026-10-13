@@ -188,6 +188,7 @@ type t = {
 }
 
 val build :
+  ?check:(unit -> unit) ->
   experiment_id:string ->
   experiment:string ->
   settings:Compare.input ->
@@ -198,7 +199,7 @@ val build :
     inconclusive gate metric runs {!Plan_sim.extra_runs_needed}, which is
     deterministic (its seed is [settings.seed]) and fast under [`Suite], and
     runs a hierarchical bootstrap per simulated experiment under [`Scenarios].
-*)
+    [check] is passed to it. *)
 
 val to_json : t -> Yojson.Safe.t
 (** Deterministic: fixed key order, runs in execution order, scenarios sorted,

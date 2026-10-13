@@ -10,6 +10,7 @@ type request = {
 }
 
 val run :
+  ?compute:Compute.t ->
   env:Eio_unix.Stdenv.base ->
   request ->
   (Bactrian_core.Report_data.t, Command_error.t) result

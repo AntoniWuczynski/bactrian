@@ -50,10 +50,12 @@ type answer =
   | Unreachable of { best_power : float }
       (** No repeat count up to [max_repeats] reaches the power. *)
 
-val plan : assumption -> answer
-(** The correct verdict is [Regression] when [true_effect >= threshold],
-    [Improvement] when [true_effect <= -threshold] and [No_change] otherwise.
-    The repeat count is searched by doubling, then bisection.
+val plan : ?check:(unit -> unit) -> assumption -> answer
+(** [check] is called before every simulated experiment, and may raise to
+    abandon the search (the MCP server cancels a call this way). The correct
+    verdict is [Regression] when [true_effect >= threshold], [Improvement] when
+    [true_effect <= -threshold] and [No_change] otherwise. The repeat count is
+    searched by doubling, then bisection.
 
     Raises [Invalid_argument] if [baseline_rates] is empty, [max_repeats],
     [simulations] or [gate_metrics] is below 1, [threshold] is outside [(0, 1)],
@@ -70,6 +72,7 @@ val power_at : assumption -> repeats:int -> float
     {!plan}'s [achieved_power]. Same exceptions as {!plan}. *)
 
 val extra_runs_needed :
+  ?check:(unit -> unit) ->
   Compare.input ->
   metric:Compare.metric ->
   [ `Repeats of int | `Cannot_resolve | `Not_simulated ]
@@ -85,4 +88,4 @@ val extra_runs_needed :
     [`Not_simulated] for metrics other than [Pass_rate], which the simulator
     does not model. Under [`Scenarios] each simulated experiment runs the
     hierarchical bootstrap over every run, so a search that reaches thousands of
-    repeats is slow. *)
+    repeats is slow. [check] is as for {!plan}. *)

@@ -91,6 +91,15 @@ let enum ~field values = function
 
 let names values = List.map fst values
 
+(* The CPU-bound part of compare, report and plan runs in a domain of its own,
+   so that the server keeps reading messages, serving the jobs' proxies and
+   noticing cancellation and the end of input meanwhile. A systhread would not
+   do that: OCaml threads of one domain share its runtime lock, so a computing
+   thread leaves the event loop a turn only at each tick of the master lock. A
+   new domain per call costs a millisecond or so, and the work, pure and given
+   only its own values, is safe to run there. *)
+let compute context = Compute.in_domain (Eio.Stdenv.domain_mgr context.env)
+
 (* Confinement of optional arguments. *)
 let each check = function None -> Ok () | Some v -> check v
 
@@ -443,7 +452,7 @@ let compare =
     (fun context (a : compare_args) ->
       let* () = usage (Confine.id ~field:"experiment_id" a.experiment_id) in
       let* data =
-        Compare_command.run ~env:context.env
+        Compare_command.run ~compute:(compute context) ~env:context.env
           {
             experiment_id = a.experiment_id;
             baseline = a.baseline;
@@ -507,7 +516,7 @@ let plan =
         usage (enum ~field:"population" Plan_command.populations a.population)
       in
       let* plan =
-        Plan_command.run ~env:context.env
+        Plan_command.run ~compute:(compute context) ~env:context.env
           {
             rates = a.baseline_rates;
             scenarios = a.scenarios;
@@ -560,7 +569,7 @@ let report =
       let* () = usage (Confine.id ~field:"experiment_id" a.experiment_id) in
       let* () = usage (Confine.path context.root ~field:"output" a.output) in
       let* r =
-        Report_command.run ~env:context.env
+        Report_command.run ~compute:(compute context) ~env:context.env
           {
             experiment_id = a.experiment_id;
             baseline = a.baseline;

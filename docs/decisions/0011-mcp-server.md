@@ -50,6 +50,14 @@ The Tasks extension (`io.modelcontextprotocol/tasks`) is not used. Its field nam
 
 `job_cancel` ends a job as SIGINT ends the command. On the command line a signal handler fires a stop trigger, and in the server each job has a trigger of its own, so cancelling one job touches no signal handler and no other job. Either way the command's fibre is cancelled: agents are killed with their process groups, unfinished cassettes stay partial, an experiment's manifest marks the runs in flight as interrupted, and `job_cancel` returns only once all of that has happened. A cancelled experiment's error holds its `experiment_id`, and `run_start` with `resume` continues it.
 
+### Work that computes
+
+`compare`, `report` and `plan` spend most of their time computing: the bootstrap, the simulated extra runs of an inconclusive gate metric and the power simulation, which can take minutes. Eio schedules fibres cooperatively, and none of that yields, so run inline it would stop the whole server: no message read, so no cancellation and no end of input noticed, and the jobs' model proxies silent towards their agents. That part runs with `Eio.Domain_manager.run` in a domain of its own, and reading the files and writing the report stay in the server's domain.
+
+A systhread (`Eio_unix.run_in_systhread`) was the other choice. OCaml's threads of one domain share that domain's runtime lock, so a computing thread hands the event loop a turn only at each tick of the master lock, about every 50 milliseconds, which slows every job and every reply. A domain runs in parallel and costs about a millisecond to start per call. The work is pure and handed only its own values, so it is safe in another domain.
+
+The simulation calls a check before each simulated experiment. In the server that check yields to the domain's own scheduler, which lets `Domain_manager.run` deliver the caller's cancellation and raises it, so a cancelled `plan` or `compare`, or one in flight when the input closes, stops within one simulated experiment rather than at its end. `plan` also refuses work it could not finish in reasonable time: more than 10,000 scenarios, or scenarios times simulations times `max_repeats` above 100,000,000, the same on the command line.
+
 ### Shutdown
 
 When standard input closes, the server cancels the calls still in flight (they get no reply), cancels every running job as `job_cancel` would, waits until they have unwound and exits 0, as a server should exit promptly once its input closes [4][5]. SIGINT and SIGTERM do the same and exit 130.
