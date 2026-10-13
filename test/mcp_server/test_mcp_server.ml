@@ -405,6 +405,12 @@ let test_definitions () =
         [ "readOnlyHint"; "destructiveHint"; "idempotentHint"; "openWorldHint" ])
     Mcp_tools.definitions;
   Alcotest.(check (option canon_t))
+    "check runs commands, so it is neither read-only nor closed-world"
+    (Some
+       (canon
+          {|{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}|}))
+    (path [ "annotations" ] (List.assoc "check" Mcp_tools.definitions));
+  Alcotest.(check (option canon_t))
     "required arguments"
     (Some (canon {|["experiment"]|}))
     (path

@@ -562,12 +562,21 @@ let report =
 type check_args = { scenarios : string list }
 [@@deriving of_yojson { strict = true }]
 
+(* Runs the scenarios' checker commands, which may do anything the user can. *)
 let check =
-  tool ~name:"check" ~title:"Check scenarios" ~annotations:reads
+  tool ~name:"check" ~title:"Check scenarios"
+    ~annotations:
+      {
+        read_only = false;
+        destructive = true;
+        idempotent = false;
+        open_world = true;
+      }
     ~description:
       "Check scenarios' assertions and checkers against their golden traces: \
        every pass trace must pass them all and every fail trace must fail one, \
-       as `bactrian check --json` prints it."
+       as `bactrian check --json` prints it. This runs each scenario's checker \
+       commands as programs on this machine, outside any sandbox."
     [
       prop ~required:true "scenarios" Nonempty_strings
         "Scenario files (YAML or JSON), inside the working directory.";
