@@ -32,4 +32,10 @@
   ../../examples/agents/python/pyproject.toml
   ../../examples/agents/python/uv.lock)
  (action
-  (run %{exe:test_acceptance.exe})))
+  (setenv
+   BACTRIAN_EXE
+   %{exe:../../bin/main.exe}
+   (setenv
+    FAKE_MCP_SERVER
+    %{exe:../support/fake_mcp/fake_mcp_server.exe}
+    (run %{exe:test_acceptance.exe})))))

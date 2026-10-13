@@ -96,10 +96,20 @@ let outcome_name (r : Run.result) =
 
 let ok = function Ok v -> v | Error e -> Alcotest.failf "execute: %s" e
 
-let acceptance agent () =
-  let argv = agent.argv () in
+type world = {
+  up : F.t;
+  execute :
+    argv:string list ->
+    ?replay:Run.replay ->
+    ?mcp:Mcp_proxy.config list ->
+    ?variant_env:(string * string) list ->
+    unit ->
+    Run.result;
+}
+
+let with_world name f =
   Eio_main.run @@ fun env ->
-  let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ agent.name)) in
+  let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 dir;
   Fun.protect ~finally:(fun () -> Eio.Path.rmtree ~missing_ok:true dir)
@@ -122,7 +132,7 @@ let acceptance agent () =
     | Error e -> Alcotest.failf "fake upstream: %a" F.pp_error e
   in
   let store = Store.create ~root:Eio.Path.(dir / ".bactrian") in
-  let execute ?replay () =
+  let execute ~argv ?replay ?(mcp = []) ?(variant_env = []) () =
     incr counter;
     let ledger =
       Ledger.create
@@ -140,7 +150,7 @@ let acceptance agent () =
         timezone = "UTC";
         replay;
         env_passthrough = [ prompt_variable ];
-        variant_env = [];
+        variant_env;
         fixtures = None;
         normalise = [];
         redact = [];
@@ -149,7 +159,7 @@ let acceptance agent () =
         unenforced = [];
         turn_timeout = 60.;
         total_timeout = 90.;
-        mcp = [];
+        mcp;
       }
     in
     ok
@@ -158,9 +168,15 @@ let acceptance agent () =
          ~upstream:(fun _ -> Uri.of_string (F.base_url up))
          ~env ~proxy ~store ~ledger config)
   in
-  let strict from : Run.replay =
-    { from; matcher = Strict; allow_reorder = false; timing = P.Fast }
-  in
+  f { up; execute }
+
+let strict from : Run.replay =
+  { from; matcher = Strict; allow_reorder = false; timing = P.Fast }
+
+let acceptance agent () =
+  let argv = agent.argv () in
+  with_world agent.name @@ fun { up; execute } ->
+  let execute = execute ~argv in
   (* (a) record *)
   let recorded = execute () in
   Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
@@ -201,11 +217,104 @@ let acceptance agent () =
   | [ None ] -> Alcotest.fail "the missing request has no nearest exchange"
   | [] | _ :: _ :: _ -> Alcotest.fail "expected exactly one Missing_request"
 
+(* MCP: the agent reaches a stdio server through [bactrian mcp-shim]. The
+   recording is replayed with the server unavailable. *)
+
+(* dune gives the paths of the executables relative to the test's directory. *)
+let executable variable =
+  match Sys.getenv_opt variable with
+  | Some p when Filename.is_relative p -> Filename.concat (Sys.getcwd ()) p
+  | Some p -> p
+  | None -> Alcotest.failf "%s is not set (run through dune)" variable
+
+type era = { label : string; fake : string; protocol : string; requests : int }
+
+let eras =
+  [
+    { label = "modern"; fake = "modern"; protocol = "2026-07-28"; requests = 1 };
+    (* initialize, the initialized notification and tools/call *)
+    { label = "legacy"; fake = "legacy"; protocol = "2025-11-25"; requests = 3 };
+  ]
+
+let weather_server argv : Mcp_proxy.config list =
+  [
+    {
+      name = "weather";
+      server = Stdio { argv; env = []; cwd = None };
+      policy = Record;
+    };
+  ]
+
+let member_string key j = Yojson.Safe.Util.(to_string (member key j))
+
+let mcp_acceptance agent era () =
+  let argv = agent.argv () in
+  let log = Filename.temp_file "fake-mcp" ".log" in
+  Fun.protect ~finally:(fun () -> Sys.remove log) @@ fun () ->
+  with_world (agent.name ^ "-mcp-" ^ era.label) @@ fun { up; execute } ->
+  let variant_env =
+    [
+      ( "AGENT_MCP_COMMAND",
+        Yojson.Safe.to_string
+          (`List
+             (List.map
+                (fun s -> `String s)
+                [ executable "BACTRIAN_EXE"; "mcp-shim"; "weather" ])) );
+      ("AGENT_MCP_PROTOCOL", era.protocol);
+    ]
+  in
+  let fake_calls () = List.length (lines log) in
+  let recorded =
+    execute ~argv ~variant_env
+      ~mcp:
+        (weather_server
+           [ executable "FAKE_MCP_SERVER"; "--era"; era.fake; "--log"; log ])
+      ()
+  in
+  Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  Alcotest.(check int) "server saw" era.requests (fake_calls ());
+  (* A notification is not recorded. *)
+  Alcotest.(check int)
+    "model and MCP exchanges"
+    (2 + era.requests - (era.requests / 3))
+    recorded.findings.exchanges;
+  Alcotest.(check (list string))
+    "tool call joined to its MCP record" [ "joined" ]
+    (List.map (member_string "mcp") (entries "tool_call" recorded));
+  Alcotest.(check (list string))
+    "the server's answer reached the model" [ "Sunny, 21C in Paris" ]
+    (List.map (member_string "content") (entries "tool_result" recorded));
+  (* Strict replay, with the server unavailable. *)
+  let replayed =
+    execute ~argv ~variant_env ~replay:(strict recorded.run_dir)
+      ~mcp:(weather_server [ "/nonexistent/fake-mcp-server" ])
+      ()
+  in
+  Alcotest.(check string) "replay outcome" "passed" (outcome_name replayed);
+  Alcotest.(check int)
+    "no divergences" 0
+    (List.length replayed.findings.divergences);
+  Alcotest.(check int) "server untouched" era.requests (fake_calls ());
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
+  Alcotest.(check (list string))
+    "same joins in the replay's trace" [ "joined" ]
+    (List.map (member_string "mcp") (entries "tool_call" replayed))
+
 let () =
   Alcotest.run "acceptance"
     [
       ( "example agents",
         List.map
           (fun a -> Alcotest.test_case a.name `Slow (acceptance a))
+          agents );
+      ( "mcp through mcp-shim",
+        List.concat_map
+          (fun a ->
+            List.map
+              (fun e ->
+                Alcotest.test_case
+                  (a.name ^ ", " ^ e.label)
+                  `Slow (mcp_acceptance a e))
+              eras)
           agents );
     ]
