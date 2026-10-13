@@ -61,12 +61,15 @@ val max_work : int
 
 val run :
   ?compute:Compute.t ->
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
   env:Eio_unix.Stdenv.base ->
   request ->
   (t, Command_error.t) result
 (** Validates the request, then simulates {!Bactrian_core.Plan_sim.plan} through
-    [compute] (default {!Compute.inline}). Every error is [Usage], including
-    more scenarios than {!max_scenarios} or more work than {!max_work}. *)
+    [compute] (default {!Compute.inline}). [from]'s experiment file is read
+    through [files] (default the whole filesystem). Every error is [Usage],
+    including more scenarios than {!max_scenarios} or more work than
+    {!max_work}. *)
 
 val target_name : Plan_sim.assumption -> string
 (** The verdict the plan aims for, as {!Bactrian_core.Report_data.verdict_name}

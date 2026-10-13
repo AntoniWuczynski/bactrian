@@ -11,6 +11,7 @@ type request = {
 
 val run :
   ?compute:Compute.t ->
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
   env:Eio_unix.Stdenv.base ->
   request ->
   (Bactrian_core.Report_data.t, Command_error.t) result

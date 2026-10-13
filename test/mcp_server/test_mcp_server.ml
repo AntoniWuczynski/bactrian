@@ -330,6 +330,12 @@ let test_confine () =
     [
       ("run-1", true); ("", false); (".", false); ("..", false); ("a/b", false);
     ];
+  Alcotest.(check (result string string))
+    "given back relative to the root" (Ok "inside.yaml")
+    (Confine.path r ~field:"f" (Filename.concat (Confine.root r) "inside.yaml"));
+  Alcotest.(check (result string string))
+    "the root itself" (Ok ".")
+    (Confine.path r ~field:"f" "sub/..");
   Alcotest.(check bool)
     "a run directory inside" true
     (Result.is_ok (Confine.run r ~field:"run" ".bactrian/runs/r1"));
@@ -337,7 +343,7 @@ let test_confine () =
     "a run directory outside" false
     (Result.is_ok (Confine.run r ~field:"run" "/tmp/r1"));
   match Confine.path r ~field:"output" "/etc/x" with
-  | Ok () -> Alcotest.fail "accepted"
+  | Ok _ -> Alcotest.fail "accepted"
   | Error m ->
       Alcotest.(check bool)
         "the error names the field" true
@@ -594,6 +600,110 @@ let test_plan_off_loop () =
     [ `Result 2; `Result 4 ]
     (List.sort compare (replies (Buffer.contents out)))
 
+let write file text =
+  let rec mkdirs d =
+    if not (Sys.file_exists d) then (
+      mkdirs (Filename.dirname d);
+      Sys.mkdir d 0o755)
+  in
+  mkdirs (Filename.dirname file);
+  Out_channel.with_open_text file (fun oc -> output_string oc text)
+
+let structured result =
+  Option.value ~default:Canon.null (Canon.member "structuredContent" result)
+
+(* Polls a job until it has finished. *)
+let finished env call result =
+  match
+    Option.bind (path [ "job_id" ] (structured result)) Canon.to_string_opt
+  with
+  | None -> Alcotest.fail ("no job: " ^ Canon.to_string result)
+  | Some id ->
+      let rec poll () =
+        let status =
+          structured
+            (call "job_status" (Some (Printf.sprintf {|{"job_id":%S}|} id)))
+        in
+        match Option.bind (path [ "state" ] status) Canon.to_string_opt with
+        | Some "running" ->
+            Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
+            poll ()
+        | Some _ | None -> status
+      in
+      poll ()
+
+(* What experiment and scenario files name stays inside the root too, and an
+   error never quotes a file it could not use. *)
+let test_named_paths () =
+  with_tools @@ fun env call ->
+  let secret = "sk-proj-SENTINEL" in
+  let outside =
+    Filename.concat (Filename.dirname (Sys.getcwd ())) "outside-secret.env"
+  in
+  write outside ("OPENAI_API_KEY=" ^ secret ^ "\n");
+  Fun.protect ~finally:(fun () -> Sys.remove outside) @@ fun () ->
+  write "inside.env" ("OPENAI_API_KEY=" ^ secret ^ "\n");
+  write "leak/s.json"
+    (Printf.sprintf
+       {|{"version": 1, "id": "s", "turns": [{"user": "hi"}],
+          "assertions": [{"max_steps": 2}],
+          "golden": {"pass": [%S, "../../outside-secret.env", "../inside.env"],
+                     "fail": ["../inside.env"]}}|}
+       outside);
+  let result = call "check" (Some {|{"scenarios":["leak/s.json"]}|}) in
+  let text = Canon.to_string result in
+  Alcotest.(check bool) "no secret in the result" false (mentions secret text);
+  Alcotest.(check bool)
+    "files outside cannot be read" true
+    (mentions "cannot read the trace" text);
+  Alcotest.(check bool)
+    "a file inside is named by line, not quoted" true
+    (mentions "line 1 is not JSON" text);
+  let experiment ?(extra = "") scenarios =
+    Printf.sprintf
+      {|{"version": 1, "name": "x", "agent": {"protocol": "command", "command": ["true"]},
+         "scenarios": [%S], "variants": {"a": {}}, "repeats": 1,
+         "caps_usd": {"openai": 1}%s}|}
+      scenarios extra
+  in
+  write "exp/scen/s.json"
+    {|{"version": 1, "id": "s", "turns": [{"user": "hi"}]}|};
+  let refused name expected =
+    let status =
+      finished env call
+        (call "run_start"
+           (Some (Printf.sprintf {|{"experiment":"exp/%s.json"}|} name)))
+    in
+    let text = Canon.to_string status in
+    Alcotest.(check bool)
+      (name ^ " failed") true
+      (mentions {|"state":"failed"|} text);
+    Alcotest.(check bool)
+      (Printf.sprintf "%s: %s in %s" name expected text)
+      true (mentions expected text);
+    Alcotest.(check bool)
+      (name ^ " quotes no secret")
+      false (mentions secret text)
+  in
+  write "exp/glob.json" (experiment "../../*.env");
+  refused "glob" "scenarios[0]";
+  write "exp/pricing.json"
+    (experiment ~extra:{|, "pricing": "../../outside-secret.env"|} "scen/*.json");
+  refused "pricing" "pricing";
+  write "exp/write.json"
+    (experiment
+       ~extra:{|, "sandbox": {"mode": "strict", "allow_write": ["/tmp"]}|}
+       "scen/*.json");
+  refused "write" "sandbox.allow_write";
+  write "exp/s2/s.json"
+    {|{"version": 1, "id": "s2", "turns": [{"user": "hi"}], "fixtures": "../../../"}|};
+  write "exp/fixtures.json" (experiment "s2/*.json");
+  refused "fixtures" {|"path":"fixtures"|};
+  check_refused "a report over bactrian's state"
+    {|output: ".bactrian/ledger.jsonl" is inside .bactrian, which bactrian or git owns|}
+    (call "report"
+       (Some {|{"experiment_id":"x","output":".bactrian/ledger.jsonl"}|}))
+
 (* A job beyond the limit is refused, and names the flag that raises it. *)
 let test_job_limit () =
   with_context ~policy:{ Policy.max_jobs = 1 } @@ fun context call ->
@@ -634,6 +744,7 @@ let () =
           Alcotest.test_case "argument errors" `Quick test_arguments;
           Alcotest.test_case "the commands' JSON" `Quick test_same_as_commands;
           Alcotest.test_case "the job limit" `Quick test_job_limit;
+          Alcotest.test_case "paths that files name" `Quick test_named_paths;
           Alcotest.test_case "a long plan off the event loop" `Quick
             test_plan_off_loop;
         ] );

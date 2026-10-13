@@ -3,9 +3,11 @@ open Bactrian_runtime
 type request = { scenarios : string list }
 type t = Golden.report list
 
-let run ~env r =
+let run ?files ?vet ~env r =
   let results =
-    List.map (fun scenario_file -> Golden.check ~env ~scenario_file) r.scenarios
+    List.map
+      (fun scenario_file -> Golden.check ?files ?vet ~env ~scenario_file ())
+      r.scenarios
   in
   match List.concat_map (function Ok _ -> [] | Error e -> e) results with
   | _ :: _ as errors -> Error (Command_error.Configuration errors)

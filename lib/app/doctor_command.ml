@@ -2,7 +2,7 @@ open Bactrian_runtime
 
 type request = { experiment : string option }
 
-let run ~bactrian_exe ~env r =
+let run ?files ~bactrian_exe ~env r =
   Mirage_crypto_rng_unix.use_default ();
   match Upstream_env.from_environment () with
   | Error m -> Error (Command_error.Usage m)
@@ -21,7 +21,8 @@ let run ~bactrian_exe ~env r =
             Result.map
               (fun e -> Some (Doctor.target ~dir e))
               (Config_loader.load_experiment
-                 Eio.Path.(Eio.Stdenv.fs env / file))
+                 Eio.Path.(
+                   Option.value files ~default:(Eio.Stdenv.fs env) / file))
       in
       match target with
       | Error errors -> Error (Command_error.Configuration errors)

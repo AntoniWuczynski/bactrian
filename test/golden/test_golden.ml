@@ -71,7 +71,7 @@ let setup dir text =
     (trace_text [ "calendar_create"; "calendar_create" ])
 
 let check env dir =
-  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") with
+  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") () with
   | Ok r -> r
   | Error _ -> Alcotest.fail "unexpected configuration errors"
 
@@ -190,7 +190,7 @@ let test_invalid_scenario () =
   write dir "s.json"
     {|{"version": 1, "id": "x", "turns": [], "bogus": 1,
  "assertions": [{"max_steps": "many"}]}|};
-  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") with
+  match G.check ~env ~scenario_file:(Filename.concat dir "s.json") () with
   | Ok _ -> Alcotest.fail "expected errors"
   | Error errors ->
       Alcotest.(check bool) "all collected" true (List.length errors >= 3);

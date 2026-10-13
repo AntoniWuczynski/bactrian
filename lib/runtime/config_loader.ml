@@ -381,16 +381,22 @@ let load_with ?(check = fun (_ : Canon.t) -> []) decode path =
 
 (* The fixtures directory is relative to the scenario file. *)
 let fixtures_exist path canon =
+  let error dir why =
+    [
+      {
+        Config_error.path = "fixtures";
+        message = Printf.sprintf "%S %s" dir why;
+      };
+    ]
+  in
   match (Canon.str_member "fixtures" canon, Eio.Path.split path) with
-  | Some dir, Some (parent, _)
-    when not (Eio.Path.is_directory Eio.Path.(parent / dir)) ->
-      [
-        {
-          Config_error.path = "fixtures";
-          message = Printf.sprintf "%S is not a directory" dir;
-        };
-      ]
-  | Some _, (Some _ | None) | None, (Some _ | None) -> []
+  | Some dir, Some (parent, _) -> (
+      (* A directory capability refuses one outside it. *)
+      match Eio.Path.is_directory Eio.Path.(parent / dir) with
+      | true -> []
+      | false -> error dir "is not a directory"
+      | exception Eio.Io _ -> error dir "cannot be opened")
+  | Some _, None | None, (Some _ | None) -> []
 
 let load_scenario path =
   load_with ~check:(fixtures_exist path) Scenario.decode path

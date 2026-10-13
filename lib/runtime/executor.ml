@@ -264,6 +264,12 @@ let same_plan a b =
       && x.repeat = y.repeat)
     a b
 
+type contents = {
+  experiment : Experiment.t;
+  dir : string;
+  scenarios : (string * Scenario.t) list;
+}
+
 type loaded = {
   experiment : Experiment.t;
   dir : string;
@@ -385,15 +391,18 @@ let load ~fs ~experiment_file ~sandbox_override =
   let pricing =
     match pricing_file with
     | None -> Ok Pricing.default
-    | Some file ->
-        if Eio.Path.is_file Eio.Path.(base / file) then
-          Config_loader.load_pricing Eio.Path.(base / file)
-        else
+    | Some file -> (
+        let missing why =
           Error
             [
               at_key ~experiment_file ~find "pricing"
-                (Printf.sprintf "%s does not exist" file);
+                (Printf.sprintf "%s %s" file why);
             ]
+        in
+        match Eio.Path.is_file Eio.Path.(base / file) with
+        | true -> Config_loader.load_pricing Eio.Path.(base / file)
+        | false -> missing "does not exist"
+        | exception Eio.Io _ -> missing "cannot be opened")
   in
   let errors =
     Config_loader.sort_errors
@@ -597,15 +606,21 @@ let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
 let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
     ?(upstream = P.default_upstream) ?connector ?sandbox
-    ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env
-    ~experiment_file ~resume () =
+    ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env ?files
+    ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
   let fs = Eio.Stdenv.fs env in
+  let files = Option.value files ~default:fs in
   let root =
     match root with
     | Some r -> r
     | None -> Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")
   in
-  let* l = load ~fs ~experiment_file ~sandbox_override:sandbox in
+  let* l = load ~fs:files ~experiment_file ~sandbox_override:sandbox in
+  let* () =
+    Result.map_error
+      (fun m -> Usage m)
+      (vet { experiment = l.experiment; dir = l.dir; scenarios = l.scenarios })
+  in
   let experiment = l.experiment in
   let planned =
     plan ~seed:experiment.seed ~scenarios:(List.map fst l.scenarios)

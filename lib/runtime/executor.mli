@@ -64,6 +64,14 @@ type error =
           matches the experiment being resumed, an experiment that another
           process is running. *)
 
+type contents = {
+  experiment : Bactrian_core.Experiment.t;
+  dir : string;  (** The experiment file's directory. *)
+  scenarios : (string * Bactrian_core.Scenario.t) list;
+      (** Each scenario with its file, relative to [dir]. *)
+}
+(** What a loaded experiment holds, for [vet]. *)
+
 val run_experiment :
   ?root:Eio.Fs.dir_ty Eio.Path.t ->
   ?random_bytes:(int -> string) ->
@@ -76,6 +84,8 @@ val run_experiment :
   ?on_sandbox:(Sandbox.label -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
+  ?vet:(contents -> (unit, string) result) ->
   experiment_file:string ->
   resume:string option ->
   unit ->
@@ -85,8 +95,11 @@ val run_experiment :
     globs, each scenario, duplicate scenario IDs and the price file), plans the
     runs and executes them with at most the experiment's [concurrency] in
     flight. [root] is the [.bactrian] directory (default [./.bactrian]).
-    Scenario globs are relative to the experiment file's directory, where the
-    agent also runs. A scenario's checkers run in the scenario file's directory.
+    [experiment_file], its scenarios and its price file are read through [files]
+    (default the whole filesystem), and once they are loaded [vet] may refuse
+    them with a [Usage] error before anything runs. Scenario globs are relative
+    to the experiment file's directory, where the agent also runs. A scenario's
+    checkers run in the scenario file's directory.
 
     [.bactrian/experiments/<id>/manifest.json] lists every planned run with its
     status and run ID and is rewritten atomically after every run. The

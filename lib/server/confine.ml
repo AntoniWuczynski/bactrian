@@ -40,6 +40,13 @@ let inside t p =
 
 let has_nul s = String.contains s '\000'
 
+(* [r] relative to the root, which it lies under. *)
+let relative t r =
+  if String.equal r t.root then Filename.current_dir_name
+  else
+    let n = String.length t.root + 1 in
+    String.sub r n (String.length r - n)
+
 let path t ~field p =
   let fail reason = Error (Printf.sprintf "%s: %S %s" field p reason) in
   if String.equal p "" then fail "is empty"
@@ -50,7 +57,7 @@ let path t ~field p =
     in
     match resolve absolute with
     | Error reason -> fail reason
-    | Ok r when inside t r -> Ok ()
+    | Ok r when inside t r -> Ok (relative t r)
     | Ok _ -> fail "is outside the server's working directory"
 
 let id ~field s =
@@ -64,4 +71,5 @@ let id ~field s =
   else Ok ()
 
 let run t ~field s =
-  if String.contains s '/' then path t ~field s else id ~field s
+  if String.contains s '/' then path t ~field s
+  else Result.map (fun () -> s) (id ~field s)

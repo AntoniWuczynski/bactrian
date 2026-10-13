@@ -8,8 +8,14 @@ type request = {
 type t = Bactrian_runtime.Golden.report list
 (** One report per scenario, in order. *)
 
-val run : env:Eio_unix.Stdenv.base -> request -> (t, Command_error.t) result
-(** [Error (Configuration _)] with the errors of every invalid scenario. *)
+val run :
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
+  ?vet:(Bactrian_core.Scenario.t -> (unit, string) result) ->
+  env:Eio_unix.Stdenv.base ->
+  request ->
+  (t, Command_error.t) result
+(** {!Bactrian_runtime.Golden.check} on each scenario, with [files] and [vet].
+    [Error (Configuration _)] with the errors of every invalid scenario. *)
 
 val passed : t -> bool
 (** Whether every scenario's golden set passed. *)

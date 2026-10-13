@@ -8,7 +8,7 @@ type request = {
 
 type t = { summary : Executor.summary; sandbox : Sandbox.label option }
 
-let run ?stop ~on_progress ~bactrian_exe ~env (r : request) =
+let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
   Mirage_crypto_rng_unix.use_default ();
   match Upstream_env.from_environment () with
   | Error m -> Error (Command_error.Usage m)
@@ -19,7 +19,8 @@ let run ?stop ~on_progress ~bactrian_exe ~env (r : request) =
         Interrupt.run ?stop (fun () ->
             Executor.run_experiment ~upstream ?sandbox:r.sandbox
               ~on_sandbox:(fun l -> label := Some l)
-              ~bactrian_exe ~env ~experiment_file:r.experiment ~resume:r.resume
+              ~bactrian_exe ~env ?files ?vet ~experiment_file:r.experiment
+              ~resume:r.resume
               ~announce:(fun id ->
                 announced := Some id;
                 on_progress (Progress.Experiment_started id))

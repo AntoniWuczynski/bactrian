@@ -10,10 +10,10 @@ let results_error (e : Results.error) : Command_error.t =
   | Bad_manifest _ | Bad_run _ ->
       Internal (Format.asprintf "%a" Results.pp_error e)
 
-let analyse ~(compute : Compute.t) ~env ~experiment_id ~baseline ~candidate
-    ~fail_on_inconclusive =
+let analyse ~(compute : Compute.t) ~files ~env ~experiment_id ~baseline
+    ~candidate ~fail_on_inconclusive =
   let* loaded =
-    Results.load ~fs:(Eio.Stdenv.fs env)
+    Results.load ~fs:files
       ~root:Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")
       ~experiment_id
     |> Result.map_error results_error

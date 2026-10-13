@@ -17,19 +17,28 @@ let rfc3339_date now =
   let tm = Unix.gmtime now in
   Printf.sprintf "%04d-%02d-%02d" (tm.tm_year + 1900) (tm.tm_mon + 1) tm.tm_mday
 
+(* A line that is not JSON is reported by its number alone: the parser's
+   message quotes the text, and the file may be one that holds secrets. *)
 let read_trace path =
   match Eio.Path.load path with
   | exception Eio.Io _ -> Error "cannot read the trace"
   | text ->
       String.split_on_char '\n' text
-      |> List.filter (fun l -> not (String.equal l ""))
+      |> List.mapi (fun i line -> (i + 1, line))
+      |> List.filter (fun (_, l) -> not (String.equal l ""))
       |> List.fold_left
-           (fun acc line ->
+           (fun acc (n, line) ->
              let* entries = acc in
              match Trace.of_line line with
              | Ok e -> Ok (e :: entries)
-             | Error e ->
-                 Error (Format.asprintf "invalid trace: %a" Trace.pp_error e))
+             | Error (Invalid_json _) ->
+                 Error (Printf.sprintf "invalid trace: line %d is not JSON" n)
+             | Error
+                 ((Unsupported_version _ | Unknown_type _ | Bad_entry _) as e)
+               ->
+                 Error
+                   (Format.asprintf "invalid trace: line %d: %a" n
+                      Trace.pp_error e))
            (Ok [])
       |> Result.map List.rev
 
@@ -81,9 +90,23 @@ let coverage (scenario : Scenario.t) =
         ] )
   | true, _, _ :: _ -> ([], [])
 
-let check ~env ~scenario_file =
-  let fs = Eio.Stdenv.fs env in
+let check ?files ?(vet = fun (_ : Scenario.t) -> Ok ()) ~env ~scenario_file () =
+  let fs = Option.value files ~default:(Eio.Stdenv.fs env) in
   let* scenario = Config_loader.load_scenario Eio.Path.(fs / scenario_file) in
+  let* () =
+    Result.map_error
+      (fun message ->
+        [
+          {
+            Config_loader.file = scenario_file;
+            line = 1;
+            column = 1;
+            path = "checkers";
+            message;
+          };
+        ])
+      (vet scenario)
+  in
   let dir = Filename.dirname scenario_file in
   let date = rfc3339_date (Eio.Time.now (Eio.Stdenv.clock env)) in
   let offender expected trace =

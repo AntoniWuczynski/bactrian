@@ -11,15 +11,16 @@ type request = {
 
 type t = { output : string; data : Bactrian_core.Report_data.t }
 
-let run ?(compute = Compute.inline) ~env (r : request) =
+let run ?(compute = Compute.inline) ?files ~env (r : request) =
+  let files = Option.value files ~default:(Eio.Stdenv.fs env) in
   let* data =
-    Comparison.analyse ~compute ~env ~experiment_id:r.experiment_id
+    Comparison.analyse ~compute ~files ~env ~experiment_id:r.experiment_id
       ~baseline:r.baseline ~candidate:r.candidate ~fail_on_inconclusive:false
   in
   let html =
     compute.run (fun ~check:_ -> Bactrian_core.Report_html.render data)
   in
-  match Store.write_atomic Eio.Path.(Eio.Stdenv.fs env / r.output) html with
+  match Store.write_atomic Eio.Path.(files / r.output) html with
   | () -> Ok { output = r.output; data }
   | exception Eio.Io _ ->
       Error

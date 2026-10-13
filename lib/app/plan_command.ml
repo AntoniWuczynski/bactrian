@@ -35,9 +35,9 @@ module Smap = Map.Make (String)
 (* Per-scenario pass rates of a variant over its finished runs in an earlier
    experiment, sorted by scenario. The variant defaults to the experiment's
    compare.baseline. *)
-let rates_from ~env ~experiment_id ~variant =
+let rates_from ~files ~env ~experiment_id ~variant =
   let* loaded =
-    Results.load ~fs:(Eio.Stdenv.fs env)
+    Results.load ~fs:files
       ~root:Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")
       ~experiment_id
     |> Result.map_error (Format.asprintf "%a" Results.pp_error)
@@ -89,11 +89,11 @@ let max_scenarios = 10_000
 let max_work = 100_000_000
 
 (* The scenarios and their baseline rates, from the flags or from [--from]. *)
-let baseline_rates ~env ~rates ~scenarios ~from ~variant =
+let baseline_rates ~files ~env ~rates ~scenarios ~from ~variant =
   match from with
   | Some experiment_id -> (
       match (rates, scenarios) with
-      | [], None -> rates_from ~env ~experiment_id ~variant
+      | [], None -> rates_from ~files ~env ~experiment_id ~variant
       | _ :: _, _ | [], Some _ ->
           Error
             "--from gives the scenarios and their rates, so it takes no \
@@ -191,10 +191,10 @@ let validate_assumption (a : Plan_sim.assumption) =
         Error "--population scenarios needs at least 10 --scenarios"
       else non_negative "--between-sd" sd
 
-let plan ~compute ~env r =
+let plan ~compute ~files ~env r =
   let* baseline_rates =
-    baseline_rates ~env ~rates:r.rates ~scenarios:r.scenarios ~from:r.from
-      ~variant:r.variant
+    baseline_rates ~files ~env ~rates:r.rates ~scenarios:r.scenarios
+      ~from:r.from ~variant:r.variant
   in
   let assumption : Plan_sim.assumption =
     {
@@ -219,8 +219,11 @@ let plan ~compute ~env r =
         compute.Compute.run (fun ~check -> Plan_sim.plan ~check assumption);
     }
 
-let run ?(compute = Compute.inline) ~env r =
-  Result.map_error (fun m -> Command_error.Usage m) (plan ~compute ~env r)
+let run ?(compute = Compute.inline) ?files ~env r =
+  let files = Option.value files ~default:(Eio.Stdenv.fs env) in
+  Result.map_error
+    (fun m -> Command_error.Usage m)
+    (plan ~compute ~files ~env r)
 
 let exit_code (_ : t) = Exit_code.ok
 let population_name = function `Suite -> "suite" | `Scenarios -> "scenarios"

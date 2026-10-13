@@ -14,13 +14,14 @@ type t = {
 
 val run :
   ?compute:Compute.t ->
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
   env:Eio_unix.Stdenv.base ->
   request ->
   (t, Command_error.t) result
 (** Compares the variants as {!Comparison.analyse} does, and renders the HTML,
-    through [compute] (an inconclusive gate metric is not a failure here) and
-    writes the report atomically. A file that cannot be written is
-    [Environment]. *)
+    through [compute], and writes it through [files] (default the whole
+    filesystem) (an inconclusive gate metric is not a failure here) and writes
+    the report atomically. A file that cannot be written is [Environment]. *)
 
 val to_json : t -> Yojson.Safe.t
 (** [{"output": FILE, "summary": …}], the summary being what

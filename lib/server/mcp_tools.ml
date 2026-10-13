@@ -100,8 +100,20 @@ let names values = List.map fst values
    only its own values, is safe to run there. *)
 let compute context = Compute.in_domain (Eio.Stdenv.domain_mgr context.env)
 
+(* The commands read and write files through the server's working directory as
+   a capability, which refuses absolute paths and paths that climb out of it,
+   symbolic links included, when they are opened. So what an experiment or a
+   scenario names cannot reach elsewhere, nor can a directory that turns into
+   a link after its tool argument was checked. Path arguments are therefore
+   passed on relative to the root, as {!Confine.path} gives them. *)
+let files context = Eio.Stdenv.cwd context.env
+
 (* Confinement of optional arguments. *)
 let each check = function None -> Ok () | Some v -> check v
+
+let optional check = function
+  | None -> Ok None
+  | Some v -> Result.map Option.some (check v)
 
 (* Jobs *)
 
@@ -186,7 +198,7 @@ let run_start =
     ]
     run_args_of_yojson
     (fun context (a : run_args) ->
-      let* () =
+      let* experiment =
         usage (Confine.path context.root ~field:"experiment" a.experiment)
       in
       let* () = usage (each (Confine.id ~field:"resume") a.resume) in
@@ -200,9 +212,10 @@ let run_start =
       in
       start_job context ~kind:"run"
         ~progress:(experiment_progress context experiment_id) (fun stop ->
-          Run_command.run ~stop ~on_progress ~bactrian_exe:context.bactrian_exe
-            ~env:context.env
-            { experiment = a.experiment; resume = a.resume; sandbox }
+          Run_command.run ~stop ~files:(files context)
+            ~vet:(Policy.experiment context.policy context.root)
+            ~on_progress ~bactrian_exe:context.bactrian_exe ~env:context.env
+            { experiment; resume = a.resume; sandbox }
           |> Result.map (fun r ->
               (Run_command.to_json r, Run_command.exit_code r))))
 
@@ -246,12 +259,12 @@ let common_properties =
   ]
 
 let common context (c : common_args) =
-  let* () = Confine.path context.root ~field:"cwd" c.cwd in
+  let* cwd = Confine.path context.root ~field:"cwd" c.cwd in
   let* sandbox = sandbox_mode c.sandbox in
   Ok
     {
       Single_run.agent = c.agent;
-      cwd = c.cwd;
+      cwd;
       scenario = c.scenario;
       variant = c.variant;
       sim_now = c.sim_now;
@@ -354,7 +367,7 @@ let replay_start =
     (with_common replay_args_of_yojson)
     (fun context ((c : common_args), (r : replay_args)) ->
       let* common = usage (common context c) in
-      let* () = usage (Confine.run context.root ~field:"run" r.run) in
+      let* run = usage (Confine.run context.root ~field:"run" r.run) in
       let* mode = usage (enum ~field:"mode" Replay_command.modes r.mode) in
       let* timing =
         usage (enum ~field:"timing" Replay_command.timings r.timing)
@@ -362,7 +375,7 @@ let replay_start =
       let request : Replay_command.request =
         {
           common;
-          from = r.run;
+          from = run;
           mode = Option.value mode ~default:Replay_command.Strict;
           threshold = r.threshold;
           allow_reorder = r.allow_reorder;
@@ -452,7 +465,8 @@ let compare =
     (fun context (a : compare_args) ->
       let* () = usage (Confine.id ~field:"experiment_id" a.experiment_id) in
       let* data =
-        Compare_command.run ~compute:(compute context) ~env:context.env
+        Compare_command.run ~compute:(compute context) ~files:(files context)
+          ~env:context.env
           {
             experiment_id = a.experiment_id;
             baseline = a.baseline;
@@ -516,7 +530,8 @@ let plan =
         usage (enum ~field:"population" Plan_command.populations a.population)
       in
       let* plan =
-        Plan_command.run ~compute:(compute context) ~env:context.env
+        Plan_command.run ~compute:(compute context) ~files:(files context)
+          ~env:context.env
           {
             rates = a.baseline_rates;
             scenarios = a.scenarios;
@@ -535,6 +550,17 @@ let plan =
           }
       in
       of_json (Plan_command.to_json plan))
+
+(* bactrian's own state and the repository's are no place for a report: an
+   HTML file over the ledger or a manifest breaks every later command, and one
+   in .git/hooks could run. *)
+let own_output output =
+  match String.split_on_char '/' output with
+  | ((".bactrian" | ".git") as top) :: _ ->
+      Error
+        (Printf.sprintf "output: %S is inside %s, which bactrian or git owns"
+           output top)
+  | _ -> Ok ()
 
 type report_args = {
   experiment_id : string;
@@ -567,14 +593,18 @@ let report =
     report_args_of_yojson
     (fun context (a : report_args) ->
       let* () = usage (Confine.id ~field:"experiment_id" a.experiment_id) in
-      let* () = usage (Confine.path context.root ~field:"output" a.output) in
+      let* output =
+        usage (Confine.path context.root ~field:"output" a.output)
+      in
+      let* () = usage (own_output output) in
       let* r =
-        Report_command.run ~compute:(compute context) ~env:context.env
+        Report_command.run ~compute:(compute context) ~files:(files context)
+          ~env:context.env
           {
             experiment_id = a.experiment_id;
             baseline = a.baseline;
             candidate = a.candidate;
-            output = a.output;
+            output;
           }
       in
       of_json (Report_command.to_json r))
@@ -603,16 +633,17 @@ let check =
     ]
     check_args_of_yojson
     (fun context (a : check_args) ->
-      let* () =
+      let* scenarios =
         usage
-          (List.fold_left
-             (fun acc s ->
-               let* () = acc in
-               Confine.path context.root ~field:"scenarios" s)
-             (Ok ()) a.scenarios)
+          (List.fold_right
+             (fun s acc ->
+               let* rest = acc in
+               let* s = Confine.path context.root ~field:"scenarios" s in
+               Ok (s :: rest))
+             a.scenarios (Ok []))
       in
       let* reports =
-        Check_command.run ~env:context.env { scenarios = a.scenarios }
+        Check_command.run ~files:(files context) ~env:context.env { scenarios }
       in
       of_json (Check_command.to_json reports))
 
@@ -632,13 +663,15 @@ let doctor =
     ]
     doctor_args_of_yojson
     (fun context (a : doctor_args) ->
-      let* () =
+      let* experiment =
         usage
-          (each (Confine.path context.root ~field:"experiment") a.experiment)
+          (optional
+             (Confine.path context.root ~field:"experiment")
+             a.experiment)
       in
       let* report =
-        Doctor_command.run ~bactrian_exe:context.bactrian_exe ~env:context.env
-          { experiment = a.experiment }
+        Doctor_command.run ~files:(files context)
+          ~bactrian_exe:context.bactrian_exe ~env:context.env { experiment }
       in
       of_json (Doctor_command.to_json report))
 
@@ -657,8 +690,8 @@ let divergences =
     ]
     divergences_args_of_yojson
     (fun context (a : divergences_args) ->
-      let* () = usage (Confine.run context.root ~field:"run" a.run) in
-      let* d = Divergences_command.run ~env:context.env { run = a.run } in
+      let* run = usage (Confine.run context.root ~field:"run" a.run) in
+      let* d = Divergences_command.run ~env:context.env { run } in
       of_json (Divergences_command.to_json d))
 
 let tools =

@@ -8,11 +8,13 @@ type request = {
 }
 
 val run :
+  ?files:Eio.Fs.dir_ty Eio.Path.t ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
   request ->
   (Bactrian_runtime.Doctor.report, Command_error.t) result
-(** Runs the checks; no agent is started and no URL is contacted. An invalid
+(** Runs the checks; no agent is started and no URL is contacted. The experiment
+    file is read through [files] (default the whole filesystem). An invalid
     experiment file is [Configuration], and an invalid
     [BACTRIAN_UPSTREAM_<PROVIDER>] variable ({!Upstream_env}) is [Usage]. Seeds
     the random generator. *)
