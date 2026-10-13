@@ -117,11 +117,7 @@ let decode text =
 
 (* {1 Encoding} *)
 
-let object_of fields =
-  List.fold_left
-    (fun acc (k, v) -> Canon.set_member k v acc)
-    Canon.empty_object fields
-
+let object_of = Canon.of_fields
 let id_json = function Int_id i -> Canon.int i | String_id s -> Canon.string s
 let opt_field name = Option.map (fun v -> (name, v))
 

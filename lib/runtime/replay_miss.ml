@@ -1,9 +1,6 @@
 open Bactrian_core
 
-let obj fields =
-  match Canon.obj fields with
-  | Ok v -> v
-  | Error _ -> assert false (* every caller passes distinct literal names *)
+let obj = Canon.of_fields
 
 let json : Matcher.divergence -> Canon.t = function
   | Missing_request { nearest = None; _ } ->

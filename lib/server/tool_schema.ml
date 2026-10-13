@@ -19,11 +19,7 @@ type property = {
   description : string;
 }
 
-let obj fields =
-  List.fold_left
-    (fun o (k, v) -> Canon.set_member k v o)
-    Canon.empty_object fields
-
+let obj = Canon.of_fields
 let typed t = [ ("type", Canon.string t) ]
 let array_of t = [ ("type", Canon.string "array"); ("items", obj (typed t)) ]
 

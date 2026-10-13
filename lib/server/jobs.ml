@@ -158,9 +158,7 @@ let status job =
     | None -> base
     | Some f -> base @ [ ("exit", Canon.int f.exit); (f.field, f.body) ]
   in
-  List.fold_left
-    (fun o (k, v) -> Canon.set_member k v o)
-    Canon.empty_object fields
+  Canon.of_fields fields
 
 let cancel job =
   Interrupt.fire job.stop Sys.sigint;

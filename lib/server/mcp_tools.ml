@@ -728,10 +728,7 @@ let tools =
     divergences;
   ]
 
-let obj fields =
-  List.fold_left
-    (fun o (k, v) -> Canon.set_member k v o)
-    Canon.empty_object fields
+let obj = Canon.of_fields
 
 let definition t =
   obj

@@ -39,6 +39,10 @@ val float : float -> (t, error) result
 val obj : (string * t) list -> (t, error) result
 (** Sorts the fields. [Error (Duplicate_key k)] if [k] appears twice. *)
 
+val of_fields : (string * t) list -> t
+(** An object of the fields, in key order. A later field replaces an earlier one
+    of the same name. *)
+
 val of_string : string -> (t, error) result
 (** Parses with Yojson, so its extensions are accepted: [/* */] and [//]
     comments are skipped and not part of the value. NaN, [Infinity] and numbers

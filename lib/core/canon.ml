@@ -250,3 +250,6 @@ let rec remove_at segs v =
       ( Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _
       | Object _ ) ) ->
       v
+
+let of_fields fields =
+  List.fold_left (fun o (k, v) -> set_member k v o) empty_object fields

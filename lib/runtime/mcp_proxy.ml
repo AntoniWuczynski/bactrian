@@ -436,11 +436,7 @@ let stop t =
 
 (* JSON-RPC replies *)
 
-let obj fields =
-  match Canon.obj fields with
-  | Ok v -> v
-  | Error _ -> assert false (* every caller passes distinct literal names *)
-
+let obj = Canon.of_fields
 let json_type = [ ("content-type", "application/json") ]
 let json status body = { status; headers = json_type; body }
 let accepted = { status = 202; headers = []; body = "" }

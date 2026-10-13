@@ -194,10 +194,7 @@ let of_list pieces =
         rest := tl;
         Chunk x
 
-let obj fields =
-  match Canon.obj fields with
-  | Ok v -> v
-  | Error _ -> assert false (* every caller passes distinct literal names *)
+let obj = Canon.of_fields
 
 let error_response ?(extra = []) ~status ~type_ message =
   let error =
