@@ -1,0 +1,467 @@
+{
+  "convention": "Wilson score interval for a binomial proportion, statsmodels proportion_confint(method='wilson')",
+  "entries": [
+    {
+      "confidence": 0.8,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.6215524967746471
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.730134051215946
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.7934506856227626
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.8514367392926795
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.8690224567198142
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 1,
+      "upper": 0.8914190215489463
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.3784475032253529,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.269865948784054,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.20654931437723745,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.14856326070732057,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.13097754328018596,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.10858097845105369,
+      "successes": 1,
+      "trials": 1,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.14106868209054085
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.2129419700834071
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.2775327998628892
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.36431813228676907
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.3988540933049081
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 10,
+      "upper": 0.4508426231790033
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.858931317909459,
+      "successes": 10,
+      "trials": 10,
+      "upper": 0.9999999999999999
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.7870580299165928,
+      "successes": 10,
+      "trials": 10,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.7224672001371107,
+      "successes": 10,
+      "trials": 10,
+      "upper": 0.9999999999999999
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.635681867713231,
+      "successes": 10,
+      "trials": 10,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.6011459066950919,
+      "successes": 10,
+      "trials": 10,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.5491573768209967,
+      "successes": 10,
+      "trials": 10,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.03041064428212753,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.28244430139030513
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.02263490873086718,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.34771866733585843
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.017876213095072896,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.4041500267952385
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.013294328939044503,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.4781601768903707
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.011851503411032943,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.5072317712328935
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.009971949034721095,
+      "successes": 1,
+      "trials": 10,
+      "upper": 0.5507021495084815
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.3122044448805158,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.6877955551194842
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.26927182113826714,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.7307281788617328
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.236593090512564,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.7634069094874361
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.19820614142813925,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.8017938585718607
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.1842255182472355,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.8157744817527646
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.16427592312324274,
+      "successes": 5,
+      "trials": 10,
+      "upper": 0.8357240768767573
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.22598811161452578,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.6583029463790934
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.186443190363956,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.7105229089864071
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.15821985525146975,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.7495416354723428
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.12714126582542917,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.7943111684104729
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.11637368051613817,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.8102850959116124
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.10151100406825492,
+      "successes": 3,
+      "trials": 7,
+      "upper": 0.8327415497216151
+    },
+    {
+      "confidence": 0.8,
+      "lower": 1.734723475976807e-18,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.016158363326319737
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.026342720783174345
+    },
+    {
+      "confidence": 0.95,
+      "lower": 3.469446951953614e-18,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.03699349820698568
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.05420483805302244
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.062220687715822974
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.0,
+      "successes": 0,
+      "trials": 100,
+      "upper": 0.07586856818588307
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.9838416366736804,
+      "successes": 100,
+      "trials": 100,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.9736572792168257,
+      "successes": 100,
+      "trials": 100,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.9630065017930143,
+      "successes": 100,
+      "trials": 100,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.9457951619469775,
+      "successes": 100,
+      "trials": 100,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.9377793122841772,
+      "successes": 100,
+      "trials": 100,
+      "upper": 1.0
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.9241314318141168,
+      "successes": 100,
+      "trials": 100,
+      "upper": 0.9999999999999999
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.3106927134857583,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.43350846097908496
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.29498849195331245,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.45186061545031286
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.28182360534324524,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.4677947041905709
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.2644197994182467,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.48967345847553906
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.2573862900780333,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.4987910887280806
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.24651284706995102,
+      "successes": 37,
+      "trials": 100,
+      "upper": 0.5132129806583786
+    },
+    {
+      "confidence": 0.8,
+      "lower": 0.4787551900153599,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.5192480893475286
+    },
+    {
+      "confidence": 0.9,
+      "lower": 0.4730304415261694,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.5249749549603102
+    },
+    {
+      "confidence": 0.95,
+      "lower": 0.468073488750724,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.529934164766247
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "lower": 0.46126163327652425,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.5367497636844688
+    },
+    {
+      "confidence": 0.99,
+      "lower": 0.4584136770279477,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.5395995053018592
+    },
+    {
+      "confidence": 0.9958333333333333,
+      "lower": 0.45388931832360346,
+      "successes": 499,
+      "trials": 1000,
+      "upper": 0.5441269674076334
+    }
+  ]
+}

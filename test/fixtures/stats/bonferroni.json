@@ -1,0 +1,35 @@
+{
+  "convention": "level = 1 - (1 - confidence) / family",
+  "entries": [
+    {
+      "confidence": 0.95,
+      "family": 1,
+      "level": 0.95
+    },
+    {
+      "confidence": 0.95,
+      "family": 3,
+      "level": 0.9833333333333333
+    },
+    {
+      "confidence": 0.95,
+      "family": 12,
+      "level": 0.9958333333333333
+    },
+    {
+      "confidence": 0.9,
+      "family": 2,
+      "level": 0.95
+    },
+    {
+      "confidence": 0.99,
+      "family": 5,
+      "level": 0.998
+    },
+    {
+      "confidence": 0.8,
+      "family": 4,
+      "level": 0.95
+    }
+  ]
+}
