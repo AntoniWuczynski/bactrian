@@ -1,7 +1,7 @@
 (** Long commands ([run], [record], [replay]) running in the background of the
     server, each behind a job ID that tool calls name (decision record 0011).
-    Jobs live in the server's switch, and finished ones stay queryable until the
-    server exits. *)
+    Jobs live in the server's switch. A finished job stays queryable for an
+    hour, and only the newest hundred finished jobs are kept. *)
 
 open Bactrian_core
 
@@ -26,8 +26,11 @@ type outcome = (Yojson.Safe.t * int, Bactrian_app.Command_error.t) result
 type t
 type job
 
-val create : sw:Eio.Switch.t -> t
-(** Job IDs are random, so the generator must be seeded. *)
+val create :
+  ?now:(unit -> float) -> ?log:(string -> unit) -> sw:Eio.Switch.t -> unit -> t
+(** Job IDs are random, so the generator must be seeded. [now] (the clock, in
+    seconds) decides when finished jobs expire. [log] gets the exception and
+    backtrace of a job that raised. *)
 
 val start :
   t ->
@@ -36,9 +39,9 @@ val start :
   (Bactrian_runtime.Interrupt.trigger -> outcome) ->
   string
 (** Forks the command into the switch and returns the new job's ID at once. The
-    command must stop, as on SIGINT, when the trigger fires. An [Eio.Io]
-    exception from it fails the job with an [Internal] error. [progress] is
-    asked on every {!status}. *)
+    command must stop, as on SIGINT, when the trigger fires. An exception from
+    it, other than cancellation, fails the job with an [Internal] error.
+    [progress] is asked on every {!status}. *)
 
 val find : t -> string -> job option
 val state : job -> state

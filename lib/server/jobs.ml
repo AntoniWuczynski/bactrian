@@ -26,13 +26,43 @@ type job = {
   progress : finished:bool -> progress;
   stop : Interrupt.trigger;
   mutable finished : finished option;
+  mutable finished_at : float;
   over : unit Eio.Promise.t;
 }
 
-type t = { sw : Eio.Switch.t; jobs : (string, job) Hashtbl.t }
+type t = {
+  sw : Eio.Switch.t;
+  now : unit -> float;
+  log : string -> unit;
+  jobs : (string, job) Hashtbl.t;
+}
 
-let create ~sw = { sw; jobs = Hashtbl.create 8 }
-let find t id = Hashtbl.find_opt t.jobs id
+let keep_for = 3600.
+let keep_at_most = 100
+
+let create ?(now = Unix.gettimeofday) ?(log = ignore) ~sw () =
+  { sw; now; log; jobs = Hashtbl.create 8 }
+
+(* Finished jobs are forgotten an hour after they finished, and beyond the
+   newest hundred. Their results stay on disk. *)
+let prune t =
+  let cutoff = t.now () -. keep_for in
+  let finished =
+    Hashtbl.fold
+      (fun _ job acc -> if Option.is_some job.finished then job :: acc else acc)
+      t.jobs []
+    |> List.sort (fun a b -> Float.compare b.finished_at a.finished_at)
+  in
+  List.iteri
+    (fun i job ->
+      if i >= keep_at_most || job.finished_at < cutoff then
+        Hashtbl.remove t.jobs job.id)
+    finished
+
+let find t id =
+  prune t;
+  Hashtbl.find_opt t.jobs id
+
 let state job = match job.finished with Some f -> f.state | None -> Running
 
 let running t =
@@ -76,8 +106,17 @@ let start t ~kind ~progress command =
   let id = fresh_id t in
   let over, resolve = Eio.Promise.create () in
   let job =
-    { id; kind; progress; stop = Interrupt.trigger (); finished = None; over }
+    {
+      id;
+      kind;
+      progress;
+      stop = Interrupt.trigger ();
+      finished = None;
+      finished_at = 0.;
+      over;
+    }
   in
+  prune t;
   Hashtbl.replace t.jobs id job;
   Eio.Fiber.fork ~sw:t.sw (fun () ->
       let outcome =
@@ -86,8 +125,17 @@ let start t ~kind ~progress command =
         | exception Eio.Io (err, _) ->
             Error
               (Command_error.Internal (Format.asprintf "%a" Eio.Exn.pp_err err))
+        | exception (Eio.Cancel.Cancelled _ as ex) -> raise ex
+        (* A fault of ours in one job fails that job, not the server and the
+           other jobs. *)
+        | exception ex ->
+            t.log
+              (Printf.sprintf "job %s failed: %s\n%s" id (Printexc.to_string ex)
+                 (Printexc.get_backtrace ()));
+            Error (Command_error.Internal (Printexc.to_string ex))
       in
       job.finished <- Some (finish outcome);
+      job.finished_at <- t.now ();
       Eio.Promise.resolve resolve ());
   id
 

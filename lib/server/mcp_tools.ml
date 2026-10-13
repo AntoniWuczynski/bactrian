@@ -185,10 +185,11 @@ let run_start =
       "Start `bactrian run EXPERIMENT` (every scenario, variant and repeat of \
        an experiment file) as a job and return its job_id at once. Poll \
        job_status until the state is no longer running: its result is what \
-       `bactrian run --json` prints. Live runs spend money within the \
-       BACTRIAN_CAP_* spend caps set in the server's environment. job_cancel \
-       stops it as Ctrl-C would, and the experiment_id in the job's error \
-       resumes it."
+       `bactrian run --json` prints. A finished job's status is kept for an \
+       hour, and for the newest 100 finished jobs only; the runs stay under \
+       .bactrian. Live runs spend money within the BACTRIAN_CAP_* spend caps \
+       set in the server's environment. job_cancel stops it as Ctrl-C would, \
+       and the experiment_id in the job's error resumes it."
     [
       prop ~required:true "experiment" String
         "The experiment file (YAML or JSON), inside the working directory.";
@@ -305,8 +306,9 @@ let record_start =
       "Start `bactrian record` as a job and return its job_id at once: run the \
        agent against the real providers with the scripted turns and record its \
        model and MCP traffic under .bactrian/runs. Poll job_status: its result \
-       is what `bactrian record --json` prints. Spends money within the \
-       BACTRIAN_CAP_* spend caps set in the server's environment."
+       is what `bactrian record --json` prints, kept for an hour after the job \
+       ends (and for the newest 100 finished jobs only). Spends money within \
+       the BACTRIAN_CAP_* spend caps set in the server's environment."
     (common_properties
     @ [
         prop ~required:true "turns" Nonempty_strings
@@ -355,7 +357,8 @@ let replay_start =
       "Start `bactrian replay RUN -- AGENT` as a job and return its job_id at \
        once: run the agent with the recording's turns and answer its model and \
        MCP requests from the recording. Poll job_status: its result is what \
-       `bactrian replay --json` prints, with any divergences. Only \
+       `bactrian replay --json` prints, with any divergences, kept for an hour \
+       after the job ends (and for the newest 100 finished jobs only). Only \
        until-divergence mode can go live and spend."
     (common_properties
     @ [
@@ -410,7 +413,9 @@ let find_job context id =
       Error
         (Command_error.Usage
            (Printf.sprintf
-              "argument job_id: no job %S (jobs last until the server exits)" id))
+              "argument job_id: no job %S (a finished job is kept for an hour, \
+               and only the newest 100)"
+              id))
 
 let job_status =
   tool ~name:"job_status" ~title:"Job status" ~annotations:reads
@@ -775,4 +780,14 @@ let call context name arguments =
       | Error e -> failure e
       | exception Eio.Io (err, _) ->
           failure
-            (Command_error.Internal (Format.asprintf "%a" Eio.Exn.pp_err err)))
+            (Command_error.Internal (Format.asprintf "%a" Eio.Exn.pp_err err))
+      | exception (Eio.Cancel.Cancelled _ as ex) -> raise ex
+      (* A fault of ours in one call fails that call, not the server and its
+         jobs. *)
+      | exception ex ->
+          context.on_progress
+            (Warning
+               (Printf.sprintf "tool %s failed: %s\n%s" name
+                  (Printexc.to_string ex)
+                  (Printexc.get_backtrace ())));
+          failure (Command_error.Internal (Printexc.to_string ex)))

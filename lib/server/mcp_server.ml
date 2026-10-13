@@ -109,7 +109,7 @@ let server policy : Mcp_dispatch.server =
 let run ~env ~root ~stop config ~input ~output =
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
-  let jobs = Jobs.create ~sw in
+  let jobs = Jobs.create ~log:config.log ~sw () in
   let context : Mcp_tools.context =
     {
       env;

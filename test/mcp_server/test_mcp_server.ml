@@ -189,7 +189,7 @@ let test_jobs () =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
-  let jobs = Jobs.create ~sw in
+  let jobs = Jobs.create ~sw () in
   let ok =
     Jobs.start jobs ~kind:"run" ~progress:one (fun _ ->
         Ok (`Assoc [ ("a", `Int 1) ], 1))
@@ -254,12 +254,52 @@ let test_jobs () =
     "unknown job" true
     (Option.is_none (Jobs.find jobs "job-0"))
 
+(* A job that raises fails alone, and finished jobs expire. *)
+let test_jobs_lifetime () =
+  Eio_main.run @@ fun _env ->
+  Mirage_crypto_rng_unix.use_default ();
+  Eio.Switch.run @@ fun sw ->
+  let clock = ref 0. in
+  let logged = ref [] in
+  let jobs =
+    Jobs.create
+      ~now:(fun () -> !clock)
+      ~log:(fun m -> logged := m :: !logged)
+      ~sw ()
+  in
+  let finished () =
+    Jobs.start jobs ~kind:"run" ~progress:one (fun _ -> Ok (`Null, 0))
+  in
+  let broken =
+    Jobs.start jobs ~kind:"run" ~progress:one (fun _ -> raise Not_found)
+  in
+  Alcotest.check state_t "a job that raises fails" Failed
+    (job_state jobs broken);
+  Alcotest.(check bool) "and is logged" true (List.length !logged = 1);
+  let old = finished () in
+  clock := 1800.;
+  let recent = finished () in
+  clock := 3601.;
+  Alcotest.(check bool)
+    "an hour after it ended, a job is gone" true
+    (Option.is_none (Jobs.find jobs old));
+  Alcotest.(check bool)
+    "a newer one is still there" true
+    (Option.is_some (Jobs.find jobs recent));
+  let many = List.init 100 (fun _ -> finished ()) in
+  Alcotest.(check bool)
+    "past a hundred, the oldest goes" true
+    (Option.is_none (Jobs.find jobs recent));
+  Alcotest.(check bool)
+    "the newest hundred stay" true
+    (List.for_all (fun id -> Option.is_some (Jobs.find jobs id)) many)
+
 let test_jobs_cancel_all () =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
   let pid = ref None in
   Eio.Switch.run @@ fun sw ->
-  let jobs = Jobs.create ~sw in
+  let jobs = Jobs.create ~sw () in
   let agent =
     Jobs.start jobs ~kind:"run" ~progress:one (fun stop ->
         Eio.Switch.run @@ fun psw ->
@@ -360,7 +400,7 @@ let with_context ?(policy = Policy.default) f =
       env;
       root = root ();
       policy;
-      jobs = Jobs.create ~sw;
+      jobs = Jobs.create ~sw ();
       bactrian_exe = Sys.executable_name;
       on_progress = ignore;
     }
@@ -475,7 +515,7 @@ let test_arguments () =
     {|cwd: "/" is outside the server's working directory|}
     (call "replay_start" (Some {|{"run":"r","agent":["true"],"cwd":"/"}|}));
   check_refused "an unknown job"
-    {|argument job_id: no job "job-0" (jobs last until the server exits)|}
+    {|argument job_id: no job "job-0" (a finished job is kept for an hour, and only the newest 100)|}
     (call "job_status" (Some {|{"job_id":"job-0"}|}))
 
 (* The tool's JSON is the command's [--json] output, as text and as a value. *)
@@ -820,6 +860,7 @@ let () =
       ( "jobs",
         [
           Alcotest.test_case "states" `Quick test_jobs;
+          Alcotest.test_case "failure and expiry" `Quick test_jobs_lifetime;
           Alcotest.test_case "cancel all, children included" `Quick
             test_jobs_cancel_all;
         ] );
