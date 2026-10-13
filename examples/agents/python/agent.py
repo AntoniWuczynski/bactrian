@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 MODEL = os.environ.get("AGENT_MODEL", "gpt-6-luna")
 WEATHER_RESULT = "18 degrees Celsius, cloudy"
 MAX_MODEL_CALLS = 5
+SYSTEM_PROMPT = os.environ.get(
+    "AGENT_SYSTEM_PROMPT",
+    "You are a concise assistant. Use the get_weather tool for weather questions.",
+)
 
 TOOLS: list[ChatCompletionToolParam] = [
     {
@@ -61,7 +65,7 @@ client = OpenAI(max_retries=0)
 history: list[ChatCompletionMessageParam] = [
     {
         "role": "system",
-        "content": "You are a concise assistant. Use the get_weather tool for weather questions.",
+        "content": SYSTEM_PROMPT,
     }
 ]
 

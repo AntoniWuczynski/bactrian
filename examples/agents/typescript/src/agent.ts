@@ -10,6 +10,9 @@ import type {
 const MODEL = process.env["AGENT_MODEL"] ?? "gpt-6-luna";
 const WEATHER_RESULT = "18 degrees Celsius, cloudy";
 const MAX_MODEL_CALLS = 5;
+const SYSTEM_PROMPT =
+  process.env["AGENT_SYSTEM_PROMPT"] ??
+  "You are a concise assistant. Use the get_weather tool for weather questions.";
 
 const TOOLS: ChatCompletionTool[] = [
   {
@@ -65,7 +68,7 @@ const client = new OpenAI({ maxRetries: 0 });
 const history: ChatCompletionMessageParam[] = [
   {
     role: "system",
-    content: "You are a concise assistant. Use the get_weather tool for weather questions.",
+    content: SYSTEM_PROMPT,
   },
 ];
 

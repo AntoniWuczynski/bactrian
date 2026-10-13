@@ -1,0 +1,27 @@
+; The real example agents against a scripted fake upstream. The agents run from
+; the source tree (node_modules and the uv environment live there); the deps
+; make dune rerun the test when their sources change. dist/agent.js is built by
+; `pnpm --dir examples/agents/typescript build`.
+
+(test
+ (name test_acceptance)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols/openai_chat)
+  ../../examples/agents/typescript/src/agent.ts
+  ../../examples/agents/typescript/dist/agent.js
+  ../../examples/agents/python/agent.py
+  ../../examples/agents/python/pyproject.toml
+  ../../examples/agents/python/uv.lock)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  fake_upstream
+  eio_main
+  mirage-crypto-rng.unix
+  unix
+  uri
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))
