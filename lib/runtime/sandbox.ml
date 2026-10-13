@@ -106,22 +106,27 @@ let socket_dir ~sw =
 
 let platform = function Seatbelt -> Policy.Macos | Bubblewrap _ -> Linux
 
-let command (host : host) ~state_dir ~temp_dir ~listeners ~tag agent =
-  let input : Policy.input =
-    {
-      platform = platform host.engine;
-      home = host.home;
-      project_root = host.project_root;
-      bactrian_dir = host.bactrian_dir;
-      state_dir = resolved state_dir;
-      temp_dir = resolved temp_dir;
-      allow_write = host.allow_write;
-      deny_read = host.deny_read;
-      listeners;
-      agent;
-      bactrian_exe = host.bactrian_exe;
-      tag;
-    }
+let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
+    Policy.input =
+  {
+    platform = platform host.engine;
+    home = host.home;
+    project_root = host.project_root;
+    bactrian_dir = host.bactrian_dir;
+    state_dir = resolved state_dir;
+    temp_dir = resolved temp_dir;
+    allow_write = host.allow_write;
+    deny_read = host.deny_read;
+    listeners;
+    agent;
+    bactrian_exe = host.bactrian_exe;
+    preload;
+    tag;
+  }
+
+let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
+  let input =
+    input_of host ~state_dir ~temp_dir ~listeners ~tag ~preload agent
   in
   match Policy.generate ~exists:kind input with
   | Error e -> Error (Policy.describe_error e)
@@ -302,6 +307,7 @@ let probe ~env (host : host) =
     command host ~state_dir ~temp_dir
       ~listeners:[ { port; socket } ]
       ~tag:(Sandbox_log.tag ("probe-" ^ id))
+      ~preload:None
       [
         host.bactrian_exe;
         "__sandbox-probe";
@@ -411,6 +417,7 @@ type run = {
   temp_dir : string;
   port : int;
   listen_unix : string -> (unit, string) result;
+  preload : string option;
 }
 
 type session = {
@@ -439,7 +446,7 @@ let start ~sw t run agent =
           let* argv =
             command host ~state_dir:run.state_dir ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = None } ]
-              ~tag agent
+              ~tag ~preload:run.preload agent
           in
           let marker = Filename.concat run.temp_dir "sandbox-end-marker" in
           Ok ({ argv; env = []; fds = [] }, Seatbelt_log { tag; since; marker })
@@ -459,7 +466,7 @@ let start ~sw t run agent =
           let* argv =
             command host ~state_dir:run.state_dir ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = Some socket } ]
-              ~tag agent
+              ~tag ~preload:run.preload agent
           in
           Ok
             ( {
@@ -468,6 +475,24 @@ let start ~sw t run agent =
                 fds = [ (3, fd) ];
               },
               Relay_log log ))
+
+(* A deny-list mask is applied after the library is bound, so a library under
+   one is hidden again. Only bubblewrap binds the library at all. *)
+let preload_hidden t library =
+  match t with
+  | Unsandboxed _ -> false
+  | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> false
+  | Sandboxed { host = { engine = Bubblewrap _; _ } as host; _ } ->
+      let dir = host.bactrian_dir in
+      let input =
+        input_of host ~state_dir:dir ~temp_dir:dir ~listeners:[] ~tag:""
+          ~preload:None [ "agent" ]
+      in
+      List.exists
+        (fun denied ->
+          String.equal denied library
+          || String.starts_with ~prefix:(denied ^ "/") library)
+        (Policy.deny_list input)
 
 let log_timeout = 30.
 

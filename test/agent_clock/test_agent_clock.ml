@@ -42,6 +42,12 @@ let test_locate () =
   Alcotest.check option_string
     "an override that does not exist is not replaced by a search" None
     (locate ~candidates:[ second ] ~override:(Some missing) ());
+  let link = Filename.concat dir "link.so" in
+  Unix.symlink first link;
+  Alcotest.check option_string
+    "a symbolic link is resolved, since the sandbox binds the real path"
+    (Some first)
+    (locate ~candidates:[] ~override:(Some link) ());
   Alcotest.check option_string "an empty override is unset" (Some second)
     (locate ~candidates:[ second ] ~override:(Some "") ());
   Alcotest.check option_string "a directory is not a library" None
@@ -150,6 +156,11 @@ let test_decide () =
        ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
   check "an override that does not exist" "contract-only library-not-found"
     (decide ~override:(Some (at "none")) "dyn");
+  check "a library the sandbox hides" "contract-only library-hidden"
+    (Agent_clock.decide ~candidates:[ lib ] ~hidden:(String.equal lib)
+       ~linux:true ~faketime:true ~library_override:None
+       ~env:[ ("PATH", dir) ]
+       ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
   check "sim_now that is not a time" "contract-only invalid-sim-now"
     (decide ~sim_now:"tomorrow" "dyn");
   check "sim_now before 1970" "contract-only invalid-sim-now"
@@ -179,6 +190,7 @@ let test_labels () =
       "macos";
       "faketime-off";
       "library-not-found";
+      "library-hidden";
       "invalid-sim-now";
       "static-binary";
       "go-binary";
@@ -189,6 +201,7 @@ let test_labels () =
          Macos;
          Faketime_off;
          Library_not_found;
+         Library_hidden;
          Invalid_sim_now;
          Static_binary;
          Go_binary;

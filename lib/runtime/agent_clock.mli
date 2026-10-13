@@ -16,7 +16,8 @@ val locate :
 (** The library to preload: [override] when it is set and non-empty (and [None]
     if that file does not exist, rather than a search that would ignore the
     setting), else the first of [candidates] (default {!candidates}) that is a
-    regular file. *)
+    regular file. The path is absolute with symbolic links resolved, because the
+    sandbox binds the library at the path [LD_PRELOAD] names. *)
 
 val linux : unit -> bool
 (** Whether this host is Linux. *)
@@ -34,8 +35,12 @@ type t
 
 val label : t -> Clock_label.t
 
+val library : t -> string option
+(** The library the run preloads, [None] when the clock is contract-only. *)
+
 val decide :
   ?candidates:string list ->
+  ?hidden:(string -> bool) ->
   linux:bool ->
   faketime:bool ->
   library_override:string option ->
@@ -46,8 +51,9 @@ val decide :
   unit ->
   t
 (** The first reason that applies, in this order: not Linux, [faketime] off, no
-    library, [sim_now] not RFC 3339, then the agent's executable. [env] is the
-    agent's environment, whose [PATH] finds the executable. *)
+    library, [hidden] says the sandbox would hide the library (default: never),
+    [sim_now] not RFC 3339, then the agent's executable. [env] is the agent's
+    environment, whose [PATH] finds the executable. *)
 
 val inject : t -> (string * string) list -> (string * string) list
 (** [inject t env] is [env] with the variables that start the clock at [sim_now]

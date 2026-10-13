@@ -74,6 +74,10 @@ type run = {
   listen_unix : string -> (unit, string) result;
       (** On Linux, serves the model proxy for this run only on a Unix socket at
           the path given, until the run's switch ends. *)
+  preload : string option;
+      (** The library the agent's [LD_PRELOAD] names, as a resolved absolute
+          path. On Linux it is bound read-only into the sandbox, so it is there
+          even under [/tmp], [/dev/shm] or [/run]. *)
 }
 
 type session = {
@@ -98,6 +102,12 @@ val start :
     is [agent] unchanged. On Linux it also makes the run's Unix socket in a new
     directory under the system's temporary directory (short enough for the
     socket path limit), removed when [sw] ends. *)
+
+val preload_hidden : t -> string -> bool
+(** [preload_hidden t library] is whether the library, a resolved absolute path,
+    would not be readable inside the sandbox of [t] although it is bound there:
+    on Linux, when it lies under a path the deny-list masks after the bind
+    ([sandbox.deny_read] among them). Never when unsandboxed or on macOS. *)
 
 val collect : env:Eio_unix.Stdenv.base -> started -> violations
 (** After the agent exited: on macOS, the Seatbelt denials logged with the run's

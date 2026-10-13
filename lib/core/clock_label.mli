@@ -7,6 +7,9 @@ type reason =
   | Macos  (** Not Linux: bactrian injects nothing there. *)
   | Faketime_off  (** The experiment says [clock: {faketime: off}]. *)
   | Library_not_found  (** No [libfaketimeMT.so.1] on this host. *)
+  | Library_hidden
+      (** The sandbox hides the library from the agent: it lies under a path the
+          sandbox's deny-list masks. *)
   | Invalid_sim_now  (** [SIM_NOW] is not an RFC 3339 time since 1970. *)
   | Static_binary  (** A statically linked executable ignores [LD_PRELOAD]. *)
   | Go_binary  (** Go reads the clock without the C library. *)
@@ -17,8 +20,9 @@ type reason =
 type t = Enforced | Contract_only of reason
 
 val reason_name : reason -> string
-(** [macos], [faketime-off], [library-not-found], [invalid-sim-now],
-    [static-binary], [go-binary] or [unreadable-executable]. *)
+(** [macos], [faketime-off], [library-not-found], [library-hidden],
+    [invalid-sim-now], [static-binary], [go-binary] or [unreadable-executable].
+*)
 
 val of_kind : Elf_probe.kind -> t
 (** The label of a run that injected the library, given the kind of the agent's

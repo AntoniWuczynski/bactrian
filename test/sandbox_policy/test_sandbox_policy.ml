@@ -20,6 +20,7 @@ let base : P.input =
       ];
     agent = [ "node"; "agent.js"; "--flag" ];
     bactrian_exe = "/opt/bin/bactrian";
+    preload = None;
     tag = "bactrian-sandbox:r1";
   }
 
@@ -272,6 +273,32 @@ let test_errors () =
     "macos ignores the exe" true
     (Option.is_none (error_of { base with bactrian_exe = "" }))
 
+let test_preload_bound () =
+  let lib = "/tmp/ft/libfaketimeMT.so.1" in
+  let argv = bwrap ~exists:fixture_exists { linux with preload = Some lib } in
+  let rec index_of x i = function
+    | [] -> Alcotest.failf "%s is not in the command" x
+    | y :: tl -> if String.equal x y then i else index_of x (i + 1) tl
+  in
+  let tmpfs = index_of "/tmp" 0 argv in
+  let bound = index_of lib 0 argv in
+  Alcotest.(check string)
+    "read-only, at its own path" "--ro-bind"
+    (List.nth argv (bound - 1));
+  Alcotest.(check bool) "after the tmpfs over /tmp" true (bound > tmpfs);
+  Alcotest.(check bool)
+    "before the deny-list masks" true
+    (bound < index_of "/home/u/.ssh" 0 argv);
+  Alcotest.(check bool)
+    "no preload, no bind" false
+    (List.mem lib (bwrap ~exists:fixture_exists linux));
+  check_error "the library must be absolute"
+    (Not_absolute { what = "preload"; path = "lib.so" })
+    { linux with preload = Some "lib.so" };
+  Alcotest.(check bool)
+    "macos accepts and ignores it" true
+    (Option.is_none (error_of { base with preload = Some lib }))
+
 let test_trailing_slash_runs () =
   let i = { linux with bactrian_dir = "/work/proj/.bactrian/" } in
   let argv = bwrap ~exists:(fun _ -> `Dir) i in
@@ -347,6 +374,7 @@ let gen_input platform : P.input QCheck.Gen.t =
       listeners;
       agent = [ "agent"; "--x" ];
       bactrian_exe = "/opt/bin/bactrian";
+      preload = None;
       tag = "bactrian-sandbox:t";
     }
 
@@ -512,6 +540,8 @@ let () =
       ( "cases",
         [
           Alcotest.test_case "absent entries skipped" `Quick test_absent_skipped;
+          Alcotest.test_case "the preload library is bound" `Quick
+            test_preload_bound;
           Alcotest.test_case "keychains on macOS only" `Quick
             test_keychains_macos_only;
           Alcotest.test_case "deny_read wins inside the state dir" `Quick

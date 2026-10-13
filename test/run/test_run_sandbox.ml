@@ -206,6 +206,64 @@ let test_clock =
     (Clock_support.run_agent ~sandbox:(strict ctx) ctx
        [ "python3"; "-I"; "-c"; Clock_support.python_agent ])
 
+(* The sandbox mounts a fresh tmpfs over /tmp, /dev/shm and /run, so a library
+   there is bound in at its own path. Linux only. *)
+let with_library_under_tmp f =
+  Clock_support.skip_unless Clock_support.linux "not Linux: skipped";
+  Clock_support.skip_unless
+    (Option.is_some Clock_support.library)
+    "libfaketimeMT.so.1 is not installed: skipped";
+  let dir = Filename.temp_dir ~temp_dir:"/tmp" "bactrian-faketime-" "" in
+  let copy = Filename.concat dir "libfaketimeMT.so.1" in
+  Out_channel.with_open_bin copy (fun oc ->
+      output_string oc (read (Option.get Clock_support.library)));
+  Unix.putenv Agent_clock.override_variable copy;
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv Agent_clock.override_variable "";
+      Sys.remove copy;
+      Unix.rmdir dir)
+    (fun () -> f ~dir ~copy)
+
+let test_clock_library_under_tmp =
+  sandboxed "sandbox-clock-tmp" @@ fun ctx ->
+  Clock_support.skip_unless
+    (Clock_support.usable "python3")
+    "python3 is not usable: skipped";
+  with_library_under_tmp @@ fun ~dir:_ ~copy ->
+  let r =
+    Clock_support.run_agent ~sandbox:(strict ctx) ctx
+      [ "python3"; "-I"; "-c"; Clock_support.python_agent ]
+  in
+  Clock_support.check_clock r;
+  Alcotest.(check bool)
+    "the library under /tmp is the one preloaded" true
+    (contains
+       Yojson.Safe.Util.(to_string (member "preload" (Clock_support.reply r)))
+       copy)
+
+(* A library under a path the sandbox masks cannot be seen by the agent, so
+   the run does not claim an enforced clock. *)
+let test_clock_library_hidden =
+  sandboxed "sandbox-clock-hidden" @@ fun ctx ->
+  Clock_support.skip_unless
+    (Clock_support.usable "python3")
+    "python3 is not usable: skipped";
+  with_library_under_tmp @@ fun ~dir ~copy:_ ->
+  let r =
+    Clock_support.run_agent
+      ~sandbox:(strict ~deny_read:[ dir ] ctx)
+      ctx
+      [ "python3"; "-I"; "-c"; Clock_support.python_agent ]
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check string)
+    "label" {|{"mode":"contract_only","reason":"library-hidden"}|}
+    (Clock_support.meta_clock r);
+  Alcotest.(check string)
+    "nothing is preloaded" ""
+    Yojson.Safe.Util.(to_string (member "preload" (Clock_support.reply r)))
+
 (* SIGINT to a sandboxed replay: bactrian exits 130 and nothing of the agent
    survives. The agent's own pid is no help, since on Linux it lives in another
    pid namespace, so its processes are found by a marker in their command
@@ -460,5 +518,9 @@ let () =
             test_interrupt;
           Alcotest.test_case "the clock reaches the sandboxed agent" `Slow
             test_clock;
+          Alcotest.test_case "a library under /tmp is bound in" `Slow
+            test_clock_library_under_tmp;
+          Alcotest.test_case "a masked library is not claimed enforced" `Slow
+            test_clock_library_hidden;
         ] );
     ]
