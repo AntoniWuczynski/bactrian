@@ -22,6 +22,7 @@
   (cohttp-eio (= dev))
   (uri (>= 4.4.0))
   (mirage-crypto-rng (>= 2.4.1))
+  (yaml (>= 3.2.0))
   (alcotest :with-test)
   (qcheck-core :with-test)
   (qcheck-alcotest :with-test)
