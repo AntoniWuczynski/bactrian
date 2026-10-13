@@ -9,5 +9,5 @@ val trace_json : Trace.entry list -> string
 val decode_verdict : string -> (verdict, string) result
 (** Strict: one JSON object (surrounding whitespace allowed) with a boolean
     ["pass"], and optionally a number ["score"] and a string ["message"] (each
-    may be [null]). Unknown fields, other types and trailing text are errors.
-    The error is a human-readable reason. *)
+    may be [null]). Unknown or duplicate fields, other types and trailing text
+    are errors. The error is a human-readable reason. *)
