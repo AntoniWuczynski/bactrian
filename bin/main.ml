@@ -677,9 +677,9 @@ let sandbox_probe_cmd =
   let port =
     Arg.(required & opt (some int) None & info [ "port" ] ~docv:"PORT")
   in
-  let run port outside inside =
+  let run port outside inside denied =
     print_endline
-      (Sandbox_probe.to_line (Sandbox_probe.run ~port ~outside ~inside));
+      (Sandbox_probe.to_line (Sandbox_probe.run ~port ~outside ~inside ~denied));
     Output.exit_ok
   in
   let info =
@@ -688,7 +688,8 @@ let sandbox_probe_cmd =
   in
   Cmd.v info
     Term.(
-      const run $ port $ required "outside" "PATH" $ required "inside" "PATH")
+      const run $ port $ required "outside" "PATH" $ required "inside" "PATH"
+      $ required "denied" "PATH")
 
 let cmd =
   let info =

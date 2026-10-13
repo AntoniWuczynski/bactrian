@@ -578,20 +578,23 @@ let test_off_probes_nothing =
 let test_unsandboxed_probe_is_rejected () =
   let dir = Filename.temp_dir "bactrian-probe" "" in
   let outside = Filename.concat dir "outside"
-  and inside = Filename.concat dir "inside" in
+  and inside = Filename.concat dir "inside"
+  and denied = Filename.concat dir "denied" in
+  Out_channel.with_open_bin denied (fun oc -> output_string oc "secret");
   Fun.protect ~finally:(fun () ->
       List.iter
         (fun f -> if Sys.file_exists f then Sys.remove f)
-        [ outside; inside ];
+        [ outside; inside; denied ];
       Unix.rmdir dir)
   @@ fun () ->
   let out = Filename.concat dir "report" in
   let code =
     Sys.command
       (Printf.sprintf
-         "%s __sandbox-probe --port 9 --outside %s --inside %s > %s"
+         "%s __sandbox-probe --port 9 --outside %s --inside %s --denied %s > %s"
          (Filename.quote bactrian_bin)
-         (Filename.quote outside) (Filename.quote inside) (Filename.quote out))
+         (Filename.quote outside) (Filename.quote inside)
+         (Filename.quote denied) (Filename.quote out))
   in
   let line = String.trim (read out) in
   Sys.remove out;
@@ -610,7 +613,10 @@ let test_unsandboxed_probe_is_rejected () =
       | Error wrong ->
           Alcotest.(check bool)
             "the outside write is named" true
-            (List.mem "a write outside the state directory succeeded" wrong))
+            (List.mem "a write outside the state directory succeeded" wrong);
+          Alcotest.(check bool)
+            "the read is named" true
+            (List.mem "a read of a denied file succeeded" wrong))
 
 let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
   {
@@ -618,6 +624,7 @@ let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
     listener = Ok ();
     outside_write = Error "EPERM";
     inside_write = Ok ();
+    denied_read = Error "EPERM";
     netns;
   }
 
@@ -651,7 +658,14 @@ let test_judge () =
     (judged Macos { (report ()) with inside_write = Error "EPERM" });
   Alcotest.(check bool)
     "a write outside that worked" false
-    (judged Macos { (report ()) with outside_write = Ok () })
+    (judged Macos { (report ()) with outside_write = Ok () });
+  Alcotest.(check bool)
+    "a denied read that worked" false
+    (judged Linux ~host:"net:[1]"
+       {
+         (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]" ()) with
+         denied_read = Ok ();
+       })
 
 let () =
   Alcotest.run "run_sandbox"

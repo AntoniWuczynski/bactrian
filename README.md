@@ -184,7 +184,7 @@ sandbox: auto
 sandbox: { mode: strict, allow_write: [out], deny_read: [secrets] }
 ```
 
-Before the first run, bactrian checks the sandbox once by running a probe inside it: a connection to `1.1.1.1:443` has to fail without sending anything, a connection to a listener of bactrian's has to succeed, and a write outside the state directory has to fail. When the sandbox does not work, `auto` warns with the cause and the fix and runs the agents unsandboxed, and `strict` stops with exit status 69. `off` skips the sandbox and the probe. Each run's `meta.json` records `sandbox: {mode, applied, reason}`, and the terminal output, `compare` and `report` flag every run that was not sandboxed.
+Before the first run, bactrian checks the sandbox once by running a probe inside it: a connection to `1.1.1.1:443` has to fail without sending anything, a connection to a listener of bactrian's has to succeed, a write outside the state directory has to fail, and a file under a denied directory must not be readable. When the sandbox does not work, `auto` warns with the cause and the fix and runs the agents unsandboxed, and `strict` stops with exit status 69. `off` skips the sandbox and the probe. Each run's `meta.json` records `sandbox: {mode, applied, reason}`, and the terminal output, `compare` and `report` flag every run that was not sandboxed.
 
 On Linux, bubblewrap 0.5 or later must be installed (`sudo apt install bubblewrap`), and unprivileged user namespaces must be allowed. Ubuntu 23.10 and later block them for bubblewrap through AppArmor. Fix it once, either with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` or with an AppArmor profile that grants bubblewrap `userns`. The warning prints both. bactrian never runs `sudo` itself.
 

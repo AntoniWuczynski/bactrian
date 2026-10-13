@@ -1,10 +1,11 @@
 (** The sandbox preflight probe (design §5.3): what [bactrian __sandbox-probe]
     does inside a freshly made sandbox, and how bactrian judges its report.
 
-    The probe tries the three things the sandbox must decide: an outbound TCP
+    The probe tries the four things the sandbox must decide: an outbound TCP
     connection to a public address (it must fail, and no data is ever sent), a
-    connection to a listener of bactrian's (it must succeed), and a write
-    outside the run's state directory (it must fail). It also writes inside the
+    connection to a listener of bactrian's (it must succeed), a write outside
+    the run's state directory (it must fail), and a read of a file under a
+    denied directory (it must fail or read nothing). It also writes inside the
     state directory, which must succeed, or no sandboxed agent could work. *)
 
 type outcome = (unit, string) result
@@ -16,6 +17,9 @@ type report = {
       (** Connecting to bactrian's probe listener and reading {!greeting}. *)
   outside_write : outcome;  (** Creating a file outside the state directory. *)
   inside_write : outcome;  (** Creating a file inside the state directory. *)
+  denied_read : outcome;
+      (** Reading a file under a directory the sandbox denies. [Ok] only when it
+          read something: a masked file can read as empty. *)
   netns : string option;
       (** The probe's network namespace ([/proc/self/ns/net]), on Linux. *)
 }
@@ -23,10 +27,10 @@ type report = {
 val greeting : string
 (** What the probe listener writes to every connection. *)
 
-val run : port:int -> outside:string -> inside:string -> report
+val run : port:int -> outside:string -> inside:string -> denied:string -> report
 (** Runs the checks. [port] is the probe listener's loopback port, [outside] and
-    [inside] are the files to create. Each connection gives up after 5 seconds.
-*)
+    [inside] are the files to create and [denied] the file to read. Each
+    connection gives up after 5 seconds. *)
 
 val to_line : report -> string
 (** One JSON object, no newline. *)

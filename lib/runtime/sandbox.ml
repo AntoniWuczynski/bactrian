@@ -293,9 +293,17 @@ let probe ~env (host : host) =
   let dir = Filename.concat host.bactrian_dir ("sandbox-probe-" ^ id) in
   let state_dir = Filename.concat dir "state"
   and temp_dir = Filename.concat dir "tmp"
-  and outside = Filename.concat dir "outside" in
+  and outside = Filename.concat dir "outside"
+  and denied_dir = Filename.concat dir "denied" in
+  let denied = Filename.concat denied_dir "secret" in
   Fun.protect ~finally:(fun () -> remove_tree ~env dir) @@ fun () ->
-  List.iter (fun d -> Unix.mkdir d 0o700) [ dir; state_dir; temp_dir ];
+  List.iter
+    (fun d -> Unix.mkdir d 0o700)
+    [ dir; state_dir; temp_dir; denied_dir ];
+  Out_channel.with_open_bin denied (fun oc -> output_string oc "secret");
+  let host =
+    { host with deny_read = host.deny_read @ [ resolved denied_dir ] }
+  in
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let tcp =
@@ -329,6 +337,8 @@ let probe ~env (host : host) =
         outside;
         "--inside";
         Filename.concat (resolved state_dir) "inside";
+        "--denied";
+        resolved denied;
       ]
   in
   let vars = [| path_var (); "HOME=" ^ state_dir; "TMPDIR=" ^ temp_dir |] in

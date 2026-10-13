@@ -5,6 +5,7 @@ type report = {
   listener : outcome;
   outside_write : outcome;
   inside_write : outcome;
+  denied_read : outcome;
   netns : string option;
 }
 
@@ -77,7 +78,14 @@ let create path =
       in
       Unix.close fd)
 
-let run ~port ~outside ~inside =
+(* A masked file can read as empty on Linux, which is as good as refused. *)
+let read path =
+  match In_channel.with_open_bin path In_channel.input_all with
+  | "" -> Error "empty"
+  | _ -> Ok ()
+  | exception Sys_error m -> Error m
+
+let run ~port ~outside ~inside ~denied =
   let public =
     connect
       (ADDR_INET (Unix.inet_addr_of_string "1.1.1.1", 443))
@@ -96,6 +104,7 @@ let run ~port ~outside ~inside =
     listener;
     outside_write = create outside;
     inside_write = create inside;
+    denied_read = read denied;
     netns;
   }
 
@@ -106,6 +115,7 @@ type wire = {
   listener : string;
   outside_write : string;
   inside_write : string;
+  denied_read : string;
   netns : string option; [@default None]
 }
 [@@deriving yojson]
@@ -122,6 +132,7 @@ let to_line (r : report) =
          listener = to_word r.listener;
          outside_write = to_word r.outside_write;
          inside_write = to_word r.inside_write;
+         denied_read = to_word r.denied_read;
          netns = r.netns;
        })
 
@@ -136,6 +147,7 @@ let of_line line =
             listener = of_word w.listener;
             outside_write = of_word w.outside_write;
             inside_write = of_word w.inside_write;
+            denied_read = of_word w.denied_read;
             netns = w.netns;
           })
         (wire_of_yojson json)
@@ -173,6 +185,7 @@ let judge (platform : Bactrian_core.Sandbox_policy.platform) ~host_netns
     @ must_work "a connection to bactrian's own listener" r.listener
     @ must_fail "a write outside the state directory" r.outside_write
     @ must_work "a write inside the state directory" r.inside_write
+    @ must_fail "a read of a denied file" r.denied_read
   with
   | [] -> Ok ()
   | wrong -> Error wrong
