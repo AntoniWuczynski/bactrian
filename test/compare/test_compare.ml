@@ -402,19 +402,11 @@ let test_unanimous_not_certain () =
   Alcotest.check verdict_t "3/3 -> 0/3" Regression m.verdict;
   Alcotest.(check bool) "not zero width" true (width m.interval > 0.)
 
-let test_scenarios_hull () =
-  (* M1: under [scenarios] the interval is the hull of the paired
-     hierarchical bootstrap and the stratified Newcombe interval. *)
-  let k = 12 and n = 6 in
-  let rs =
-    List.concat_map
-      (fun s ->
-        let i = int_of_string (String.sub s 1 2) in
-        runs s "A" ~n ~k:(i mod 7) @ runs s "B" ~n ~k:((i + 2) mod 7))
-      (scenarios k)
-  in
+(* The [scenarios] pass-rate interval of [rs], with the paired hierarchical
+   bootstrap and the stratified Newcombe interval it is the hull of. *)
+let scenarios_parts rs =
+  let k = 12 in
   let r = ok (C.run (input ~population:`Scenarios rs)) in
-  let m = metric r C.Pass_rate in
   (* Values in reverse run order, the order [Compare] collects them in, so the
      bootstrap below makes the same draws. *)
   let arm v s : Bootstrap.arm =
@@ -449,14 +441,45 @@ let test_scenarios_hull () =
       ~candidate:(List.map (tally "B") (scenarios k))
       ~confidence:0.95
   in
-  Alcotest.(check (float 0.))
-    "lower"
-    (Float.min hier.lower sn.lower)
-    m.interval.lower;
-  Alcotest.(check (float 0.))
-    "upper"
-    (Float.max hier.upper sn.upper)
-    m.interval.upper
+  ((metric r C.Pass_rate).interval, hier, sn)
+
+let test_scenarios_hull () =
+  (* Under [scenarios] the interval is the hull of the paired hierarchical
+     bootstrap and the stratified Newcombe interval. *)
+  let n = 6 in
+  let spread =
+    List.concat_map
+      (fun s ->
+        let i = int_of_string (String.sub s 1 2) in
+        runs s "A" ~n ~k:(i mod 7) @ runs s "B" ~n ~k:((i + 2) mod 7))
+      (scenarios 12)
+  in
+  (* Every baseline run passes, and the candidate fails once. No bootstrap
+     resample can put the candidate above the baseline, so the bootstrap's
+     upper end is 0, and only the Newcombe part keeps an improvement possible. *)
+  let near_unanimous =
+    List.concat_map
+      (fun s ->
+        runs s "A" ~n ~k:n
+        @ runs s "B" ~n ~k:(if String.equal s "s00" then n - 1 else n))
+      (scenarios 12)
+  in
+  List.iter
+    (fun (label, rs) ->
+      let got, hier, sn = scenarios_parts rs in
+      Alcotest.(check (float 0.))
+        (label ^ " lower")
+        (Float.min hier.lower sn.lower)
+        got.lower;
+      Alcotest.(check (float 0.))
+        (label ^ " upper")
+        (Float.max hier.upper sn.upper)
+        got.upper)
+    [ ("spread", spread); ("near unanimous", near_unanimous) ];
+  let got, hier, sn = scenarios_parts near_unanimous in
+  Alcotest.(check (float 0.)) "bootstrap upper end" 0. hier.upper;
+  Alcotest.(check bool) "newcombe sticks out" true (sn.upper > hier.upper);
+  Alcotest.(check bool) "not the bootstrap alone" true (got.upper > hier.upper)
 
 let test_scenarios_swap () =
   let rs = suite_runs ~sc:10 ~n:6 ~kb:5 ~kc:2 () in
@@ -561,17 +584,31 @@ let test_dropped_scenario () =
   Alcotest.(check (list string)) "none dropped" [] r.dropped
 
 (* Seeded simulations at the boundary, where a percentile bootstrap
-   collapses to zero width. Each cell draws
-   [datasets] experiments with K scenarios and n runs per scenario and arm,
-   true rates [p_base] and [p_cand] in every scenario, and runs the real gate
-   at 0.95 with a 0.05 threshold. The true difference is 2δ, so any No_change
-   is a false all-clear. *)
+   collapses to zero width. Each cell draws [datasets] experiments with K
+   scenarios and n runs per scenario and arm, true rates [p_base] and [p_cand]
+   in every scenario, and runs the real gate at 0.95 with [threshold]. The true
+   difference is twice the threshold, so any No_change is a false all-clear.
+   Alongside the real verdict, the cell records the verdict the hierarchical
+   bootstrap alone would give, to show that the cell can tell the two apart. *)
 let boundary_datasets = 2000
 
-let boundary_cell ?(population = `Suite) ~p_base ~p_cand ~n ~k () =
+type cell = {
+  coverage : float;
+  no_change : float;
+  bootstrap_no_change : float;
+      (* [`Scenarios] only: false No_change of the bootstrap without the
+         hull. *)
+}
+
+let boundary_cell ?(population = `Suite) ?(threshold = 0.05) ~p_base ~p_cand ~n
+    ~k () =
   let st = Random.State.make [| 20261013; n; k; truncate (p_base *. 10.) |] in
   let truth = p_cand -. p_base in
-  let covered = ref 0 and no_change = ref 0 in
+  let covered = ref 0 and no_change = ref 0 and bootstrap_no_change = ref 0 in
+  let is_no_change : C.verdict -> bool = function
+    | No_change -> true
+    | Regression | Improvement | Inconclusive _ -> false
+  in
   for _ = 1 to boundary_datasets do
     let arm variant p s =
       List.init n (fun _ ->
@@ -582,25 +619,55 @@ let boundary_cell ?(population = `Suite) ~p_base ~p_cand ~n ~k () =
         (fun s -> arm "A" p_base s @ arm "B" p_cand s)
         (scenarios k)
     in
+    let seed = Random.State.bits st in
     let r =
-      ok
-        (C.run
-           (input ~population
-              ~gate:[ (C.Pass_rate, 0.05) ]
-              ~seed:(Random.State.bits st) rs))
+      ok (C.run (input ~population ~gate:[ (C.Pass_rate, threshold) ] ~seed rs))
     in
     let m = metric r C.Pass_rate in
     if m.interval.lower <= truth && truth <= m.interval.upper then incr covered;
-    match m.verdict with
-    | No_change -> incr no_change
-    | Regression | Improvement | Inconclusive _ -> ()
+    if is_no_change m.verdict then incr no_change;
+    match population with
+    | `Suite -> ()
+    | `Scenarios ->
+        let values v s : Bootstrap.arm =
+          {
+            scenario = s;
+            values =
+              Array.of_list
+                (List.filter_map
+                   (fun (x : C.run) ->
+                     if String.equal x.variant v && String.equal x.scenario s
+                     then Option.map (fun b -> if b then 1. else 0.) x.passed
+                     else None)
+                   rs);
+          }
+        in
+        let h =
+          Bootstrap.hierarchical_diff
+            ~rng:(Random.State.make [| seed |])
+            ~resamples:500 ~confidence:0.95
+            ~baseline:(List.map (values "A") (scenarios k))
+            ~candidate:(List.map (values "B") (scenarios k))
+        in
+        if is_no_change (C.decide ~threshold ~worse_is:`Lower h) then
+          incr bootstrap_no_change
   done;
   let rate x = float_of_int x /. float_of_int boundary_datasets in
-  (rate !covered, rate !no_change)
+  {
+    coverage = rate !covered;
+    no_change = rate !no_change;
+    bootstrap_no_change = rate !bootstrap_no_change;
+  }
+
+(* Spec: a false verdict on one side of a two-sided interval at level 1 - α
+   happens at most α/2 of the time, so a false No_change rate above
+   α/2 = 0.025 by more than three Monte Carlo standard errors fails. *)
+let no_change_limit =
+  0.025 +. (3. *. sqrt (0.025 *. 0.975 /. float_of_int boundary_datasets))
+
+let population_name = function `Suite -> "suite" | `Scenarios -> "scenarios"
 
 let test_boundary_coverage () =
-  let se = sqrt (0.05 *. 0.95 /. float_of_int boundary_datasets) in
-  let no_change_limit = 0.05 +. (3. *. se) in
   let cells =
     List.concat_map
       (fun (p_base, p_cand) ->
@@ -608,26 +675,20 @@ let test_boundary_coverage () =
           (fun n -> List.map (fun k -> (`Suite, p_base, p_cand, n, k)) [ 1; 3 ])
           [ 3; 5 ])
       [ (1.0, 0.9); (0.0, 0.1) ]
-    (* M1: the hierarchical bootstrap alone said No_change 4.4% of the time
-       here. *)
     @ [ (`Scenarios, 1.0, 0.9, 3, 10) ]
   in
   let failures =
     List.filter_map
       (fun (population, p_base, p_cand, n, k) ->
-        let coverage, no_change =
-          boundary_cell ~population ~p_base ~p_cand ~n ~k ()
-        in
+        let c = boundary_cell ~population ~p_base ~p_cand ~n ~k () in
         let line =
           Printf.sprintf
             "%s %.1f -> %.1f n=%d K=%d: coverage %.4f, false no-change %.4f"
-            (match population with
-            | `Suite -> "suite"
-            | `Scenarios -> "scenarios")
-            p_base p_cand n k coverage no_change
+            (population_name population)
+            p_base p_cand n k c.coverage c.no_change
         in
         print_endline line;
-        if coverage >= 0.93 && no_change <= no_change_limit then None
+        if c.coverage >= 0.93 && c.no_change <= no_change_limit then None
         else Some line)
       cells
   in
@@ -637,6 +698,24 @@ let test_boundary_coverage () =
       Alcotest.failf "coverage below 0.93 or false no-change above %.4f:\n%s"
         no_change_limit
         (String.concat "\n" failures)
+
+let test_hull_needed () =
+  (* Every baseline run passes and the candidate passes 95% of the time, a
+     true drop of twice the 0.025 threshold. With 3 runs in each of 10
+     scenarios the candidate passes all 30 runs about 21% of the time, and the
+     hierarchical bootstrap then collapses to [0, 0] and says No_change. The
+     stratified Newcombe part of the hull keeps that rare. *)
+  let c =
+    boundary_cell ~population:`Scenarios ~threshold:0.025 ~p_base:1.0
+      ~p_cand:0.95 ~n:3 ~k:10 ()
+  in
+  Printf.printf
+    "hull: false no-change %.4f, bootstrap alone %.4f, coverage %.4f\n"
+    c.no_change c.bootstrap_no_change c.coverage;
+  Alcotest.(check bool)
+    "the bootstrap alone breaks the bound" true
+    (c.bootstrap_no_change > no_change_limit);
+  Alcotest.(check bool) "the hull keeps it" true (c.no_change <= no_change_limit)
 
 let () =
   Alcotest.run "compare"
@@ -686,5 +765,6 @@ let () =
         [
           Alcotest.test_case "boundary rates, n = 3 and 5, K = 1, 3 and 10"
             `Slow test_boundary_coverage;
+          Alcotest.test_case "scenarios needs the hull" `Slow test_hull_needed;
         ] );
     ]
