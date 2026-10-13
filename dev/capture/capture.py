@@ -48,7 +48,7 @@ KEY_VARS: dict[Provider, str] = {
 
 @dataclass(frozen=True)
 class Price:
-    """USD per million tokens, spec section 11."""
+    """USD per million tokens, design §11."""
 
     input: float
     cached: float

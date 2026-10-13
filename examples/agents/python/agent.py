@@ -1,4 +1,4 @@
-"""Toy bactrian agent (spec 5.1, command mode): one JSON object per line on
+"""Toy bactrian agent (design §5.1, command mode): one JSON object per line on
 stdin and stdout, model calls through OPENAI_BASE_URL with a get_weather tool.
 
 When AGENT_MCP_COMMAND holds a JSON array (for example
