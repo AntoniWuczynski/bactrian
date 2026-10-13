@@ -115,9 +115,10 @@ type config = {
           {!Sandbox.type-label} under [sandbox]. The MCP stdio servers are never
           inside it. *)
   faketime : bool;
-      (** The experiment's [clock: {faketime: auto}]: inject [libfaketime] where
-          {!Agent_clock} can, [false] for [off]. [meta.json] records the
-          {!Bactrian_core.Clock_label} under [clock]. *)
+      (** The experiment's [clock: {faketime: auto}]: inject [libfaketime] into
+          a command agent where {!Agent_clock} can, [false] for [off]. An [http]
+          agent's clock is contract-only whatever this says. [meta.json] records
+          the {!Bactrian_core.Clock_label} under [clock]. *)
 }
 
 val recorded_mcp :
