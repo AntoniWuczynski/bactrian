@@ -717,6 +717,26 @@ let pricing_setting =
     "ten times the rates, ten times the spend" true
     (close_to tenfold (base *. 10.))
 
+let normalise_keeps_pricing =
+  Alcotest.test_case "normalise never masks the model used for pricing" `Quick
+  @@ with_ctx "normalise-pricing"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = any_request ctx f in
+  let run =
+    make_run ctx ~token:token_a ~upstream:(F.base_url up) ~normalise:[ {|\d+|} ]
+  in
+  P.register ctx.proxy run;
+  let r = send_fixture ctx ~token:token_a f in
+  check_ok r;
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check int) "usage gaps" 0 findings.usage_gaps;
+  Alcotest.(check bool) "mask fired" true (findings.masks_fired > 0);
+  let spent = Ledger.spent run.ledger ~provider:(segment (provider_of f)) in
+  let cost = expected_cost f in
+  if not (close_to spent cost) then
+    Alcotest.failf "ledger spent %.12f, expected %.12f" spent cost
+
 let () =
   Alcotest.run "model_proxy"
     [
@@ -733,6 +753,7 @@ let () =
           redact_setting;
           redact_wide_pattern;
           normalise_keeps_placeholders;
+          normalise_keeps_pricing;
           pricing_setting;
         ] );
     ]

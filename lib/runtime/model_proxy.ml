@@ -280,6 +280,7 @@ type pending = {
   body : string;  (** As the agent sent it. *)
   scrubbed : string;
   parsed : Canon.t;  (** [scrubbed], parsed. *)
+  model : string;  (** From the unmasked canonical request, for pricing. *)
   request : Matcher.request;
   occurrence : int;
   t_ms : int;
@@ -521,9 +522,7 @@ let refuse_spend st (refusal : Ledger.refusal) =
    bounded stream, so a slow agent slows the upstream read. *)
 let live t ~conn_sw st x ~record =
   let run = st.run in
-  let model =
-    Option.value (Canon.str_member "model" x.request.canonical) ~default:""
-  in
+  let model = x.model in
   let date = date_of (t.now ()) in
   match
     List.find_map
@@ -666,22 +665,27 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
         | Ok parsed -> (
             match A.canonical_request ~path parsed with
             | Error e -> Error (Format.asprintf "%a" Protocol.pp_error e)
-            | Ok canonical -> Ok (parsed, canonical))
+            | Ok canonical ->
+                let model =
+                  Option.value (Canon.str_member "model" canonical) ~default:""
+                in
+                Ok (parsed, model, canonical))
       in
       (* The one place [normalise] applies: keys, cassette and replay all use
-         the masked canonical request. *)
+         the masked canonical request. Pricing reads the model and the
+         parsed body from before masking. *)
       let parsed =
         Result.map
-          (fun (parsed, canonical) ->
+          (fun (parsed, model, canonical) ->
             let masks, canonical = Mask.canon st.run.normalise canonical in
             locked st (fun () -> st.masks_fired <- st.masks_fired + masks);
-            (parsed, canonical))
+            (parsed, model, canonical))
           parsed
       in
       match parsed with
       | Error reason ->
           refusal_response st ~status:400 ~type_:"bactrian_bad_request" reason
-      | Ok (parsed, canonical) -> (
+      | Ok (parsed, model, canonical) -> (
           let raw_query =
             match Uri.verbatim_query uri with Some "" -> None | q -> q
           in
@@ -713,6 +717,7 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
               body;
               scrubbed;
               parsed;
+              model;
               request = { channel = Model; key; canonical; shape };
               occurrence;
               t_ms = Float.to_int ((t.now () -. st.run.run_started) *. 1000.);
