@@ -118,6 +118,19 @@ val start :
 
 val port : t -> int
 
+val listen_unix :
+  t ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  token:string ->
+  string ->
+  (unit, string) result
+(** [listen_unix t ~sw ~net ~token path] also serves the proxy on a new Unix
+    socket at [path] until [sw] ends: the socket a Linux sandbox reaches the
+    proxy through (design §5.3). It answers only requests for the run [token],
+    as if every other token were unknown (403), so one run's socket cannot serve
+    another run. The caller removes the file. *)
+
 val unattributed : t -> int
 (** Proxy-wide count of requests and connection failures that cannot be tied to
     a registered run: an unknown or ended token, an unknown provider segment, a

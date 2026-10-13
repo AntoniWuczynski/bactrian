@@ -3,6 +3,7 @@ type agent_event =
   | Got_reply of { t_ms : int; turn : int; content : string }
   | Got_event of { t_ms : int; turn : int; name : string; data : Canon.t }
   | Got_error of { t_ms : int; turn : int; message : string }
+  | Got_violation of { t_ms : int; kind : string; detail : string }
 
 type input = {
   run_id : string;
@@ -269,7 +270,7 @@ let build (i : input) =
     List.filter_map
       (function
         | Sent_turn { t_ms; turn; content } -> Some (t_ms, turn, content)
-        | Got_reply _ | Got_event _ | Got_error _ -> None)
+        | Got_reply _ | Got_event _ | Got_error _ | Got_violation _ -> None)
       i.agent
   in
   let numbers = List.map (fun (_, n, _) -> n) sent in
@@ -300,7 +301,9 @@ let build (i : input) =
       (function
         | Got_event { t_ms; turn = t; name; data } when known t = turn ->
             Some (Say (t_ms, Trace.Agent_event { turn; name; data }))
-        | Got_event _ | Sent_turn _ | Got_reply _ | Got_error _ -> None)
+        | Got_event _ | Sent_turn _ | Got_reply _ | Got_error _
+        | Got_violation _ ->
+            None)
       i.agent
   in
   let closing_of turn =
@@ -313,7 +316,9 @@ let build (i : input) =
             | Ok data ->
                 Some (t_ms, Trace.Agent_event { turn; name = "error"; data })
             | Error _ -> None)
-        | Got_reply _ | Got_error _ | Sent_turn _ | Got_event _ -> None)
+        | Got_reply _ | Got_error _ | Sent_turn _ | Got_event _
+        | Got_violation _ ->
+            None)
       i.agent
   in
   let group st turn start =
@@ -369,7 +374,15 @@ let build (i : input) =
       ({ next_call = 0; emitted = Int_set.empty }, [])
       groups
   in
-  let body = List.rev rev in
+  let body =
+    List.fold_left
+      (fun body e ->
+        match e with
+        | Got_violation { t_ms; kind; detail } ->
+            insert_by_time (t_ms, Trace.Sandbox_violation { kind; detail }) body
+        | Sent_turn _ | Got_reply _ | Got_event _ | Got_error _ -> body)
+      (List.rev rev) i.agent
+  in
   let finish = List.fold_left (fun m (t, _) -> max m t) 0 body in
   let all =
     ( 0,

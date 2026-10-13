@@ -134,7 +134,7 @@ let open_stderr ~sw path =
    fibre has to keep running to learn the exit status during shutdown, which
    happens exactly when the caller is cancelled. [f] runs in a fibre of the
    caller's own switch, so it is still cancelled with the caller. *)
-let with_agent ~process_mgr ~clock config f =
+let with_agent ?(fds = []) ~process_mgr ~clock config f =
   Eio.Switch.run @@ fun caller_sw ->
   Eio.Cancel.protect @@ fun () ->
   Eio.Switch.run @@ fun sw ->
@@ -148,6 +148,7 @@ let with_agent ~process_mgr ~clock config f =
         (1, Eio_unix.Resource.fd stdout_w, `Blocking);
         (2, stderr_fd, `Blocking);
       ]
+      @ List.map (fun (n, fd) -> (n, fd, `Blocking)) fds
     in
     let proc =
       Eio_unix.Process.spawn_unix ~sw process_mgr ?cwd:config.cwd ~pgid:0 ~fds

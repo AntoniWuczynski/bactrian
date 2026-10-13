@@ -57,6 +57,7 @@ val recv : t -> (Agent_protocol.from_agent, error) result
 *)
 
 val with_agent :
+  ?fds:(int * Eio_unix.Fd.t) list ->
   process_mgr:_ Eio_unix.Process.mgr ->
   clock:_ Eio.Time.clock ->
   config ->
@@ -64,4 +65,5 @@ val with_agent :
   ('a * Eio.Process.exit_status, error) result
 (** [with_agent ~process_mgr ~clock config f] spawns the agent, runs [f], shuts
     the agent down and returns [f]'s result with the leader's exit status. Only
-    [Spawn_failed] is returned as an error here. *)
+    [Spawn_failed] is returned as an error here. [fds] are further descriptors
+    the agent inherits, by number (above 2). *)

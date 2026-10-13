@@ -7,6 +7,9 @@ type agent_event =
   | Got_error of { t_ms : int; turn : int; message : string }
       (** Becomes an [Agent_event] named ["error"] with the message in its
           ["message"] field, because the trace has no error event. *)
+  | Got_violation of { t_ms : int; kind : string; detail : string }
+      (** Something the sandbox denied: a [Sandbox_violation], placed by time.
+      *)
 
 type input = {
   run_id : string;

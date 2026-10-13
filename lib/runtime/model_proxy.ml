@@ -757,9 +757,15 @@ let read_body body =
   | s -> Body s
   | exception Eio.Buf_read.Buffer_limit_exceeded -> Too_large
 
-let handle t ((conn_sw, _), _) request body : response =
+let handle ?only t ((conn_sw, _), _) request body : response =
   let headers = Http.Request.headers request in
   let uri = Uri.of_string (Http.Request.resource request) in
+  (* A socket of one run serves no other: their tokens are unknown there. *)
+  let find token =
+    match only with
+    | Some own when not (String.equal (token_key own) (token_key token)) -> None
+    | Some _ | None -> Runs.find_opt t.runs (token_key token)
+  in
   match (read_body body, route (Uri.path uri)) with
   | Too_large, _ ->
       unattributed_response t ~status:413 ~type_:"bactrian_payload_too_large"
@@ -768,7 +774,7 @@ let handle t ((conn_sw, _), _) request body : response =
       unattributed_response t ~status:404 ~type_:"bactrian_not_found"
         "expected /r/<token>/<provider>/<path>"
   | Body body, Some (token, provider, path) -> (
-      match Runs.find_opt t.runs (token_key token) with
+      match find token with
       | None ->
           unattributed_response t ~status:403 ~type_:"bactrian_forbidden"
             "unknown or ended run"
@@ -823,6 +829,15 @@ let on_error t = function
       t.unattributed <- t.unattributed + 1;
       Printf.eprintf "bactrian model proxy: %s\n%!" (Printexc.to_string ex)
 
+let serve ?only ~sw t sock =
+  let server =
+    Cohttp_eio.Server.make_expert
+      ~callback:(fun conn request body -> handle ?only t conn request body)
+      ()
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      Cohttp_eio.Server.run sock server ~on_error:(on_error t))
+
 let start ~sw ~net ~clock ~process_mgr =
   match
     Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true net
@@ -855,16 +870,18 @@ let start ~sw ~net ~clock ~process_mgr =
                 };
             }
           in
-          let server =
-            Cohttp_eio.Server.make_expert
-              ~callback:(fun conn request body -> handle t conn request body)
-              ()
-          in
-          Eio.Fiber.fork_daemon ~sw (fun () ->
-              Cohttp_eio.Server.run sock server ~on_error:(on_error t));
+          serve ~sw t sock;
           Ok t)
 
 let port t = t.port
+
+let listen_unix t ~sw ~net ~token path =
+  match Eio.Net.listen ~sw ~backlog:128 net (`Unix path) with
+  | exception (Eio.Io _ as ex) -> Error (Printexc.to_string ex)
+  | sock ->
+      serve ~only:token ~sw t sock;
+      Ok ()
+
 let unattributed t = t.unattributed
 
 let register t run =
