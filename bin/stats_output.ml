@@ -145,7 +145,7 @@ let render_plan_text (a : Plan_sim.assumption) answer =
         a.max_repeats a.power best_power
 
 let render_plan_json (a : Plan_sim.assumption) answer =
-  let float f : Yojson.Safe.t = if Float.is_finite f then `Float f else `Null in
+  let float = Json_float.to_json in
   Yojson.Safe.to_string
     (`Assoc
        [

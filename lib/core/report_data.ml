@@ -402,7 +402,7 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
 
 (* JSON *)
 
-let float_json f : Yojson.Safe.t = if Float.is_finite f then `Float f else `Null
+let float_json = Json_float.to_json
 let opt f : _ -> Yojson.Safe.t = function Some x -> f x | None -> `Null
 
 let interval_json (i : Stats.interval) : Yojson.Safe.t =

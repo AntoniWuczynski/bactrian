@@ -22,11 +22,8 @@
     {
       "metric": "pass_rate",
       "in_gate": true,
-      "estimate": -0.033333333333333215,
-      "interval": {
-        "lower": -0.2044775470879404,
-        "upper": 0.1277240784289647
-      },
+      "estimate": -0.0333333333333,
+      "interval": { "lower": -0.204477547088, "upper": 0.127724078429 },
       "threshold": 0.1,
       "threshold_scaled": 0.1,
       "level": 0.95,
@@ -35,31 +32,28 @@
     {
       "metric": "cost",
       "in_gate": false,
-      "estimate": 0.08701137698962924,
-      "interval": { "lower": -0.0, "upper": 0.08701137698962924 },
+      "estimate": 0.0870113769896,
+      "interval": { "lower": 0.0, "upper": 0.0870113769896 },
       "threshold": 0.2,
-      "threshold_scaled": 0.18232155679395465,
+      "threshold_scaled": 0.182321556794,
       "level": 0.95,
       "relative": {
-        "estimate": 0.09090909090909034,
-        "interval": { "lower": -0.0, "upper": 0.09090909090909034 }
+        "estimate": 0.0909090909091,
+        "interval": { "lower": 0.0, "upper": 0.0909090909091 }
       },
       "result": { "verdict": "no_change", "lean": null }
     },
     {
       "metric": "latency_p50",
       "in_gate": false,
-      "estimate": 0.3770761048454787,
-      "interval": { "lower": 0.340223435164709, "upper": 0.4068412556850985 },
+      "estimate": 0.377076104845,
+      "interval": { "lower": 0.340223435165, "upper": 0.406841255685 },
       "threshold": 0.25,
-      "threshold_scaled": 0.22314355131420976,
+      "threshold_scaled": 0.223143551314,
       "level": 0.95,
       "relative": {
-        "estimate": 0.45801526717557306,
-        "interval": {
-          "lower": 0.4052615403323019,
-          "upper": 0.5020656423537714
-        }
+        "estimate": 0.458015267176,
+        "interval": { "lower": 0.405261540332, "upper": 0.502065642354 }
       },
       "result": { "verdict": "regression", "lean": null }
     }
@@ -71,11 +65,8 @@
       "baseline_runs": 10,
       "candidate_passes": 8,
       "candidate_runs": 8,
-      "difference": 0.19999999999999996,
-      "interval": {
-        "lower": -0.24548723948112722,
-        "upper": 0.574316937497144
-      },
+      "difference": 0.2,
+      "interval": { "lower": -0.245487239481, "upper": 0.574316937497 },
       "result": { "verdict": "inconclusive", "lean": "better" }
     },
     {
@@ -84,11 +75,8 @@
       "baseline_runs": 10,
       "candidate_passes": 7,
       "candidate_runs": 10,
-      "difference": -0.30000000000000004,
-      "interval": {
-        "lower": -0.6588984422416186,
-        "upper": 0.12210147769460539
-      },
+      "difference": -0.3,
+      "interval": { "lower": -0.658898442242, "upper": 0.122101477695 },
       "result": { "verdict": "inconclusive", "lean": "worse" }
     },
     {
@@ -98,7 +86,7 @@
       "candidate_passes": 10,
       "candidate_runs": 10,
       "difference": 0.0,
-      "interval": { "lower": -0.364318132286769, "upper": 0.364318132286769 },
+      "interval": { "lower": -0.364318132287, "upper": 0.364318132287 },
       "result": { "verdict": "inconclusive", "lean": "none" }
     }
   ],
@@ -110,7 +98,7 @@
     },
     {
       "variant": "b",
-      "cost_usd": { "n": 28, "median": 0.012, "p90": 0.021300000000000003 },
+      "cost_usd": { "n": 28, "median": 0.012, "p90": 0.0213 },
       "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 }
     }
   ],
