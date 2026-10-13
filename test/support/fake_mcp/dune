@@ -1,0 +1,9 @@
+(library
+ (name fake_mcp)
+ (modules fake_mcp)
+ (libraries bactrian.core eio cohttp-eio http uri))
+
+(executable
+ (name fake_mcp_server)
+ (modules fake_mcp_server)
+ (libraries fake_mcp cmdliner))

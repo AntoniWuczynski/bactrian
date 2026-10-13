@@ -1,0 +1,7 @@
+(test
+ (name test_fake_mcp)
+ (package bactrian)
+ (deps ../support/fake_mcp/fake_mcp_server.exe)
+ (libraries fake_mcp bactrian.core eio_main cohttp-eio http uri alcotest)
+ (flags
+  (:standard -w -70)))
