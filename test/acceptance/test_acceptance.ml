@@ -99,6 +99,9 @@ let outcome_name (r : Run.result) =
 
 let ok = function Ok v -> v | Error e -> Alcotest.failf "execute: %s" e
 
+(* The provider key bactrian holds. No agent may ever see it. *)
+let real_key = "real-openai-key"
+
 (* dune gives the paths of the executables relative to the test's directory. *)
 let executable variable =
   match Sys.getenv_opt variable with
@@ -115,8 +118,8 @@ let on_path name =
     (String.split_on_char ':'
        (Option.value (Sys.getenv_opt "PATH") ~default:""))
 
-let sandbox_available =
-  Sys.file_exists "/usr/bin/sandbox-exec" || on_path "bwrap"
+let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+let sandbox_available = macos || on_path "bwrap"
 
 let () =
   if not sandbox_available then
@@ -125,7 +128,7 @@ let () =
 
 let sandbox_flag = if sandbox_available then "strict" else "off"
 
-let sandbox ~env ~dir =
+let sandbox ~env ~dir ~deny_read =
   if not sandbox_available then Sandbox.off
   else
     match
@@ -134,7 +137,7 @@ let sandbox ~env ~dir =
         {
           mode = `Strict;
           allow_write = [];
-          deny_read = [];
+          deny_read;
           bactrian_exe = executable "BACTRIAN_EXE";
           bactrian_dir = Filename.concat dir ".bactrian";
         }
@@ -157,7 +160,8 @@ type world = {
     Run.result;
 }
 
-let with_world name f =
+(* [deny_read] names directories to create in the world and deny to the agent. *)
+let with_world ?(deny_read = []) name f =
   Eio_main.run @@ fun env ->
   let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
@@ -182,9 +186,13 @@ let with_world name f =
     | Error e -> Alcotest.failf "fake upstream: %a" F.pp_error e
   in
   let store = Store.create ~root:Eio.Path.(dir / ".bactrian") in
+  let abs_dir = Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn dir) in
+  List.iter
+    (fun name -> Eio.Path.mkdirs ~perm:0o700 Eio.Path.(dir / name))
+    deny_read;
   let sandbox =
-    sandbox ~env
-      ~dir:(Filename.concat (Sys.getcwd ()) (Eio.Path.native_exn dir))
+    sandbox ~env ~dir:abs_dir
+      ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
   in
   let execute ~argv ?replay ?(mcp = []) ?(variant_env = []) () =
     incr counter;
@@ -219,7 +227,7 @@ let with_world name f =
     in
     ok
       (Run.execute ~random_bytes
-         ~keys:[ (P.Openai, "real-openai-key") ]
+         ~keys:[ (P.Openai, real_key) ]
          ~upstream:(fun _ -> Uri.of_string (F.base_url up))
          ~env ~proxy ~store ~ledger config)
   in
@@ -433,6 +441,184 @@ let mcp_flags_acceptance agent era () =
     {|[{"name":"weather","transport":"stdio","policy":"replay"}]|}
     (Yojson.Safe.to_string (member "mcp" meta))
 
+(* Escape agents (test/sandbox): each makes one model call, then tries to reach
+   a public host by HTTPS, TCP, WebSocket and DNS, to write to the real home
+   directory and the project, to read a denied directory and to leak the real
+   key. Every attempt has to fail. *)
+
+let usable tool = Sys.command (tool ^ " --version > /dev/null 2>&1") = 0
+
+let escapers =
+  [
+    {
+      name = "typescript";
+      argv = (fun () -> [ "node"; in_repo "test/sandbox/escape.mts" ]);
+    };
+    {
+      name = "python";
+      argv = (fun () -> [ "python3"; "-I"; in_repo "test/sandbox/escape.py" ]);
+    };
+  ]
+
+let rec files_under path =
+  if Sys.is_directory path then
+    Array.to_list (Sys.readdir path)
+    |> List.concat_map (fun f -> files_under (Filename.concat path f))
+  else [ path ]
+
+let contains s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s
+    && (String.equal (String.sub s i n) sub || go (i + 1))
+  in
+  go 0
+
+let escape_results (r : Run.result) =
+  let replies =
+    List.filter_map
+      (fun j ->
+        let open Yojson.Safe.Util in
+        if String.equal (to_string (member "type" j)) "reply" then
+          Some (to_string (member "content" j))
+        else None)
+      (trace r)
+  in
+  match replies with
+  | [ content ] -> Yojson.Safe.Util.(to_assoc (Yojson.Safe.from_string content))
+  | _ -> Alcotest.fail "expected exactly one reply"
+
+let escapes agent () =
+  let runtime =
+    if String.equal agent.name "typescript" then "node" else "python3"
+  in
+  if not sandbox_available then begin
+    print_endline "no sandbox-exec or bwrap on this host: skipped";
+    Alcotest.skip ()
+  end
+  else if not (usable runtime) then begin
+    Printf.printf "%s is not usable on this host: skipped\n" runtime;
+    Alcotest.skip ()
+  end;
+  let home =
+    match Sys.getenv_opt "HOME" with
+    | Some h -> h
+    | None -> Alcotest.fail "HOME"
+  in
+  let home_file =
+    Filename.concat home
+      (Printf.sprintf ".bactrian-escape-%s-%d" agent.name (Unix.getpid ()))
+  in
+  let previous = Sys.getenv_opt "OPENAI_API_KEY" in
+  (* The key sits in the environment bactrian runs in, as it would for a
+     live run, and must not be passed on. *)
+  Unix.putenv "OPENAI_API_KEY" real_key;
+  Fun.protect ~finally:(fun () ->
+      Unix.putenv "OPENAI_API_KEY" (Option.value previous ~default:"");
+      if Sys.file_exists home_file then Sys.remove home_file)
+  @@ fun () ->
+  with_world ~deny_read:[ "secret" ] ("escape-" ^ agent.name)
+  @@ fun { up; execute; dir } ->
+  let secret_file = Filename.concat (Filename.concat dir "secret") "key" in
+  Out_channel.with_open_bin secret_file (fun oc -> output_string oc "s3cret");
+  let project_file = Filename.concat dir "escaped" in
+  let r =
+    execute ~argv:(agent.argv ())
+      ~variant_env:
+        [
+          ("REAL_HOME_FILE", home_file);
+          ("PROJECT_FILE", project_file);
+          ("SECRET_FILE", secret_file);
+        ]
+      ()
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  check_sandboxed r;
+  let results = escape_results r in
+  let outcome name =
+    match List.assoc_opt name results with
+    | Some j -> Yojson.Safe.Util.(to_string (member "outcome" j))
+    | None -> Alcotest.failf "no result for %s" name
+  in
+  let detail name =
+    Yojson.Safe.Util.(to_string (member "detail" (List.assoc name results)))
+  in
+  List.iter
+    (fun name -> Alcotest.(check string) (name ^ " works") "ok" (outcome name))
+    [ "model"; "state_write" ];
+  Alcotest.(check string)
+    "the model call went through" "status 200" (detail "model");
+  Alcotest.(check int)
+    "upstream saw the model call" 1
+    (List.length (F.requests up));
+  let escapes =
+    [
+      "https";
+      "tcp";
+      "websocket";
+      "dns";
+      "home_write";
+      "project_write";
+      "deny_read";
+    ]
+  in
+  List.iter
+    (fun name ->
+      Alcotest.(check string) (name ^ " is denied") "failed" (outcome name))
+    escapes;
+  Alcotest.(check bool)
+    "nothing in the real home" false
+    (Sys.file_exists home_file);
+  Alcotest.(check bool)
+    "nothing in the project" false
+    (Sys.file_exists project_file);
+  (* The agent's own account of its environment: the placeholder, never the
+     key. *)
+  let dump =
+    Yojson.Safe.from_file (Filename.concat r.run_dir "state/agent-env.json")
+  in
+  let open Yojson.Safe.Util in
+  Alcotest.(check bool)
+    "the agent holds a placeholder" true
+    (String.starts_with ~prefix:"bactrian-"
+       (to_string (member "OPENAI_API_KEY" (member "env" dump))));
+  Alcotest.(check bool) "argv recorded" true (to_list (member "argv" dump) <> []);
+  Alcotest.(check (list string))
+    "no file of the world holds the real key" []
+    (List.filter (fun f -> contains (read f) real_key) (files_under dir));
+  match r.violations with
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+  | Collected vs when macos ->
+      (* Seatbelt logs each denial, with the remote host shown as [*]. *)
+      let seen kind needle =
+        List.exists
+          (fun (v : Sandbox_log.violation) ->
+            String.equal v.kind kind && contains v.detail needle)
+          vs
+      in
+      List.iter
+        (fun (what, kind, needle) ->
+          Alcotest.(check bool) what true (seen kind needle))
+        [
+          ("https", "network-outbound", ":443");
+          ("tcp", "network-outbound", ":853");
+          ("websocket", "network-outbound", ":80");
+          ("dns", "network-outbound", "mDNSResponder");
+          ("home write", "file-write-create", Filename.basename home_file);
+          ("project write", "file-write-create", "/escaped");
+          ("denied read", "file-read-data", "/secret/key");
+        ];
+      Alcotest.(check bool)
+        "in the trace" true
+        (List.mem "sandbox_violation"
+           (List.map
+              (fun j -> Yojson.Safe.Util.(to_string (member "type" j)))
+              (trace r)))
+  | Collected vs ->
+      (* Linux reports only relay failures, and the model call makes none. The
+         other denials show only as the agent's own errors, checked above. *)
+      Alcotest.(check int) "no relay failures" 0 (List.length vs)
+
 let () =
   Alcotest.run "acceptance"
     [
@@ -460,4 +646,7 @@ let () =
                   `Slow (mcp_flags_acceptance a e))
               eras)
           agents );
+      ( "sandbox escapes",
+        List.map (fun a -> Alcotest.test_case a.name `Slow (escapes a)) escapers
+      );
     ]

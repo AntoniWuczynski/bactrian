@@ -26,6 +26,11 @@ jobs:
       - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
       - run: pnpm --dir examples/agents/typescript build
       - run: uv sync --locked --project examples/agents/python
+      - name: Type-check the sandbox escape agents
+        run: |
+          pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
+          uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py
+          uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py
       - run: opam install . --deps-only --with-test --locked
       # The sandbox tests need bubblewrap and unprivileged user namespaces,
       # which Ubuntu's AppArmor restriction blocks by default.

@@ -30,7 +30,9 @@
   ../../examples/agents/typescript/dist/agent.js
   ../../examples/agents/python/agent.py
   ../../examples/agents/python/pyproject.toml
-  ../../examples/agents/python/uv.lock)
+  ../../examples/agents/python/uv.lock
+  ../sandbox/escape.mts
+  ../sandbox/escape.py)
  (action
   (setenv
    BACTRIAN_EXE
