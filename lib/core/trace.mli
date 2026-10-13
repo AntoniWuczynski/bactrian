@@ -12,9 +12,11 @@ type clock = Enforced | Contract_only
 type usage = {
   input_tokens : int;  (** ["gen_ai.usage.input_tokens"] *)
   output_tokens : int;  (** ["gen_ai.usage.output_tokens"] *)
-  cached_input_tokens : int option;  (** ["gen_ai.usage.cached_input_tokens"] *)
-  cache_write_tokens : int option;  (** ["gen_ai.usage.cache_write_tokens"] *)
-  reasoning_tokens : int option;  (** ["gen_ai.usage.reasoning_tokens"] *)
+  cached_input_tokens : int option;
+      (** ["gen_ai.usage.cache_read.input_tokens"] *)
+  cache_write_tokens : int option;
+      (** ["gen_ai.usage.cache_write.input_tokens"] *)
+  reasoning_tokens : int option;  (** ["gen_ai.usage.reasoning.output_tokens"] *)
 }
 
 type join =

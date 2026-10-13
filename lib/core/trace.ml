@@ -147,11 +147,11 @@ type model_call_w = {
   output_tokens : int option;
       [@key "gen_ai.usage.output_tokens"] [@default None]
   cached_input_tokens : int option;
-      [@key "gen_ai.usage.cached_input_tokens"] [@default None]
+      [@key "gen_ai.usage.cache_read.input_tokens"] [@default None]
   cache_write_tokens : int option;
-      [@key "gen_ai.usage.cache_write_tokens"] [@default None]
+      [@key "gen_ai.usage.cache_write.input_tokens"] [@default None]
   reasoning_tokens : int option;
-      [@key "gen_ai.usage.reasoning_tokens"] [@default None]
+      [@key "gen_ai.usage.reasoning.output_tokens"] [@default None]
 }
 [@@deriving yojson]
 
@@ -379,7 +379,10 @@ let decoder_of_type : string -> (Yojson.Safe.t -> (event, string) result) option
             Error "expected an object")
   | _ -> None
 
-let take key fields = (List.assoc_opt key fields, List.remove_assoc key fields)
+let take key fields =
+  let found, rest = List.partition (fun (k, _) -> String.equal k key) fields in
+  (Option.map snd (List.nth_opt found 0), rest)
+
 let bad ~type_ reason = Error (Bad_entry { type_; reason })
 
 let int_field ~type_ key = function

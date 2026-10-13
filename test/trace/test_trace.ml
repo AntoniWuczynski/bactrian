@@ -178,6 +178,28 @@ let test_model_call_wire () =
   check_lacks line "cached_input_tokens";
   check_lacks line "null"
 
+let test_usage_wire_names () =
+  let line =
+    Trace.to_line
+      (entry_of 0
+         (Model_call
+            {
+              turn = 1;
+              protocol = "p";
+              model = "m";
+              status = 200;
+              usage = Some full_usage;
+              duration_ms = 1;
+              ttft_ms = None;
+            }))
+  in
+  check_has line "\"gen_ai.usage.cache_read.input_tokens\":3";
+  check_has line "\"gen_ai.usage.cache_write.input_tokens\":4";
+  check_has line "\"gen_ai.usage.reasoning.output_tokens\":5";
+  check_lacks line "cached_input_tokens";
+  check_lacks line "cache_creation";
+  check_lacks line "reasoning_tokens"
+
 let test_other_wire () =
   let line_of ev = Trace.to_line (entry_of 0 ev) in
   check_has
@@ -213,15 +235,33 @@ let test_stable_order () =
   Alcotest.(check string)
     "canonical" "{\"seq\":0,\"t_ms\":0,\"type\":\"done\",\"v\":1}" line
 
-let bad_entry = Error (Trace.Bad_entry { type_ = ""; reason = "" })
+let contains hay needle =
+  match Re.exec_opt (Re.compile (Re.str needle)) hay with
+  | Some _ -> true
+  | None -> false
+
+(* A rejected entry must carry the entry type and a reason naming the cause. *)
+let check_bad name ~type_ ~mentions line =
+  match Trace.of_line line with
+  | Error (Trace.Bad_entry { type_ = t; reason }) ->
+      Alcotest.(check string) (name ^ " type") type_ t;
+      if not (contains reason mentions) then
+        Alcotest.failf "%s: reason %S does not mention %S" name reason mentions
+  | Error (Invalid_json _ | Unsupported_version _ | Unknown_type _) | Ok _ ->
+      Alcotest.failf "%s: expected Bad_entry" name
 
 let test_rejections () =
-  Alcotest.check parsed "unknown field" bad_entry
-    (Trace.of_line
-       "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"done\",\"extra\":1}");
-  Alcotest.check parsed "unknown field in payload" bad_entry
-    (Trace.of_line
-       "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"reply\",\"turn\":1,\"content\":\"a\",\"extra\":1}");
+  check_bad "unknown field" ~type_:"done" ~mentions:"no fields"
+    "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"done\",\"extra\":1}";
+  (* The decoder reports only the record type, so a control without the extra
+     field shows the extra field is the cause. *)
+  Alcotest.(check bool)
+    "control decodes" true
+    (Result.is_ok
+       (Trace.of_line
+          "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"reply\",\"turn\":1,\"content\":\"a\"}"));
+  check_bad "unknown field in payload" ~type_:"reply" ~mentions:"reply_w"
+    "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"reply\",\"turn\":1,\"content\":\"a\",\"extra\":1}";
   Alcotest.check parsed "unknown type" (Error (Trace.Unknown_type "x"))
     (Trace.of_line "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"x\"}");
   Alcotest.check parsed "v 2" (Error (Trace.Unsupported_version 2))
@@ -230,18 +270,15 @@ let test_rejections () =
     (Trace.of_line "{");
   Alcotest.check parsed "duplicate key" (Error (Trace.Invalid_json ""))
     (Trace.of_line "{\"v\":1,\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"done\"}");
-  Alcotest.check parsed "missing field" bad_entry
-    (Trace.of_line
-       "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"reply\",\"turn\":1}");
-  Alcotest.check parsed "missing envelope" bad_entry
-    (Trace.of_line "{\"v\":1,\"seq\":0,\"type\":\"done\"}");
-  Alcotest.check parsed "not an object" bad_entry (Trace.of_line "[1]");
-  Alcotest.check parsed "half usage" bad_entry
-    (Trace.of_line
-       "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"model_call\",\"turn\":1,\"protocol\":\"p\",\"gen_ai.request.model\":\"m\",\"status\":200,\"duration_ms\":1,\"gen_ai.usage.input_tokens\":1}");
-  Alcotest.check parsed "bad clock" bad_entry
-    (Trace.of_line
-       "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"run_start\",\"run_id\":\"r\",\"scenario\":\"s\",\"variant\":\"v\",\"sim_now\":\"t\",\"clock\":\"nope\"}")
+  check_bad "missing field" ~type_:"reply" ~mentions:"content"
+    "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"reply\",\"turn\":1}";
+  check_bad "missing envelope" ~type_:"done" ~mentions:"t_ms"
+    "{\"v\":1,\"seq\":0,\"type\":\"done\"}";
+  check_bad "not an object" ~type_:"" ~mentions:"object" "[1]";
+  check_bad "half usage" ~type_:"model_call" ~mentions:"output_tokens"
+    "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"model_call\",\"turn\":1,\"protocol\":\"p\",\"gen_ai.request.model\":\"m\",\"status\":200,\"duration_ms\":1,\"gen_ai.usage.input_tokens\":1}";
+  check_bad "bad clock" ~type_:"run_start" ~mentions:"clock"
+    "{\"v\":1,\"seq\":0,\"t_ms\":0,\"type\":\"run_start\",\"run_id\":\"r\",\"scenario\":\"s\",\"variant\":\"v\",\"sim_now\":\"t\",\"clock\":\"nope\"}"
 
 let test_error_type_carried () =
   match
@@ -378,6 +415,7 @@ let () =
         [
           Alcotest.test_case "round trip" `Quick test_round_trip;
           Alcotest.test_case "model_call wire" `Quick test_model_call_wire;
+          Alcotest.test_case "usage wire names" `Quick test_usage_wire_names;
           Alcotest.test_case "other wire" `Quick test_other_wire;
           Alcotest.test_case "stable order" `Quick test_stable_order;
           Alcotest.test_case "rejections" `Quick test_rejections;
