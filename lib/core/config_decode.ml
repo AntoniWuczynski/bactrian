@@ -106,15 +106,24 @@ let seconds_of_duration s =
     | _ -> None
 
 let duration ~path c =
-  let* s = string ~path c in
-  match seconds_of_duration s with
-  | Some v -> Ok v
-  | None ->
-      fail ~path
-        (Printf.sprintf
-           "invalid duration %S, expected a positive number with unit ms, s or \
-            m, such as \"250ms\", \"120s\" or \"2m\""
-           s)
+  match (c : Canon.t) with
+  | Int _ | Float _ ->
+      let* v = float ~path c in
+      if v > 0.0 then Ok v
+      else
+        fail ~path
+          (Printf.sprintf "a duration in seconds must be positive, found %g" v)
+  | Null | Bool _ | Big_int _ | String _ | List _ | Object _ -> (
+      let* s = string ~path c in
+      match seconds_of_duration s with
+      | Some v -> Ok v
+      | None ->
+          fail ~path
+            (Printf.sprintf
+               "invalid duration %S, expected a positive number of seconds or \
+                a number with unit ms, s or m, such as 90, \"250ms\", \"120s\" \
+                or \"2m\""
+               s))
 
 let regex ~path c =
   let* s = string ~path c in

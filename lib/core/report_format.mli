@@ -44,6 +44,10 @@ val trace_line : Trace.entry -> string
 val exit_meaning : int -> string
 (** What a gate exit status means. *)
 
+val value_estimand_text : string
+(** What the cost, tokens and latency comparisons estimate, for a report header.
+*)
+
 val interval : (float -> string) -> Stats.interval -> string
 (** [lower to upper]. *)
 
@@ -54,6 +58,23 @@ val threshold_text : Compare.metric -> float -> string
     ["20.0% dearer, 16.7% cheaper"] (a regression is more than 20% dearer, an
     improvement more than 16.7% cheaper). Latency says slower and faster, tokens
     more and fewer. *)
+
+val undefined_text : Report_data.metric_row -> string option
+(** For an undefined metric, one sentence naming it, saying whether it counts as
+    inconclusive in the gate, and why it is undefined. *)
+
+val zero_width_text : Report_data.metric_row -> string option
+(** For a cost, latency or tokens interval of zero width, one sentence saying
+    that every resample gave the same value, which is certain only if the values
+    are deterministic. *)
+
+val notes : Report_data.metric_row -> string list
+(** {!undefined_text}, {!zero_width_text} and {!extra_repeats_text}, those that
+    apply, in that order. *)
+
+val extra_repeats_text : Report_data.metric_row -> string option
+(** For an inconclusive gate metric, one sentence on the extra repeats that
+    would resolve it, naming the metric. *)
 
 val metric_texts : Report_data.metric_row -> string * string * string
 (** The estimate, the interval and the threshold ({!threshold_text}) of a

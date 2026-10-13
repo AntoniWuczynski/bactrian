@@ -110,6 +110,13 @@ let exit_meaning = function
   | 3 -> "missing data may bias the comparison"
   | n -> Printf.sprintf "exit status %d" n
 
+let value_estimand_text =
+  "Cost and tokens: the ratio of the candidate's mean per run to the \
+   baseline's, each mean weighting every scenario equally. Latency: the \
+   average over scenarios of each scenario's ratio of medians (a geometric \
+   mean). Both over the scenarios that both arms finished, with bootstrap \
+   intervals that resample runs within each scenario."
+
 let interval f (i : Stats.interval) =
   Printf.sprintf "%s to %s" (f i.lower) (f i.upper)
 
@@ -128,10 +135,62 @@ let threshold_text (metric : Compare.metric) delta =
   | Latency_p50 -> relative "slower" "faster"
   | Tokens -> relative "more" "fewer"
 
+let undefined_text (m : Report_data.metric_row) =
+  Option.map
+    (fun reason ->
+      Printf.sprintf "%s is undefined%s: %s." (metric m.result.metric)
+        (if m.result.in_gate then " and counts as inconclusive in the gate"
+         else "")
+        reason)
+    m.result.undefined
+
+let extra_repeats_text (m : Report_data.metric_row) =
+  Option.map
+    (fun extra ->
+      let name = metric m.result.metric in
+      match extra with
+      | `Repeats n ->
+          Printf.sprintf
+            "%s is inconclusive: about %d more repeats per scenario and \
+             variant would resolve it, simulated with the observed pass rates \
+             as the truth (power 0.8)."
+            name n
+      | `Cannot_resolve ->
+          Printf.sprintf
+            "%s is inconclusive, and up to 2,000 more repeats per scenario and \
+             variant would not resolve it: the observed difference is too \
+             close to the threshold."
+            name
+      | `Not_simulated ->
+          Printf.sprintf
+            "%s is inconclusive. The simulator models pass rates only, so no \
+             repeat count is estimated for it."
+            name)
+    m.extra_repeats
+
+let zero_width_text (m : Report_data.metric_row) =
+  let i = m.result.interval in
+  match m.result.metric with
+  | Pass_rate -> None
+  | Cost | Latency_p50 | Tokens ->
+      if Float.equal i.lower i.upper then
+        Some
+          (Printf.sprintf
+             "%s has an interval of zero width: every resample gave the same \
+              value, because the values are tied in every scenario. That is \
+              certain only if they are deterministic, as in a replay."
+             (metric m.result.metric))
+      else None
+
+let notes m =
+  List.filter_map
+    (fun f -> f m)
+    [ undefined_text; zero_width_text; extra_repeats_text ]
+
 let metric_texts (m : Report_data.metric_row) =
   let threshold = threshold_text m.result.metric m.delta in
   match (m.relative, Float.is_nan m.result.estimate) with
-  | _, true -> ("undefined", "undefined", "")
+  | _, true -> ("undefined", "undefined", threshold)
   | None, false ->
       (points m.result.estimate, interval points m.result.interval, threshold)
   | Some (e, i), false -> (percent e, interval percent i, threshold)

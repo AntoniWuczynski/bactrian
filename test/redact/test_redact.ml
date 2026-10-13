@@ -261,7 +261,7 @@ let test_provider_patterns_compile () =
     "all six provider patterns compile" 6
     (List.length Bactrian_core.Redact.provider_key_patterns)
 
-(* Review M5: user patterns only see the strings of a JSON document. *)
+(* User patterns only see the strings of a JSON document. *)
 
 let user pattern = [ pat pattern ]
 
@@ -313,7 +313,7 @@ let test_structured () =
     "plain data lines are text" "data: <secret:1>\n"
     (scrub_s "tok_[a-z]{6}" "data: tok_abcdef\n")
 
-(* Review m19: normalise leaves the placeholders alone. *)
+(* Normalise leaves the placeholders alone. *)
 let test_mask_skips_placeholders () =
   let re source = Result.get_ok (Regex.compile source) in
   let n, out = Mask.text [ re {|\d+|} ] "<secret:1> and <secret:12> on 2026" in

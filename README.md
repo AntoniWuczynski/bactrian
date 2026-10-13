@@ -25,7 +25,7 @@ bactrian replay <run-id> -- node examples/agents/typescript/dist/agent.js
 bactrian replay <run-id> --mode until-divergence -- uv run --project examples/agents/python examples/agents/python/agent.py
 ```
 
-Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json`, `divergences.json` and the agent's stderr. `meta.json` also carries the run's cost in US dollars as the ledger attributed it, the total latency and token count of its model calls, and the `normalise` and `redact` patterns it was recorded under. A replay applies those patterns, whatever the command line says, so requests that a pattern changed still match. `divergences.json` lists each replay divergence with its kind, the nearest recorded exchange, the similarity and the paths that differ. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
+Recordings live in `./.bactrian/runs/`. Each run directory holds the recording (`cassette.jsonl`), a normalised trace of the conversation (`trace.jsonl`), `meta.json`, `divergences.json`, the agent's stderr and, for each checker that wrote any, its stderr (`checker-<i>.stderr`, the last 64 KiB). A checker's stderr never reaches the terminal. `meta.json` also carries the run's cost in US dollars as the ledger attributed it, the total latency and token count of its model calls, and the `normalise` and `redact` patterns it was recorded under. A replay applies those patterns, whatever the command line says, so requests that a pattern changed still match. `divergences.json` lists each replay divergence with its kind, the nearest recorded exchange, the similarity and the paths that differ. Add `--json` for machine-readable output. Exit status 0 means the run passed, 1 that the agent failed or the replay diverged. `bactrian --help` lists the rest.
 
 ## Experiments
 
@@ -134,7 +134,7 @@ Once an experiment has run, `compare` turns its runs into a verdict per metric, 
 bactrian compare <experiment-id> --baseline luna --candidate flash --gate
 ```
 
-The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required. Every gate metric needs a threshold under `thresholds`. None is ever assumed, so a missing one (including a missing experiment file or `compare` section) is a usage error, exit 64, naming the metric.
+The estimand (`suite` or `scenarios`), the confidence level, the gate and the thresholds come from the `compare` section of the experiment file, which the manifest points back to. `--baseline` and `--candidate` override it, the candidate defaults to the other variant when there are two, and if the experiment file is gone both flags are required. A mistake in the file is reported at its line and column, exit 64. Every gate metric needs a threshold under `thresholds`. None is ever assumed, so a missing one (including a missing experiment file or `compare` section) is a usage error, exit 64, naming the metric.
 
 ```yaml
 compare:
@@ -145,9 +145,9 @@ compare:
   thresholds: { pass_rate: 0.05, cost: 0.20, latency_p50: 0.25 }
 ```
 
-Each metric is a `regression`, an `improvement`, `no-change` or `inconclusive`, depending on whether its whole interval lies beyond, within or across the threshold. Cost, latency and token thresholds are relative and apply to the log of the ratio, so `cost: 0.20` calls a regression above 20% dearer and an improvement below 16.7% cheaper, and the report states both. Cost and latency need at least 5 values per scenario in each arm, otherwise the metric is undefined. Intervals for gate metrics are widened (Bonferroni) so the chance of any false regression stays within the confidence level. The report also lists new tool-call sequences, meaning ones in at least 10% of the candidate's runs and none of the baseline's.
+Each metric is a `regression`, an `improvement`, `no-change` or `inconclusive`, depending on whether its whole interval lies beyond, within or across the threshold. Cost, latency and token thresholds are relative and apply to the log of the ratio, so `cost: 0.20` calls a regression above 20% dearer and an improvement below 16.7% cheaper, and the report states both. Cost and tokens compare the mean per run, weighting every scenario equally, so a change confined to a few scenarios still shows. Latency compares each scenario's median and averages the ratios over scenarios (a geometric mean), so a few slow runs do not dominate. Cost, latency and tokens need at least 5 values per scenario in each arm, otherwise the metric is undefined. Intervals for gate metrics are widened (Bonferroni) so the chance of any false regression stays within the confidence level. The report also lists new tool-call sequences, meaning ones in at least 10% of the candidate's runs and none of the baseline's.
 
-Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed, 2 that one is inconclusive (only with `--fail-on-inconclusive`), and 3 that missing data could bias the result, because more than 5% of an arm errored, the share of errored and unrun runs differs between the arms by more than 5 percentage points, or a scenario has no finished run in one arm (it is left out of the comparison and listed). An undefined gate metric counts as inconclusive, never as a pass. `--json` prints the verdicts as one JSON object with a schema version.
+Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed, 2 that one is inconclusive (only with `--fail-on-inconclusive`), and 3 that missing data could bias the result, because more than 5% of an arm errored, the share of errored and unrun runs differs between the arms by more than 5 percentage points, or a scenario has no finished run in one arm (it is left out of the comparison and listed). They are checked in the order 1, 3, 2: a regression wins over missing data, and missing data over an inconclusive metric. An undefined gate metric counts as inconclusive, never as a pass. For an inconclusive pass rate in the gate, `compare` and `report` also say how many more repeats per scenario and variant would resolve it, by simulating the same decision rule with the observed rates as the truth, or that more repeats would not. Under `population: scenarios` that simulation runs a bootstrap per simulated experiment and can take minutes. `--json` prints the verdicts as one JSON object with a schema version, with `extra_repeats` on each metric.
 
 `plan` says how many repeats are needed before you run anything, by simulating the same decision rule:
 
@@ -155,7 +155,7 @@ Without `--gate` the exit status is 0. With it, 1 means a gate metric regressed,
 bactrian plan --baseline-rate 0.9 --threshold 0.05 --scenarios 12
 ```
 
-The assumed effect defaults to twice the threshold and the power to 0.8. The power it prints comes from a fresh simulation at the chosen repeat count, so it can sit just below the target. It answers `unreachable` if no repeat count up to `--max-repeats` (200) gets there. `--population scenarios` also needs `--between-sd`.
+The assumed effect defaults to twice the threshold and the power to 0.8, and the first line names the verdict it plans for: a regression when the assumed drop is at least the threshold, an improvement when it is at most minus the threshold, otherwise no change. The power it prints comes from a fresh simulation at the chosen repeat count, so it can sit just below the target. It answers `unreachable` if no repeat count up to `--max-repeats` (200) gets there. `--population scenarios` also needs `--between-sd`. When the gate has more than one metric, pass `--gate-metrics N`: the pass rate is then judged at the Bonferroni level, as `compare` judges it, which needs more repeats. `--from <experiment-id>` takes the scenarios and their baseline rates from an earlier experiment's finished runs, of `compare.baseline` unless `--variant` names another.
 
 `report` writes everything as one HTML file with inline styles and charts and no scripts or external assets, so it works offline and follows the system's light or dark theme:
 
@@ -163,7 +163,7 @@ The assumed effect defaults to twice the threshold and the power to 0.8. The pow
 bactrian report <experiment-id> -o report.html
 ```
 
-It holds the estimand, gate and missing data per arm, the verdicts, a forest plot per scenario, cost and latency charts, the signature comparison, and each failure with its assertion messages and a collapsible trace.
+It holds the estimand, gate and missing data per arm, the verdicts, a forest plot per scenario, each scenario and variant's pass rate (with a Wilson interval), pass^k for every k and the median and 90th percentile of cost, tokens, latency and time to first token (with bootstrap intervals), cost, latency and token charts over the compared scenarios, the signature comparison, and each failure with its assertion messages and a collapsible trace.
 
 ## Building from source
 

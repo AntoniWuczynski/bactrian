@@ -15,9 +15,9 @@ type entry = {
   max_input : int;
 }
 
-(* Sources: risk-providers research sections 9 to 12 (2026-10-13) and spec §11.
-   OpenAI and Gemini figures came through a summarising fetch and need a
-   re-check against the pricing pages. *)
+(* Sources: the providers' published pricing pages as read on 2026-10-13.
+   The OpenAI and Gemini figures came through a summarising fetch and need a
+   re-check against those pages. *)
 
 let always = "1970-01-01"
 
@@ -25,7 +25,7 @@ let always = "1970-01-01"
 let r input cached_input cache_write output =
   { input; cached_input; cache_write; output }
 
-(* ASSUMPTION: the research does not give a documented maximum output for
+(* ASSUMPTION: no documented maximum output was found for
    OpenAI or Gemini models, so they use 65536. Only used to size worst-case
    reservations, where a wrong value merely over- or under-reserves. *)
 let assumed_max_output = 65_536
@@ -34,7 +34,7 @@ let assumed_max_output = 65_536
 let claude_max_output = 128_000
 
 (* Context windows, in prompt tokens. Claude 5.x: 1M (models overview page).
-   ASSUMPTIONS: the research documents no window for Gemini (1M used) and only
+   ASSUMPTIONS: no documented window was found for Gemini (1M used), and only
    the 272K short-context tier for OpenAI (272K used). They size reservations
    for requests that reference content the body does not contain, so a wrong
    value over- or under-reserves. *)

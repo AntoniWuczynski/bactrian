@@ -20,6 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 import statsmodels.stats.proportion as _sm_proportion  # type: ignore[import-untyped]  # statsmodels ships no type information and no stubs exist
 from scipy.stats import norm
+from scipy.stats import t as student_t
 
 OUT_DIR: Final = Path(__file__).resolve().parent.parent.parent / "test" / "fixtures" / "stats"
 
@@ -59,6 +60,11 @@ STRATIFIED_CASES: Final = [
     ([(20, 20), (19, 20), (16, 20), (10, 20), (4, 20)], [(19, 20), (18, 20), (15, 20), (9, 20), (3, 20)]),
 ]  # fmt: skip
 STRATIFIED_CONFIDENCES: Final = [0.9, 0.95, 1 - 0.05 / 3]
+T_DFS: Final = [1, 2, 3, 4, 5, 9, 29, 199]
+T_PS: Final = [0.6, 0.9, 0.95, 0.975, 0.995, 1 - 0.05 / 12, 0.9999]
+NORMAL_CDF_XS: Final = [-8.0, -3.0, -1.0, 0.0, 0.5, 1.959963984540054, 4.0]
+# (runs per scenario and arm, confidence)
+EXPANDED_CASES: Final = [(n, c) for n in [2, 5, 10, 40, 400] for c in [0.9, 0.95, 0.975, 1 - 0.05 / 3]]
 
 
 class _ProportionConfint(Protocol):
@@ -87,6 +93,22 @@ def _newcombe_p2_minus_p1(s1: int, n1: int, s2: int, n2: int, confidence: float)
 
 def _norm_ppf(p: float) -> float:
     return float(norm.ppf(p))
+
+
+def _norm_cdf(x: float) -> float:
+    return float(norm.cdf(x))
+
+
+def _t_ppf(p: float, df: int) -> float:
+    return float(student_t.ppf(p, df))
+
+
+def _expanded_level(n: int, confidence: float) -> float:
+    # Hesterberg (2015), "What Teachers Should Know About the Bootstrap", The American Statistician 69(4):371-386:
+    # the expanded percentile interval uses the bootstrap quantiles at the level whose normal critical value is
+    # sqrt(n / (n - 1)) t_{(1 + confidence) / 2, n - 1}, which corrects the narrowness of a small-sample bootstrap.
+    z = math.sqrt(n / (n - 1)) * _t_ppf((1 + confidence) / 2, n - 1)
+    return 1 - 2 * float(norm.sf(z))
 
 
 def _quantile(values: list[float], q: float) -> float:
@@ -154,6 +176,21 @@ def main() -> None:
     _write("newcombe.json", "Newcombe hybrid score (method 10) interval for p2 - p1, where p1 = s1/n1 is the baseline and p2 = s2/n2 the candidate", newcombe)
 
     _write("normal_quantile.json", "scipy.stats.norm.ppf(p)", [{"p": p, "z": _norm_ppf(p)} for p in NORMAL_PS])
+
+    _write("normal_cdf.json", "scipy.stats.norm.cdf(x)", [{"x": x, "p": _norm_cdf(x)} for x in NORMAL_CDF_XS])
+
+    _write(
+        "student_t_quantile.json",
+        "scipy.stats.t.ppf(p, df)",
+        [{"df": df, "p": p, "t": _t_ppf(p, df)} for df in T_DFS for p in T_PS],
+    )
+
+    _write(
+        "expanded_level.json",
+        "Expanded percentile level (Hesterberg 2015): 1 - 2 * scipy.stats.norm.sf(z) with "
+        "z = sqrt(n / (n - 1)) * scipy.stats.t.ppf((1 + confidence) / 2, n - 1)",
+        [{"n": n, "confidence": c, "level": _expanded_level(n, c)} for n, c in EXPANDED_CASES],
+    )
 
     _write(
         "quantile.json",

@@ -22,27 +22,36 @@ let cell_elt = function
         ]
   | New -> H.td [ H.span ~a:[ H.a_class [ "badge"; "new" ] ] [ H.txt "new" ] ]
 
-(* The first cell of each row is its header. *)
+(* The first cell of each row is its header. The caption is shown above the
+   scrolling wrapper, so a narrow screen never scrolls it out of view, and kept
+   in the table, hidden, as its accessible name. *)
 let table ~caption ~head rows =
   H.div
-    ~a:[ H.a_class [ "scroll" ] ]
     [
-      H.table
-        ~caption:(H.caption [ H.txt caption ])
-        ~thead:
-          (H.thead
-             [
-               H.tr
-                 (List.map
-                    (fun h -> H.th ~a:[ H.a_scope `Col ] [ H.txt h ])
-                    head);
-             ])
-        (List.map
-           (fun (header, cells) ->
-             H.tr
-               (H.th ~a:[ H.a_scope `Row ] [ H.txt header ]
-               :: List.map cell_elt cells))
-           rows);
+      H.p
+        ~a:[ H.a_class [ "caption" ]; H.a_aria "hidden" [ "true" ] ]
+        [ H.txt caption ];
+      H.div
+        ~a:[ H.a_class [ "scroll" ] ]
+        [
+          H.table
+            ~caption:
+              (H.caption ~a:[ H.a_class [ "sr-only" ] ] [ H.txt caption ])
+            ~thead:
+              (H.thead
+                 [
+                   H.tr
+                     (List.map
+                        (fun h -> H.th ~a:[ H.a_scope `Col ] [ H.txt h ])
+                        head);
+                 ])
+            (List.map
+               (fun (header, cells) ->
+                 H.tr
+                   (H.th ~a:[ H.a_scope `Row ] [ H.txt header ]
+                   :: List.map cell_elt cells))
+               rows);
+        ];
     ]
 
 let section id title body =
@@ -73,8 +82,11 @@ let gate_text (d : D.t) =
                  Printf.sprintf "%s (threshold %.1f percentage points)" m.name
                    (m.delta *. 100.)
              | Cost | Latency_p50 | Tokens ->
-                 Printf.sprintf "%s (threshold %s)" m.name
-                   (F.threshold_text m.result.metric m.delta))
+                 Printf.sprintf "%s (threshold %s%s)" m.name
+                   (F.threshold_text m.result.metric m.delta)
+                   (match m.result.undefined with
+                   | Some _ -> ", undefined, counts as inconclusive"
+                   | None -> ""))
            gate)
 
 let fact name value = [ H.dt [ H.txt name ]; H.dd [ H.txt value ] ]
@@ -91,6 +103,7 @@ let header (d : D.t) =
         (List.concat
            [
              fact "Estimand" (estimand_text d.population);
+             fact "Cost, tokens and latency" F.value_estimand_text;
              fact "Confidence" (Printf.sprintf "%.0f%%" (d.confidence *. 100.));
              fact "Gate family" (gate_text d);
              fact "Level per gate interval"
@@ -137,27 +150,29 @@ let verdict_table (d : D.t) =
     let estimate, ival, threshold = F.metric_texts m in
     ( F.metric r.metric,
       [
+        Badge r.verdict;
         Text (if r.in_gate then "yes" else "no");
         Num estimate;
         Num ival;
         Num (Printf.sprintf "%.4f" r.level);
         Num threshold;
-        Badge r.verdict;
       ] )
   in
   table
     ~caption:
       "Candidate against baseline. Pass rate is a difference in percentage \
-       points. The others are relative changes in the median."
+       points. Cost and tokens are relative changes in the scenario-weighted \
+       mean, latency in the typical scenario's median."
     ~head:
+      (* The verdict comes second, so it is in view on a narrow screen. *)
       [
         "Metric";
+        "Verdict";
         "In gate";
         "Estimate";
         "Interval";
         "Level";
         "Threshold";
-        "Verdict";
       ]
     (List.map row d.metrics)
 
@@ -173,21 +188,40 @@ let pass_rate_delta (d : D.t) =
   |> Option.value ~default:0.
 
 let forest_section (d : D.t) =
-  let suite =
+  let pass_rate =
     List.find_map
       (fun (m : D.metric_row) ->
         match m.result.metric with
-        | Pass_rate when not (Float.is_nan m.result.estimate) ->
-            Some
-              {
-                Report_charts.label = "All scenarios";
-                estimate = m.result.estimate;
-                interval = m.result.interval;
-                verdict = m.result.verdict;
-                emphasis = true;
-              }
+        | Pass_rate when not (Float.is_nan m.result.estimate) -> Some m.result
         | Pass_rate | Cost | Latency_p50 | Tokens -> None)
       d.metrics
+  in
+  let suite =
+    Option.map
+      (fun (r : Compare.metric_result) ->
+        {
+          Report_charts.label =
+            Printf.sprintf "All scenarios (level %.4f)" r.level;
+          estimate = r.estimate;
+          interval = r.interval;
+          verdict = r.verdict;
+          emphasis = true;
+        })
+      pass_rate
+  in
+  let suite_note =
+    match pass_rate with
+    | None -> ""
+    | Some r ->
+        Printf.sprintf
+          " The first row, all scenarios, is the %sinterval at level %.4f: %s."
+          (if r.in_gate then "gate's " else "")
+          r.level
+          (match d.population with
+          | `Suite -> "the stratified Newcombe interval"
+          | `Scenarios ->
+              "the hull of the hierarchical bootstrap and the stratified \
+               Newcombe interval")
   in
   let rows =
     Option.to_list suite
@@ -213,9 +247,9 @@ let forest_section (d : D.t) =
     [
       para ~cls:[ "note" ]
         (Printf.sprintf
-           "Newcombe intervals at level %.4f (Bonferroni across %d scenarios). \
-            Per-scenario results never fail the gate."
-           level (List.length d.scenarios));
+           "Per-scenario Newcombe intervals at level %.4f (Bonferroni across \
+            %d scenarios). Per-scenario results never fail the gate.%s"
+           level (List.length d.scenarios) suite_note);
       H.figure
         ~figcaption:
           (`Bottom
@@ -236,16 +270,17 @@ let forest_section (d : D.t) =
         ~head:
           [
             "Scenario";
+            "Verdict";
             "Baseline";
             "Candidate";
             "Difference";
             "Interval";
-            "Verdict";
           ]
         (List.map
            (fun (s : D.scenario_row) ->
              ( s.scenario,
                [
+                 Badge s.verdict;
                  Num
                    (Printf.sprintf "%s (%s)"
                       (F.share s.baseline_passes s.baseline_runs)
@@ -256,7 +291,6 @@ let forest_section (d : D.t) =
                       (F.rate s.candidate_passes s.candidate_runs));
                  Num (F.points s.difference);
                  Num (interval F.points s.interval);
-                 Badge s.verdict;
                ] ))
            d.scenarios);
     ]
@@ -267,6 +301,87 @@ let label (d : D.t) v =
   if String.equal v d.baseline then v ^ " (baseline)"
   else if String.equal v d.candidate then v ^ " (candidate)"
   else v
+
+(* Per scenario and variant *)
+
+let tokens_text x = Printf.sprintf "%.0f" x
+
+let measure_text format (m : Arm_stats.measure option) pick =
+  match m with
+  | None -> "none recorded"
+  | Some m -> (
+      let value, ival = pick m in
+      match ival with
+      | Some i -> Printf.sprintf "%s (%s)" (format value) (interval format i)
+      | None -> format value)
+
+let pass_hat_k_text = function
+  | [] -> "n/a"
+  | ps ->
+      String.concat ", "
+        (List.mapi (fun i p -> Printf.sprintf "%d: %.3f" (i + 1) p) ps)
+
+let arm_table (d : D.t) scenario (arms : D.arm_row list) =
+  (* Text cells, which wrap: a value with its interval, or pass^k for every k,
+     would otherwise push the other variant off a narrow screen. *)
+  let col f = List.map (fun (a : D.arm_row) -> Text (f a.stats)) arms in
+  let measure_rows name format (get : Arm_stats.t -> Arm_stats.measure option) =
+    [
+      ( name ^ ", median",
+        col (fun s ->
+            measure_text format (get s) (fun (m : Arm_stats.measure) ->
+                (m.median, m.median_interval))) );
+      ( name ^ ", 90th percentile",
+        col (fun s ->
+            measure_text format (get s) (fun (m : Arm_stats.measure) ->
+                (m.p90, m.p90_interval))) );
+    ]
+  in
+  table ~caption:scenario
+    ~head:("Measure" :: List.map (fun (a : D.arm_row) -> label d a.variant) arms)
+    ([
+       ( "Finished runs",
+         col (fun s ->
+             Printf.sprintf "%d (%d errored, %d not run)" s.finished s.errored
+               s.not_run) );
+       ( "Pass rate",
+         col (fun s ->
+             match s.wilson with
+             | Some i ->
+                 Printf.sprintf "%s, %s (%s)"
+                   (F.share s.passes s.finished)
+                   (F.rate s.passes s.finished)
+                   (interval (fun x -> Printf.sprintf "%.0f%%" (100. *. x)) i)
+             | None -> "n/a") );
+       ("pass^k for k = 1 to n", col (fun s -> pass_hat_k_text s.pass_hat_k));
+     ]
+    @ measure_rows "Cost" F.usd (fun s -> s.cost)
+    @ measure_rows "Tokens" tokens_text (fun s -> s.tokens)
+    @ measure_rows "Latency" F.ms (fun s -> s.latency_ms)
+    @ measure_rows "Time to first token" F.ms (fun s -> s.ttft_ms))
+
+let arms_section (d : D.t) =
+  let scenarios =
+    List.sort_uniq String.compare
+      (List.map (fun (a : D.arm_row) -> a.scenario) d.arms)
+  in
+  section "arms" "Per scenario and variant"
+    (para ~cls:[ "note" ]
+       (Printf.sprintf
+          "Over finished runs. Pass rates have Wilson score intervals, the \
+           others percentile bootstrap intervals that resample whole runs, all \
+           at level %.4f (Bonferroni across %d scenarios), and need at least \
+           %d runs. pass^k estimates the chance that k runs in a row all pass. \
+           Latency is the time spent in model calls per run, time to first \
+           token is per model call."
+          d.arms_level (List.length scenarios) Arm_stats.min_runs)
+    :: List.map
+         (fun s ->
+           arm_table d s
+             (List.filter
+                (fun (a : D.arm_row) -> String.equal a.scenario s)
+                d.arms))
+         scenarios)
 
 let measure_block (d : D.t) ~id ~title ~noun ~format
     (get : D.summary -> D.dist option) =
@@ -309,20 +424,28 @@ let measure_block (d : D.t) ~id ~title ~noun ~format
       ]
 
 let measures_section (d : D.t) =
-  section "cost-latency" "Cost and latency"
+  section "cost-latency" "Cost, latency and tokens"
     (para ~cls:[ "note" ]
-       "Over finished runs. Latency is the time spent in model calls. The \
-        verdict table compares medians with bootstrap intervals."
+       "Over the finished runs of the scenarios both arms finished, the runs \
+        the verdicts are about. Latency is the time spent in model calls. The \
+        verdict table compares scenario-weighted means of cost and tokens and \
+        per-scenario medians of latency, with bootstrap intervals."
     :: (measure_block d ~id:"cost" ~title:"Cost per run" ~noun:"cost"
           ~format:F.usd (fun s -> s.cost)
        @ measure_block d ~id:"latency" ~title:"Latency per run" ~noun:"latency"
-           ~format:F.ms (fun s -> s.latency)))
+           ~format:F.ms (fun s -> s.latency)
+       @ measure_block d ~id:"tokens" ~title:"Tokens per run"
+           ~noun:"token count" ~format:tokens_text (fun s -> s.tokens)))
 
 (* Behaviour *)
 
 let signatures_table (b : D.behaviour) =
   let count (l : D.signature_count list) s =
-    match List.find_opt (fun (x : D.signature_count) -> x.signature = s) l with
+    match
+      List.find_opt
+        (fun (x : D.signature_count) -> List.equal String.equal x.signature s)
+        l
+    with
     | Some x -> x.count
     | None -> 0
   in
@@ -331,7 +454,10 @@ let signatures_table (b : D.behaviour) =
     @ List.map
         (fun (x : D.signature_count) -> x.signature)
         b.baseline_signatures
-    |> List.fold_left (fun acc s -> if List.mem s acc then acc else s :: acc) []
+    |> List.fold_left
+         (fun acc s ->
+           if List.exists (List.equal String.equal s) acc then acc else s :: acc)
+         []
     |> List.rev
   in
   table ~caption:"Tool-call sequences"
@@ -344,7 +470,9 @@ let signatures_table (b : D.behaviour) =
            [
              Num (Printf.sprintf "%d (%s)" cb (F.rate cb b.baseline_traced));
              Num (Printf.sprintf "%d (%s)" cc (F.rate cc b.candidate_traced));
-             (if List.mem s b.new_signatures then New else Text "");
+             (if List.exists (List.equal String.equal s) b.new_signatures then
+                New
+              else Text "");
            ] ))
        all)
 
@@ -505,8 +633,13 @@ let page (d : D.t) =
            [
              header d;
              section "verdicts" "Verdicts"
-               ([ verdict_table d; missing_table d ] @ dropped_note d);
+               (verdict_table d
+                :: List.concat_map
+                     (fun m -> List.map (para ~cls:[ "note" ]) (F.notes m))
+                     d.metrics
+               @ (missing_table d :: dropped_note d));
              forest_section d;
+             arms_section d;
              measures_section d;
              behaviour_section d;
              failures_section d;

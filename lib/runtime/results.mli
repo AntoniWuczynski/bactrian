@@ -9,7 +9,7 @@ type loaded = {
   manifest : Executor.manifest;
   experiment : Experiment.t option;
       (** Re-read from the experiment file the manifest records. [None] when
-          that file is no longer readable or valid. *)
+          that file no longer exists. *)
   runs : Report_data.run list;  (** In plan order. *)
 }
 
@@ -17,6 +17,9 @@ type error =
   | No_such_experiment of string
   | Bad_manifest of string
   | Bad_run of { run_id : string; file : string; reason : string }
+  | Bad_experiment of Config_loader.located_error list
+      (** The experiment file exists but does not load: every error, with its
+          location. *)
 
 val pp_error : Format.formatter -> error -> unit
 

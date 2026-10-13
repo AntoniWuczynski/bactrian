@@ -37,7 +37,7 @@ let trace ~tools ~ms ~tokens =
                  reasoning_tokens = None;
                };
            duration_ms = ms;
-           ttft_ms = None;
+           ttft_ms = Some (ms / 4);
          };
      ]
       : Trace.event list)

@@ -11,6 +11,7 @@ let base : P.assumption =
     between_sd = None;
     population = `Suite;
     confidence = 0.95;
+    gate_metrics = 1;
     power = 0.8;
     max_repeats = 100;
     seed = 7;
@@ -49,7 +50,7 @@ let test_found_n_reaches_power () =
   | P.Unreachable _ -> Alcotest.fail "unexpected Unreachable"
 
 let test_no_change_at_ceiling () =
-  (* M2: with the old zero-width interval, one run per arm "proved" no change
+  (* A zero-width interval would let one run per arm "prove" no change
      between two 100% arms. The stratified Newcombe interval of n/n against
      n/n is +-z^2/(n + z^2), inside +-0.05 from n = 73 at 0.95. *)
   let a =
@@ -107,6 +108,53 @@ let test_mc_se () =
         mc_se
   | P.Unreachable _ -> Alcotest.fail "unexpected Unreachable"
 
+(* The power reported is estimated on draws the search never saw. Were it the
+   search's own estimate, it would always clear the target, since the search
+   stops at the first count whose power does. *)
+let test_report_stream_independent () =
+  let a = { base with true_effect = 0.25; simulations = 60 } in
+  let below =
+    List.filter
+      (fun seed ->
+        match P.plan { a with seed } with
+        | P.Repeats { achieved_power; _ } -> achieved_power < a.power
+        | P.Unreachable _ -> false)
+      (List.init 20 Fun.id)
+  in
+  Alcotest.(check bool)
+    "some seed reports power below the target" true
+    (not (List.is_empty below))
+
+(* A gate of m metrics runs the pass rate at the Bonferroni level
+   1 - (1 - confidence) / m, which needs more runs. *)
+let test_gate_family () =
+  let two = { base with gate_metrics = 2 } in
+  let at_level =
+    { base with confidence = Stats.bonferroni_level ~confidence:0.95 ~family:2 }
+  in
+  Alcotest.(check (float 0.))
+    "two gate metrics simulate the Bonferroni level"
+    (P.power_at at_level ~repeats:15)
+    (P.power_at two ~repeats:15);
+  Alcotest.(check bool)
+    "and lose power" true
+    (P.power_at two ~repeats:15 < P.power_at base ~repeats:15);
+  let n1 = repeats (P.plan base)
+  and n3 = repeats (P.plan { base with gate_metrics = 3 }) in
+  Alcotest.(check bool) (Printf.sprintf "%d < %d" n1 n3) true (n1 < n3)
+
+let test_target () =
+  let target a = P.target a in
+  Alcotest.(check string)
+    "regression" "regression"
+    (Report_data.verdict_name (target base));
+  Alcotest.(check string)
+    "improvement" "improvement"
+    (Report_data.verdict_name (target { base with true_effect = -0.3 }));
+  Alcotest.(check string)
+    "no change" "no_change"
+    (Report_data.verdict_name (target { base with true_effect = 0.05 }))
+
 let test_runtime () =
   let t0 = Sys.time () in
   ignore (P.plan base);
@@ -149,7 +197,13 @@ let test_invalid () =
     (raises (fun () -> P.plan { base with max_repeats = 0 }));
   Alcotest.(check bool)
     "simulations" true
-    (raises (fun () -> P.plan { base with simulations = 0 }))
+    (raises (fun () -> P.plan { base with simulations = 0 }));
+  Alcotest.(check bool)
+    "gate metrics" true
+    (raises (fun () -> P.plan { base with gate_metrics = 0 }));
+  Alcotest.(check bool)
+    "zero threshold" true
+    (raises (fun () -> P.plan { base with threshold = 0. }))
 
 let runs ~scenario ~variant ~passes ~total : Compare.run list =
   List.init total (fun i ->
@@ -184,7 +238,8 @@ let extra =
     testable
       (fun ppf -> function
         | `Repeats n -> Fmt.pf ppf "Repeats %d" n
-        | `Cannot_resolve -> Fmt.string ppf "Cannot_resolve")
+        | `Cannot_resolve -> Fmt.string ppf "Cannot_resolve"
+        | `Not_simulated -> Fmt.string ppf "Not_simulated")
       ( = ))
 
 let test_extra_conclusive () =
@@ -195,7 +250,7 @@ let test_extra_needed () =
   (* Observed drop of 0.4 with 10 runs: inconclusive, resolvable. *)
   match P.extra_runs_needed (input ~a:8 ~b:4 ~n:10) ~metric:Pass_rate with
   | `Repeats n -> Alcotest.(check bool) "positive" true (n > 0)
-  | `Cannot_resolve -> Alcotest.fail "should be resolvable"
+  | `Cannot_resolve | `Not_simulated -> Alcotest.fail "should be resolvable"
 
 let test_extra_on_threshold () =
   (* Observed drop of exactly the threshold: never resolvable. *)
@@ -210,10 +265,25 @@ let test_extra_expensive () =
   | `Repeats n ->
       Alcotest.(check bool) (Printf.sprintf "%d beyond 190" n) true (n > 190);
       Alcotest.(check bool) (Printf.sprintf "%d within 2,000" n) true (n <= 2000)
-  | `Cannot_resolve -> Alcotest.fail "expensive, not unresolvable"
+  | `Cannot_resolve | `Not_simulated ->
+      Alcotest.fail "expensive, not unresolvable"
+
+let test_extra_gate_family () =
+  (* The same data gated with a second metric is judged at 0.975, so it needs
+     more runs to resolve. *)
+  let one = input ~a:8 ~b:4 ~n:10 in
+  let two = { one with gate = [ (Pass_rate, 0.1); (Cost, 0.2) ] } in
+  match
+    ( P.extra_runs_needed one ~metric:Pass_rate,
+      P.extra_runs_needed two ~metric:Pass_rate )
+  with
+  | `Repeats n1, `Repeats n2 ->
+      Alcotest.(check bool) (Printf.sprintf "%d < %d" n1 n2) true (n1 < n2)
+  | (`Repeats _ | `Cannot_resolve | `Not_simulated), _ ->
+      Alcotest.fail "both should be resolvable"
 
 let test_extra_other_metric () =
-  Alcotest.check extra "cost" `Cannot_resolve
+  Alcotest.check extra "cost" `Not_simulated
     (P.extra_runs_needed (input ~a:8 ~b:6 ~n:10) ~metric:Cost)
 
 let () =
@@ -236,6 +306,10 @@ let () =
           Alcotest.test_case "deterministic" `Quick test_deterministic;
           Alcotest.test_case "mc_se" `Quick test_mc_se;
           Alcotest.test_case "runtime" `Quick test_runtime;
+          Alcotest.test_case "reported power is independent" `Quick
+            test_report_stream_independent;
+          Alcotest.test_case "gate family" `Quick test_gate_family;
+          Alcotest.test_case "target verdict" `Quick test_target;
           Alcotest.test_case "scenarios between_sd" `Quick
             test_scenarios_between_sd;
           Alcotest.test_case "scenarios too few" `Quick test_scenarios_too_few;
@@ -247,6 +321,7 @@ let () =
           Alcotest.test_case "needed" `Quick test_extra_needed;
           Alcotest.test_case "on threshold" `Quick test_extra_on_threshold;
           Alcotest.test_case "expensive" `Quick test_extra_expensive;
+          Alcotest.test_case "gate family" `Quick test_extra_gate_family;
           Alcotest.test_case "other metric" `Quick test_extra_other_metric;
         ] );
     ]

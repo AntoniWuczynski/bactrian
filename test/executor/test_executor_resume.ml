@@ -1,11 +1,11 @@
 (* Spend attribution, resume rules, locking and the settings a build cannot
-   enforce yet (review B1, M2, M3, M7, m1, m15, m21). *)
+   enforce yet. *)
 
 open Bactrian_runtime
 open Executor_support
 module J = Yojson.Safe.Util
 
-(* B1: every reservation, settlement and gap belongs to the run that made it. *)
+(* Every reservation, settlement and gap belongs to the run that made it. *)
 
 let ledger_lines ctx (s : E.summary) =
   read ctx
@@ -182,7 +182,7 @@ let test_resume_after_cap =
         (List.mem id (run_ids again)))
     passed_before
 
-(* m15: one process runs an experiment at a time. *)
+(* One process runs an experiment at a time. *)
 
 let test_lock =
   with_ctx "lock" @@ fun ctx ->
@@ -225,7 +225,8 @@ let test_lock =
     (input_line (Unix.in_channel_of_descr stdout_r));
   mentions "already running" (refused (go ~resume:(Some s.experiment_id) ctx))
 
-(* M7 *)
+(* Settings this build parses but cannot enforce: a strict sandbox stops
+   the experiment, the others are listed. *)
 
 let test_sandbox_strict =
   with_ctx "strict" @@ fun ctx ->
@@ -249,7 +250,8 @@ let test_unenforced_warned_and_recorded =
            J.(to_list (member "unenforced" (run_meta ctx id)))))
     (run_ids s)
 
-(* m21, m1 *)
+(* Duplicate scenario IDs are configuration errors, reported with the
+   others. *)
 
 let configuration = function
   | Error (E.Configuration es) -> es

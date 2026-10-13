@@ -1,0 +1,6 @@
+(test
+ (name test_json_float)
+ (package bactrian)
+ (libraries bactrian.core yojson alcotest)
+ (flags
+  (:standard -w -70)))

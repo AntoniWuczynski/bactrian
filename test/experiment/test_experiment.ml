@@ -188,6 +188,18 @@ let test_ms_duration () =
   | Command { turn_timeout = 0.25; total_timeout = 1.5; _ } -> ()
   | Command _ | Http _ -> Alcotest.fail "ms duration"
 
+let test_bare_number_duration () =
+  let t =
+    decoded
+      (doc
+         ~agent:
+           {|"agent": {"protocol": "command", "command": ["x"], "timeouts": {"turn": 90, "total": 1.5}}|}
+         "")
+  in
+  match t.agent with
+  | Command { turn_timeout = 90.; total_timeout = 1.5; _ } -> ()
+  | Command _ | Http _ -> Alcotest.fail "a bare number is seconds"
+
 let test_caseless_normalise () =
   let t = decoded (doc {|, "normalise": ["(?i)date: .*"]|}) in
   Alcotest.(check int) "normalise" 1 (List.length t.normalise)
@@ -215,7 +227,7 @@ let test_message () =
   | [ { path = "colour"; message = "unknown field" } ] -> ()
   | es -> Alcotest.failf "got %a" pp_errors es
 
-(* Review M7: settings this build parses but does not enforce are listed. *)
+(* Settings this build parses but does not enforce are listed. *)
 let test_unenforced () =
   let names t =
     List.map
@@ -237,7 +249,7 @@ let test_unenforced () =
     [ "egress"; "clock" ]
     (names (decoded (doc {|, "sandbox": "strict"|})))
 
-(* Review m16: a variant cannot set a variable bactrian sets itself. *)
+(* A variant cannot set a variable bactrian sets itself. *)
 let test_reserved_env () =
   let reserved = Experiment.reserved_env in
   Alcotest.(check bool) "TZ" true (List.mem "TZ" reserved);
@@ -267,7 +279,18 @@ let test_reserved_env () =
        (doc ~variants:{|"variants": [{"name": "a", "env": {"SIM_NOW": "x"}}]|}
           ""))
 
-(* Review m1: a bad baseline is reported together with the other errors. *)
+let test_thresholds_in_range () =
+  Alcotest.check strings "zero and too large"
+    [ "compare.thresholds.cost"; "compare.thresholds.pass_rate" ]
+    (paths
+       (doc
+          {|, "compare": {"baseline": "a", "thresholds": {"pass_rate": 1, "cost": 0}}|}));
+  Alcotest.check strings "zero pass rate"
+    [ "compare.thresholds.pass_rate" ]
+    (paths
+       (doc {|, "compare": {"baseline": "a", "thresholds": {"pass_rate": 0}}|}))
+
+(* A bad baseline is reported together with the other errors. *)
 let test_baseline_with_other_errors () =
   Alcotest.check strings "both reported"
     [ "compare.baseline"; "repeats" ]
@@ -290,6 +313,8 @@ let () =
           Alcotest.test_case "compare defaults" `Quick test_compare_defaults;
           Alcotest.test_case "http agent and durations" `Quick test_http;
           Alcotest.test_case "millisecond durations" `Quick test_ms_duration;
+          Alcotest.test_case "bare number durations" `Quick
+            test_bare_number_duration;
           Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
@@ -303,6 +328,8 @@ let () =
             test_reserved_env;
           Alcotest.test_case "baseline with other errors" `Quick
             test_baseline_with_other_errors;
+          Alcotest.test_case "thresholds in range" `Quick
+            test_thresholds_in_range;
           case "unknown nested field" [ "agent.extra" ]
             (doc
                ~agent:
@@ -336,10 +363,15 @@ let () =
                ~agent:
                  {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":"0s"}}|}
                "");
-          case "duration without unit" [ "agent.timeouts.turn" ]
+          case "duration string without unit" [ "agent.timeouts.turn" ]
             (doc
                ~agent:
-                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":30}}|}
+                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":"30"}}|}
+               "");
+          case "bare duration not positive" [ "agent.timeouts.turn" ]
+            (doc
+               ~agent:
+                 {|"agent": {"protocol":"command","command":["x"],"timeouts":{"turn":0}}|}
                "");
           case "repeats below one" [ "repeats" ] (doc {|, "repeats": 0|});
           case "concurrency below one" [ "concurrency" ]

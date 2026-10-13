@@ -52,6 +52,9 @@ let render_compare_text ~colour (d : D.t) =
   line "estimand %s, confidence %.0f%%, seed %d, %d resamples"
     (match d.population with `Suite -> "suite" | `Scenarios -> "scenarios")
     (d.confidence *. 100.) d.seed d.resamples;
+  line
+    "cost and tokens compare scenario-weighted means, latency the geometric \
+     mean of per-scenario ratios of medians";
   line "gate: %s (level %.4f per interval)"
     (match d.gate with
     | [] -> "none"
@@ -83,6 +86,7 @@ let render_compare_text ~colour (d : D.t) =
                 verdict_text ~colour m.result.verdict;
               ])
             d.metrics));
+  List.iter (fun m -> List.iter (line "%s") (F.notes m)) d.metrics;
   line "";
   Buffer.add_string b
     (table
@@ -129,9 +133,16 @@ let render_compare_json d = Yojson.Safe.to_string (D.summary_json d) ^ "\n"
 (* Plan *)
 
 let population_name = function `Suite -> "suite" | `Scenarios -> "scenarios"
+let target_name a = D.verdict_name (Plan_sim.target a)
 
 let render_plan_text (a : Plan_sim.assumption) answer =
   let scenarios = List.length a.baseline_rates in
+  Printf.sprintf
+    "target verdict %s: assumed drop %.3f against threshold %.3f, gate of %d \
+     metric%s\n"
+    (target_name a) a.true_effect a.threshold a.gate_metrics
+    (if a.gate_metrics = 1 then "" else "s")
+  ^
   match answer with
   | Plan_sim.Repeats { n; achieved_power; mc_se } ->
       Printf.sprintf
@@ -165,11 +176,13 @@ let render_plan_json (a : Plan_sim.assumption) answer =
                  match a.between_sd with Some s -> float s | None -> `Null );
                ("population", `String (population_name a.population));
                ("confidence", float a.confidence);
+               ("gate_metrics", `Int a.gate_metrics);
                ("power", float a.power);
                ("max_repeats", `Int a.max_repeats);
                ("seed", `Int a.seed);
                ("simulations", `Int a.simulations);
              ] );
+         ("target", `String (target_name a));
          ( "answer",
            match answer with
            | Plan_sim.Repeats { n; achieved_power; mc_se } ->

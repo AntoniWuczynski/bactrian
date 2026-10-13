@@ -170,7 +170,7 @@ ones.
          0   on success, or when
          1   with --gate, when a
          2   with --gate and --f
-         3   with --gate, when m
+         3   with --gate and no 
          64  on a usage or confi
          70  on an internal erro
   $ bactrian plan --help=plain | sed -n '/^EXIT STATUS/,/^[A-Z]/p' | grep -cE '^ +[0-9]+ +(on|when)'
@@ -204,7 +204,7 @@ Planning checks its assumptions before simulating.
   $ bactrian plan --threshold 0.1 2> err.txt
   [64]
   $ grep -v '^Usage' err.txt
-  bactrian: plan needs at least one --baseline-rate
+  bactrian: plan needs at least one --baseline-rate, or --from
   $ bactrian plan --baseline-rate 1.5 --threshold 0.1 2> err.txt
   [64]
   $ grep -v '^Usage' err.txt
@@ -226,11 +226,38 @@ Planning checks its assumptions before simulating.
   [64]
   $ grep -v '^Usage' err.txt
   bactrian: --population scenarios needs at least 10 --scenarios
+  $ bactrian plan --baseline-rate 0.9 --threshold 0 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --threshold must be strictly between 0 and 1
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --gate-metrics 5 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --gate-metrics must be from 1 to 4
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --variant a 2> err.txt
+  [64]
+  $ grep -v '^Usage' err.txt
+  bactrian: --variant only applies with --from
+
+Under --json a refused plan is one JSON object, as for compare.
+
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --power 2 --json
+  {"error":"--power must be strictly between 0 and 1","exit":64}
+  [64]
 
 A plan names the repeats, or says that none is enough.
 
   $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --scenarios 2 --simulations 100
+  target verdict regression: assumed drop 0.200 against threshold 0.100, gate of 1 metric
   115 repeats per scenario and variant (2 scenarios, 230 runs per variant)
   simulated power 0.790, Monte Carlo standard error 0.041
   $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --effect 0.1 --max-repeats 5 --simulations 50 --json | grep -o '"result":"[a-z]*"'
   "result":"unreachable"
+
+A gate of two metrics judges the pass rate at the Bonferroni level, which needs
+more repeats.
+
+  $ bactrian plan --baseline-rate 0.9 --threshold 0.1 --scenarios 2 --simulations 100 --gate-metrics 2
+  target verdict regression: assumed drop 0.200 against threshold 0.100, gate of 2 metrics
+  124 repeats per scenario and variant (2 scenarios, 248 runs per variant)
+  simulated power 0.730, Monte Carlo standard error 0.044

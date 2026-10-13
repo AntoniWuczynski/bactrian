@@ -61,6 +61,16 @@ let () =
           Alcotest.test_case "not json" `Quick (bad "pass");
           Alcotest.test_case "trailing text" `Quick (bad {|{"pass": true} x|});
           Alcotest.test_case "empty" `Quick (bad "");
+          Alcotest.test_case "duplicate pass" `Quick
+            (bad {|{"pass": true, "pass": false}|});
+          Alcotest.test_case "duplicate message" `Quick
+            (bad {|{"pass": true, "message": "a", "message": "b"}|});
+          Alcotest.test_case "integral score" `Quick
+            (ok {|{"pass": true, "score": 2.0}|}
+               { pass = true; score = Some 2.; message = None });
+          Alcotest.test_case "fractional score" `Quick
+            (ok {|{"pass": true, "score": 0.25}|}
+               { pass = true; score = Some 0.25; message = None });
         ] );
       ( "trace_json",
         [

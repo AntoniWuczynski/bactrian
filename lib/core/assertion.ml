@@ -128,13 +128,14 @@ let decode_output ~path body =
       in
       Output { turn; check })
 
-let max_latency ~path v =
-  match Canon.to_int_opt v with
-  | Some _ -> D.int_at_least 0 ~path v
-  | None ->
-      Result.map
-        (fun s -> Float.to_int (Float.round (s *. 1000.)))
-        (D.duration ~path v)
+(* A bare number is milliseconds here, unlike a duration elsewhere, since
+   latency limits are small. A string takes a unit. *)
+let max_latency ~path (v : Canon.t) =
+  let ms x = Float.to_int (Float.round x) in
+  match v with
+  | Int _ | Float _ -> Result.map ms (D.float_at_least 0.0 ~path v)
+  | Null | Bool _ | Big_int _ | String _ | List _ | Object _ ->
+      Result.map (fun s -> ms (s *. 1000.)) (D.duration ~path v)
 
 let kinds =
   [

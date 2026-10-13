@@ -64,6 +64,28 @@ let normal e =
     (Printf.sprintf "normal_quantile %g" p)
     (num e "z") (Stats.normal_quantile p)
 
+let normal_cdf e =
+  let x = num e "x" in
+  check_close
+    (Printf.sprintf "normal_cdf %g" x)
+    (num e "p") (Stats.normal_cdf x)
+
+let student_t e =
+  let df = int e "df" and p = num e "p" in
+  let t = Stats.student_t_quantile ~df p in
+  check_close (Printf.sprintf "t quantile df=%d p=%g" df p) (num e "t") t;
+  check_close
+    (Printf.sprintf "t quantile df=%d p=%g, lower tail" df p)
+    (-.num e "t")
+    (Stats.student_t_quantile ~df (1. -. p))
+
+let expanded e =
+  let n = int e "n" and c = num e "confidence" in
+  check_close
+    (Printf.sprintf "expanded level n=%d @%g" n c)
+    (num e "level")
+    (Bootstrap.expanded_level ~confidence:c ~n)
+
 let quantile e =
   let values = J.member "values" e |> J.to_list |> List.map J.to_number in
   let q = num e "q" in
@@ -117,7 +139,9 @@ let test_invalid () =
   raises "wilson n=0" (fun () ->
       (Stats.wilson ~successes:0 ~trials:0 ~confidence:0.95).lower);
   raises "family 0" (fun () ->
-      Stats.bonferroni_level ~confidence:0.95 ~family:0)
+      Stats.bonferroni_level ~confidence:0.95 ~family:0);
+  raises "t df 0" (fun () -> Stats.student_t_quantile ~df:0 0.9);
+  raises "t p = 1" (fun () -> Stats.student_t_quantile ~df:3 1.)
 
 let wilson_contains_estimate =
   QCheck.Test.make ~name:"wilson contains s/n and lies in [0,1]" ~count:500
@@ -209,7 +233,7 @@ let stratified_never_zero_width =
       && i.upper <= 1.)
 
 let test_stratified_unanimous () =
-  (* Review §3.1: every run passing in both arms must not look certain. *)
+  (* Every run passing in both arms must not look certain. *)
   let all_pass k n = List.init k (fun _ -> (n, n)) in
   List.iter
     (fun (k, n, half_width) ->
@@ -253,6 +277,10 @@ let () =
           fixture_test "quantile" "quantile.json" quantile;
           fixture_test "pass_hat_k" "pass_k.json" pass_k;
           fixture_test "bonferroni" "bonferroni.json" bonferroni;
+          fixture_test "normal_cdf" "normal_cdf.json" normal_cdf;
+          fixture_test "student_t_quantile" "student_t_quantile.json" student_t;
+          fixture_test "expanded percentile level" "expanded_level.json"
+            expanded;
         ] );
       ( "unit",
         [

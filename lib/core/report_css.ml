@@ -53,9 +53,10 @@ p { margin: 0.5rem 0; }
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0; }
 dl.facts dt { color: var(--muted); }
 dl.facts dd { margin: 0; }
-.scroll { overflow-x: auto; margin: 0.5rem 0 1rem; }
+.scroll { overflow-x: auto; margin: 0 0 1rem; }
+.caption { color: var(--muted); font-size: 0.85rem; margin: 0.75rem 0 0.25rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
-caption { text-align: left; color: var(--muted); padding-bottom: 0.25rem; font-size: 0.85rem; }
 th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 thead th { border-bottom: 2px solid var(--line); white-space: nowrap; }
 td.num { text-align: right; white-space: nowrap; }

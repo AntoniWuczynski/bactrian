@@ -227,6 +227,59 @@ let quantile xs q =
   else x_lo +. (frac *. (x_hi -. x_lo))
 
 let median xs = quantile xs 0.5
+let normal_cdf x = 0.5 *. Float.erfc (-.x /. sqrt 2.)
+
+(* P(|T| < t) for Student's t with an integer [df], in closed form
+   (Abramowitz and Stegun 26.7.3 and 26.7.4): with θ = atan (t / sqrt df),
+   even df: sin θ (1 + 1/2 cos²θ + (1·3)/(2·4) cos⁴θ + ... up to cos^(df-2)θ),
+   odd df: (2/π) (θ + sin θ (cos θ + 2/3 cos³θ + ... up to cos^(df-2)θ)),
+   and 2θ/π for df = 1. *)
+let t_central df t =
+  let theta = atan (t /. sqrt (float_of_int df)) in
+  let c2 = cos theta *. cos theta in
+  if df mod 2 = 0 then
+    let rec sum j term acc =
+      if 2 * j > df - 2 then acc
+      else
+        let term =
+          term *. float_of_int ((2 * j) - 1) /. float_of_int (2 * j) *. c2
+        in
+        sum (j + 1) term (acc +. term)
+    in
+    sin theta *. sum 1 1. 1.
+  else if df = 1 then 2. *. theta /. Float.pi
+  else
+    let rec sum j term acc =
+      if (2 * j) - 1 > df - 2 then acc
+      else
+        let term =
+          term *. float_of_int ((2 * j) - 2) /. float_of_int ((2 * j) - 1) *. c2
+        in
+        sum (j + 1) term (acc +. term)
+    in
+    let first = cos theta in
+    2. /. Float.pi *. (theta +. (sin theta *. sum 2 first first))
+
+let student_t_quantile ~df p =
+  if df < 1 then invalid_arg "Stats.student_t_quantile: df < 1";
+  if not (p > 0. && p < 1.) then
+    invalid_arg "Stats.student_t_quantile: p outside (0, 1)";
+  let upper q =
+    (* The t > 0 with P(|T| < t) = 2q - 1, by bisection: [t_central] rises
+       with t, so the bracket halves until the floats meet. *)
+    let target = (2. *. q) -. 1. in
+    let rec widen hi =
+      if t_central df hi < target then widen (2. *. hi) else hi
+    in
+    let rec bisect lo hi =
+      let mid = lo +. ((hi -. lo) /. 2.) in
+      if Float.equal mid lo || Float.equal mid hi then mid
+      else if t_central df mid < target then bisect mid hi
+      else bisect lo mid
+    in
+    bisect 0. (widen 1.)
+  in
+  if p > 0.5 then upper p else if p < 0.5 then -.upper (1. -. p) else 0.
 
 let bonferroni_level ~confidence ~family =
   if family < 1 then invalid_arg "Stats.bonferroni_level: family < 1";

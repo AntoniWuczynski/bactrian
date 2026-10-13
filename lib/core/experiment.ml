@@ -276,11 +276,27 @@ let confidence ~path c =
   else
     fail ~path (Printf.sprintf "must be strictly between 0 and 1, found %g" f)
 
+(* A pass-rate threshold is an absolute difference, so it lies in (0, 1).
+   The others are relative changes, above 0. A threshold of 0 would ask for
+   certainty about an effect of exactly nothing. *)
+let threshold ~pass_rate_path ~path c =
+  let* f = float ~path c in
+  if String.equal path pass_rate_path then
+    if f > 0.0 && f < 1.0 then Ok f
+    else
+      fail ~path
+        (Printf.sprintf
+           "a pass-rate threshold must be strictly between 0 and 1, found %g" f)
+  else if f > 0.0 then Ok f
+  else fail ~path (Printf.sprintf "must be above 0, found %g" f)
+
 let compare_block ~path c =
+  let pass_rate_path = field_path (field_path path "thresholds") "pass_rate" in
   object_ ~path c (fun r ->
       let+ baseline = required r "baseline" non_empty_string
       and+ confidence = default r "confidence" 0.95 confidence
-      and+ thresholds = default r "thresholds" [] (assoc (float_at_least 0.0))
+      and+ thresholds =
+        default r "thresholds" [] (assoc (threshold ~pass_rate_path))
       and+ gate = default r "gate" [ "pass_rate" ] (list non_empty_string)
       and+ population =
         default r "population" `Suite

@@ -1,0 +1,105 @@
+{
+  "convention": "Expanded percentile level (Hesterberg 2015): 1 - 2 * scipy.stats.norm.sf(z) with z = sqrt(n / (n - 1)) * scipy.stats.t.ppf((1 + confidence) / 2, n - 1)",
+  "entries": [
+    {
+      "confidence": 0.9,
+      "level": 1.0,
+      "n": 2
+    },
+    {
+      "confidence": 0.95,
+      "level": 1.0,
+      "n": 2
+    },
+    {
+      "confidence": 0.975,
+      "level": 1.0,
+      "n": 2
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "level": 1.0,
+      "n": 2
+    },
+    {
+      "confidence": 0.9,
+      "level": 0.9828500516176225,
+      "n": 5
+    },
+    {
+      "confidence": 0.95,
+      "level": 0.998091798896235,
+      "n": 5
+    },
+    {
+      "confidence": 0.975,
+      "level": 0.9999069300070618,
+      "n": 5
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "level": 0.9999905018585222,
+      "n": 5
+    },
+    {
+      "confidence": 0.9,
+      "level": 0.9466738961355308,
+      "n": 10
+    },
+    {
+      "confidence": 0.95,
+      "level": 0.9828987219511872,
+      "n": 10
+    },
+    {
+      "confidence": 0.975,
+      "level": 0.9953488346387637,
+      "n": 10
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "level": 0.9980118385447457,
+      "n": 10
+    },
+    {
+      "confidence": 0.9,
+      "level": 0.9120550869998374,
+      "n": 40
+    },
+    {
+      "confidence": 0.95,
+      "level": 0.9594849272743123,
+      "n": 40
+    },
+    {
+      "confidence": 0.975,
+      "level": 0.9817724556025851,
+      "n": 40
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "level": 0.9887079100363165,
+      "n": 40
+    },
+    {
+      "confidence": 0.9,
+      "level": 0.9012096019493462,
+      "n": 400
+    },
+    {
+      "confidence": 0.95,
+      "level": 0.9509767404754648,
+      "n": 400
+    },
+    {
+      "confidence": 0.975,
+      "level": 0.9757226276222831,
+      "n": 400
+    },
+    {
+      "confidence": 0.9833333333333333,
+      "level": 0.983921462214331,
+      "n": 400
+    }
+  ]
+}

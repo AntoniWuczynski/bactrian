@@ -45,6 +45,17 @@ let latency_ms trace =
   | calls ->
       Some (float_of_int (List.fold_left (fun a (d, _) -> a + d) 0 calls))
 
+let ttft_ms trace =
+  List.filter_map
+    (fun (e : Trace.entry) ->
+      match e.event with
+      | Model_call { ttft_ms = Some t; _ } -> Some (float_of_int t)
+      | Model_call { ttft_ms = None; _ }
+      | Run_start _ | Turn_start _ | Tool_call _ | Tool_result _ | Http_call _
+      | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+          None)
+    trace
+
 let tokens trace =
   match List.filter_map snd (model_calls trace) with
   | [] -> None
@@ -134,12 +145,14 @@ let new_behaviours ~baseline ~candidate =
     |> List.map fst
 
 type dist = { n : int; median : float; p90 : float }
+type extra_repeats = [ `Repeats of int | `Cannot_resolve | `Not_simulated ]
 
 type metric_row = {
   name : string;
   result : Compare.metric_result;
   delta : float;
   relative : (float * Stats.interval) option;
+  extra_repeats : extra_repeats option;
 }
 
 type scenario_row = {
@@ -153,7 +166,15 @@ type scenario_row = {
   verdict : Compare.verdict;
 }
 
-type summary = { variant : string; cost : dist option; latency : dist option }
+type arm_row = { scenario : string; variant : string; stats : Arm_stats.t }
+
+type summary = {
+  variant : string;
+  cost : dist option;
+  latency : dist option;
+  tokens : dist option;
+}
+
 type signature_count = { signature : string list; count : int }
 
 type behaviour = {
@@ -185,6 +206,8 @@ type t = {
   exit : int;
   metrics : metric_row list;
   scenarios : scenario_row list;
+  arms : arm_row list;
+  arms_level : float;
   summaries : summary list;
   behaviours : behaviour list;
   failures : failure list;
@@ -220,17 +243,27 @@ let finished (r : run) =
   | Passed | Failed | Diverged -> true
   | Errored | Not_run | Pending | Interrupted -> false
 
-let summary runs variant =
-  let mine = List.filter finished (of_variant variant runs) in
+let summary ~dropped runs variant =
+  let mine =
+    List.filter
+      (fun (r : run) ->
+        finished r && not (List.exists (String.equal r.scenario) dropped))
+      (of_variant variant runs)
+  in
   {
     variant;
     cost = dist (List.filter_map (fun (r : run) -> r.cost) mine);
     latency = dist (List.filter_map (fun (r : run) -> r.latency_ms) mine);
+    tokens =
+      dist
+        (List.filter_map
+           (fun (r : run) -> Option.map float_of_int r.tokens)
+           mine);
   }
 
 let metric_row (settings : Compare.input) (m : Compare.metric_result) =
   let delta =
-    List.assoc_opt m.metric (settings.gate @ settings.report_metrics)
+    Compare.threshold_of m.metric (settings.gate @ settings.report_metrics)
     |> Option.value ~default:0.
   in
   let relative =
@@ -246,7 +279,15 @@ let metric_row (settings : Compare.input) (m : Compare.metric_result) =
                 upper = Float.expm1 m.interval.upper;
               } )
   in
-  { name = metric_name m.metric; result = m; delta; relative }
+  let extra_repeats =
+    match m.verdict with
+    | Inconclusive _ when m.in_gate && Option.is_none m.undefined ->
+        Some
+          (Plan_sim.extra_runs_needed settings ~metric:m.metric
+            :> extra_repeats)
+    | Inconclusive _ | Regression | Improvement | No_change -> None
+  in
+  { name = metric_name m.metric; result = m; delta; relative; extra_repeats }
 
 let traced variant scenario runs =
   List.filter
@@ -336,7 +377,14 @@ let scenario_row (settings : Compare.input) runs (scenario, interval, verdict) :
         (fun (r : run) -> String.equal r.scenario scenario && finished r)
         (of_variant variant runs)
     in
-    ( List.length (List.filter (fun (r : run) -> r.status = Passed) rs),
+    ( List.length
+        (List.filter
+           (fun (r : run) ->
+             match r.status with
+             | Passed -> true
+             | Failed | Diverged | Errored | Not_run | Pending | Interrupted ->
+                 false)
+           rs),
       List.length rs )
   in
   let bp, bn = tally settings.baseline and cp, cn = tally settings.candidate in
@@ -354,6 +402,47 @@ let scenario_row (settings : Compare.input) runs (scenario, interval, verdict) :
     verdict;
   }
 
+let arm_run (r : run) : Arm_stats.run =
+  {
+    outcome =
+      (match r.status with
+      | Passed -> Passed
+      | Failed | Diverged -> Failed
+      | Errored -> Errored
+      | Not_run | Pending | Interrupted -> Not_run);
+    cost = r.cost;
+    tokens = r.tokens;
+    latency_ms = r.latency_ms;
+    ttft_ms = ttft_ms r.trace;
+  }
+
+(* Each arm draws from its own generator, seeded by the experiment's seed and
+   the arm's place, so adding a scenario does not change the others. *)
+let arms (settings : Compare.input) ~level runs scenario_names =
+  List.concat
+    (List.mapi
+       (fun si scenario ->
+         List.mapi
+           (fun vi variant ->
+             let mine =
+               List.filter
+                 (fun (r : run) ->
+                   String.equal r.scenario scenario
+                   && String.equal r.variant variant)
+                 runs
+             in
+             {
+               scenario;
+               variant;
+               stats =
+                 Arm_stats.compute
+                   ~rng:(Random.State.make [| settings.seed; si; vi |])
+                   ~resamples:settings.resamples ~confidence:level
+                   (List.map arm_run mine);
+             })
+           [ settings.baseline; settings.candidate ])
+       scenario_names)
+
 let build ~experiment_id ~experiment ~(settings : Compare.input)
     ~(result : Compare.result) runs =
   let order =
@@ -364,9 +453,14 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
   let scenario_names =
     List.filter_map
       (fun (r : run) ->
-        if List.mem r.variant compared then Some r.scenario else None)
+        if List.exists (String.equal r.variant) compared then Some r.scenario
+        else None)
       runs
     |> List.sort_uniq String.compare
+  in
+  let arms_level =
+    Stats.bonferroni_level ~confidence:settings.confidence
+      ~family:(max 1 (List.length scenario_names))
   in
   {
     experiment_id;
@@ -388,13 +482,19 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
         result.missing;
     dropped = result.dropped;
     exit = result.exit;
-    metrics = List.map (metric_row settings) result.metrics;
+    metrics =
+      List.map
+        (metric_row { settings with runs = List.map compare_run runs })
+        result.metrics;
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
-    summaries = List.map (summary runs) compared;
+    arms = arms settings ~level:arms_level runs scenario_names;
+    arms_level;
+    summaries = List.map (summary ~dropped:result.dropped runs) compared;
     behaviours = List.map (behaviour settings runs) scenario_names;
     failures =
       List.filter
-        (fun (r : run) -> List.mem r.variant compared && is_failure r)
+        (fun (r : run) ->
+          List.exists (String.equal r.variant) compared && is_failure r)
         order
       |> List.map failure;
     order;
@@ -444,7 +544,16 @@ let metric_json (m : metric_row) : Yojson.Safe.t =
                 [ ("estimate", float_json e); ("interval", interval_json i) ] );
           ]
       | None -> [])
-    @ [ ("result", verdict_json r.verdict) ])
+    @ [
+        ("result", verdict_json r.verdict);
+        ("undefined", opt (fun s -> `String s) r.undefined);
+        ( "extra_repeats",
+          match m.extra_repeats with
+          | None -> `Null
+          | Some (`Repeats n) -> `Int n
+          | Some `Cannot_resolve -> `String "cannot_resolve"
+          | Some `Not_simulated -> `String "not_simulated" );
+      ])
 
 let scenario_json (s : scenario_row) : Yojson.Safe.t =
   `Assoc
@@ -467,6 +576,36 @@ let dist_json : dist option -> Yojson.Safe.t =
           ("median", float_json d.median);
           ("p90", float_json d.p90);
         ])
+
+let measure_json : Arm_stats.measure option -> Yojson.Safe.t =
+  opt (fun (m : Arm_stats.measure) ->
+      `Assoc
+        [
+          ("runs", `Int m.runs);
+          ("values", `Int m.values);
+          ("median", float_json m.median);
+          ("median_interval", opt interval_json m.median_interval);
+          ("p90", float_json m.p90);
+          ("p90_interval", opt interval_json m.p90_interval);
+        ])
+
+let arm_json (a : arm_row) : Yojson.Safe.t =
+  let s = a.stats in
+  `Assoc
+    [
+      ("scenario", `String a.scenario);
+      ("variant", `String a.variant);
+      ("finished", `Int s.finished);
+      ("passes", `Int s.passes);
+      ("errored", `Int s.errored);
+      ("not_run", `Int s.not_run);
+      ("pass_rate_interval", opt interval_json s.wilson);
+      ("pass_hat_k", `List (List.map float_json s.pass_hat_k));
+      ("cost_usd", measure_json s.cost);
+      ("tokens", measure_json s.tokens);
+      ("latency_ms", measure_json s.latency_ms);
+      ("ttft_ms", measure_json s.ttft_ms);
+    ]
 
 let strings l : Yojson.Safe.t = `List (List.map (fun s -> `String s) l)
 
@@ -590,6 +729,12 @@ let summary_fields (t : t) =
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));
+    ( "arms",
+      `Assoc
+        [
+          ("level", float_json t.arms_level);
+          ("rows", `List (List.map arm_json t.arms));
+        ] );
     ( "summaries",
       `List
         (List.map
@@ -599,6 +744,7 @@ let summary_fields (t : t) =
                  ("variant", `String s.variant);
                  ("cost_usd", dist_json s.cost);
                  ("latency_ms", dist_json s.latency);
+                 ("tokens", dist_json s.tokens);
                ])
            t.summaries) );
   ]

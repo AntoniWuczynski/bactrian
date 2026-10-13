@@ -191,6 +191,152 @@ let test_gate_family_level () =
         (1. -. (0.05 /. 3.))
         t.gate_level
 
+let test_undefined () =
+  let runs =
+    List.map (fun (r : R.run) -> { r with cost = None }) Fixture.runs
+  in
+  let settings =
+    {
+      (Fixture.settings ()) with
+      runs = List.map R.compare_run runs;
+      gate = [ (Pass_rate, 0.1); (Cost, 0.2) ];
+      report_metrics = [];
+    }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result runs
+      in
+      let cost =
+        List.find (fun (m : R.metric_row) -> m.name = "cost") t.metrics
+      in
+      Alcotest.(check (option string))
+        "sentence"
+        (Some
+           "Cost is undefined and counts as inconclusive in the gate: scenario \
+            book has 0 values in a, fewer than 5.")
+        (Report_format.undefined_text cost);
+      Alcotest.(check bool)
+        "no simulated repeats for it" true
+        (Option.is_none cost.extra_repeats);
+      let _, _, threshold = Report_format.metric_texts cost in
+      Alcotest.(check string)
+        "threshold kept" "20.0% dearer, 16.7% cheaper" threshold
+
+let test_zero_width () =
+  (* The fixture's token counts are tied within every scenario and arm, so
+     every resample gives the same ratio. *)
+  let settings =
+    {
+      (Fixture.settings ()) with
+      report_metrics = [ (Cost, 0.2); (Tokens, 0.2) ];
+    }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result
+          Fixture.runs
+      in
+      let row name =
+        List.find (fun (m : R.metric_row) -> m.name = name) t.metrics
+      in
+      Alcotest.(check bool)
+        "tokens noted" true
+        (Option.is_some (Report_format.zero_width_text (row "tokens")));
+      Alcotest.(check bool)
+        "cost not" true
+        (Option.is_none (Report_format.zero_width_text (row "cost")))
+
+let test_summaries_compared_scenarios () =
+  (* The candidate errors on every run of search, so search is dropped from
+     the comparison, and from the summaries too. *)
+  let runs =
+    List.map
+      (fun (r : R.run) ->
+        if r.variant = "b" && r.scenario = "search" then
+          { r with status = Errored }
+        else r)
+      Fixture.runs
+  in
+  let settings =
+    { (Fixture.settings ()) with runs = List.map R.compare_run runs }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result runs
+      in
+      Alcotest.(check (list string)) "dropped" [ "search" ] t.dropped;
+      let a = List.hd t.summaries in
+      Alcotest.(check (option int))
+        "baseline cost over book and refund only" (Some 20)
+        (Option.map (fun (x : R.dist) -> x.n) a.cost);
+      Alcotest.(check (option int))
+        "tokens too" (Some 20)
+        (Option.map (fun (x : R.dist) -> x.n) a.tokens)
+
+let test_arms () =
+  Alcotest.(check (list (pair string string)))
+    "every scenario, baseline then candidate"
+    [
+      ("book", "a");
+      ("book", "b");
+      ("refund", "a");
+      ("refund", "b");
+      ("search", "a");
+      ("search", "b");
+    ]
+    (List.map (fun (a : R.arm_row) -> (a.scenario, a.variant)) d.arms);
+  Alcotest.(check (float 1e-12))
+    "Bonferroni across three scenarios"
+    (1. -. (0.05 /. 3.))
+    d.arms_level;
+  let refund_b =
+    List.find
+      (fun (a : R.arm_row) -> a.scenario = "refund" && a.variant = "b")
+      d.arms
+  in
+  Alcotest.(check (pair int int))
+    "refund b: 7 of 10 finished pass" (7, 10)
+    (refund_b.stats.passes, refund_b.stats.finished);
+  Alcotest.(check bool)
+    "in compare --json" true
+    (Yojson.Safe.Util.member "arms" (R.summary_json d) <> `Null)
+
+(* Every inconclusive gate metric carries the simulator's answer, and no other
+   metric does. *)
+let test_extra_repeats () =
+  let settings = Fixture.settings () in
+  let pass_rate = List.hd d.metrics in
+  Alcotest.(check bool)
+    "pass rate is an inconclusive gate metric" true
+    (match pass_rate.result.verdict with
+    | Inconclusive _ -> pass_rate.result.in_gate
+    | Regression | Improvement | No_change -> false);
+  Alcotest.(check bool)
+    "same as the simulator" true
+    (pass_rate.extra_repeats
+    = Some
+        (Plan_sim.extra_runs_needed settings ~metric:Pass_rate
+          :> R.extra_repeats));
+  Alcotest.(check bool)
+    "a number of repeats" true
+    (match pass_rate.extra_repeats with
+    | Some (`Repeats n) -> n > 0
+    | Some (`Cannot_resolve | `Not_simulated) | None -> false);
+  List.iter
+    (fun (m : R.metric_row) ->
+      Alcotest.(check bool)
+        (m.name ^ ": outside the gate, none")
+        true
+        (m.result.in_gate || Option.is_none m.extra_repeats))
+    d.metrics
+
 (* JSON *)
 
 let json ?seed () =
@@ -221,6 +367,7 @@ let test_json_deterministic () =
       "exit";
       "metrics";
       "scenarios";
+      "arms";
       "summaries";
       "behaviours";
       "failures";
@@ -228,8 +375,9 @@ let test_json_deterministic () =
     ]
     (Yojson.Safe.Util.keys j)
 
-(* Everything a bootstrap touches: the intervals, the verdicts read off them
-   and the exit status. *)
+(* Everything a seeded simulation touches: the intervals (and the arms that
+   hold some), the verdicts read off them, the extra repeats and the exit
+   status. *)
 let strip (j : Yojson.Safe.t) : Yojson.Safe.t =
   match j with
   | `Assoc fields ->
@@ -237,7 +385,7 @@ let strip (j : Yojson.Safe.t) : Yojson.Safe.t =
         (List.filter_map
            (fun (k, v) ->
              match (k, v) with
-             | ("exit" | "seed"), _ -> None
+             | ("exit" | "seed" | "arms"), _ -> None
              | "metrics", `List ms ->
                  Some
                    ( k,
@@ -250,7 +398,12 @@ let strip (j : Yojson.Safe.t) : Yojson.Safe.t =
                                      (fun (k, _) ->
                                        not
                                          (List.mem k
-                                            [ "interval"; "relative"; "result" ]))
+                                            [
+                                              "interval";
+                                              "relative";
+                                              "result";
+                                              "extra_repeats";
+                                            ]))
                                      f)
                             | other -> other)
                           ms) )
@@ -321,6 +474,12 @@ let () =
             test_agent_failure_keeps_its_reason;
           Alcotest.test_case "header and rows" `Quick test_header;
           Alcotest.test_case "gate family level" `Quick test_gate_family_level;
+          Alcotest.test_case "extra repeats" `Quick test_extra_repeats;
+          Alcotest.test_case "per scenario and variant" `Quick test_arms;
+          Alcotest.test_case "undefined metric" `Quick test_undefined;
+          Alcotest.test_case "zero-width interval" `Quick test_zero_width;
+          Alcotest.test_case "summaries over compared scenarios" `Quick
+            test_summaries_compared_scenarios;
         ] );
       ( "json",
         [

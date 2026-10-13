@@ -45,8 +45,8 @@ let kind : Assertion.t -> string = function
   | Max_latency_ms _ -> "max_latency"
   | No_egress _ -> "no_egress"
 
-let evaluate ?table ~process_mgr ~clock ~timeout ~cwd ~date ~assertions
-    ~checkers entries =
+let evaluate ?table ?stderr_dir ~process_mgr ~clock ~timeout ~cwd ~date
+    ~assertions ~checkers entries =
   let assertion i a =
     let verdict =
       match
@@ -59,14 +59,29 @@ let evaluate ?table ~process_mgr ~clock ~timeout ~cwd ~date ~assertions
     { name = Printf.sprintf "assertions[%d] %s" i (kind a); verdict }
   in
   let checker i argv =
+    let result, stderr =
+      Checker_runner.run ~process_mgr ~clock ~timeout ~argv ~cwd entries
+    in
+    let saved =
+      match stderr_dir with
+      | Some dir when not (String.equal stderr "") ->
+          let file = Printf.sprintf "checker-%d.stderr" i in
+          Eio.Path.save ~create:(`Or_truncate 0o600)
+            Eio.Path.(dir / file)
+            stderr;
+          Some file
+      | Some _ | None -> None
+    in
     let verdict =
-      match
-        Checker_runner.run ~process_mgr ~clock ~timeout ~argv ~cwd entries
-      with
+      match result with
       | Verdict { pass = true; _ } -> Pass
       | Verdict { pass = false; message; _ } ->
           Fail (Option.value message ~default:"the checker said fail")
-      | Checker_error reason -> Checker_failed reason
+      | Checker_error reason ->
+          Checker_failed
+            (match saved with
+            | Some file -> Printf.sprintf "%s, full stderr in %s" reason file
+            | None -> reason)
     in
     {
       name = Printf.sprintf "checkers[%d] %s" i (String.concat " " argv);

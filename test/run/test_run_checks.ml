@@ -1,5 +1,5 @@
 (* What a run writes about itself: verdicts, divergences, cost, and the
-   patterns a replay needs (review M1, M4, m12, and the M6 follow-ups). *)
+   patterns a replay needs. *)
 
 open Bactrian_runtime
 open Run_support
@@ -20,10 +20,17 @@ let verdict_names (r : Run.result) =
     (fun item -> J.(to_string (member "verdict" item)))
     J.(to_list (member "items" (json r "verdicts.json")))
 
-(* M1: a checker that cannot give a verdict is a fault outside the agent. *)
+(* A checker that cannot give a verdict is a fault outside the agent. *)
 let test_checker_error_is_errored =
   with_ctx "checker-error" @@ fun ctx ->
-  let broken = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ] in
+  let broken =
+    [
+      "python3";
+      "-I";
+      "-c";
+      "import sys; sys.stderr.write('no such table\\n'); sys.exit(3)";
+    ]
+  in
   let r =
     ok
       (execute ctx { (config ()) with checks = checks ~checkers:[ broken ] () })
@@ -33,7 +40,17 @@ let test_checker_error_is_errored =
     "reason names the checker" true
     (String.starts_with ~prefix:"checker: "
        (Option.value ~default:"" (Run.outcome_reason r.outcome)));
-  Alcotest.check strs "verdicts.json" [ "checker_failed" ] (verdict_names r)
+  Alcotest.check strs "verdicts.json" [ "checker_failed" ] (verdict_names r);
+  (* Its stderr is kept with the run, and the reason points there. *)
+  Alcotest.(check string)
+    "stderr kept" "no such table\n"
+    (read (file r "checker-0.stderr"));
+  Alcotest.(check bool)
+    "reason quotes and names it" true
+    (Re.execp
+       (Re.compile
+          (Re.str "(stderr: no such table), full stderr in checker-0.stderr"))
+       (Option.value ~default:"" (Run.outcome_reason r.outcome)))
 
 let test_checker_fail_is_failed =
   with_ctx "checker-fail" @@ fun ctx ->
@@ -44,7 +61,7 @@ let test_checker_fail_is_failed =
   in
   Alcotest.(check string) "kind" "failed" (Run.outcome_kind r.outcome)
 
-(* m12: an agent failure still gets its assertions evaluated and written. *)
+(* An agent failure still gets its assertions evaluated and written. *)
 let test_failed_run_has_verdicts =
   with_ctx "failed-verdicts" @@ fun ctx ->
   let r =
@@ -67,7 +84,7 @@ let test_failed_run_has_verdicts =
       Alcotest.failf "expected Failed, got %s" (outcome_name r));
   Alcotest.check strs "verdicts.json" [ "pass"; "pass" ] (verdict_names r)
 
-(* M6 follow-up: divergences are persisted with their diff paths. *)
+(* Divergences are persisted with their diff paths. *)
 let test_divergences_file =
   with_ctx "divergences-file" @@ fun ctx ->
   let recorded = record ctx in
@@ -106,7 +123,7 @@ let test_divergences_file =
     "no temporary file" false
     (Sys.file_exists (file r "divergences.json.tmp"))
 
-(* M6 follow-up: cost, latency and tokens are stored once, in meta.json. *)
+(* Cost, latency and tokens are stored once, in meta.json. *)
 let test_meta_totals =
   with_ctx "meta-totals" @@ fun ctx ->
   let r = record ctx in
@@ -133,7 +150,7 @@ let test_meta_totals =
     "latency" true
     (J.(to_float (member "latency_ms" meta)) >= 0.)
 
-(* M4: the patterns a run recorded under are saved, and a replay uses them. *)
+(* The patterns a run recorded under are saved, and a replay uses them. *)
 let replays_with_patterns name ~record_config ~key =
   with_ctx name @@ fun ctx ->
   let recorded = ok (execute ctx record_config) in

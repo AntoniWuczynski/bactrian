@@ -107,8 +107,59 @@ let resample rng values =
   done;
   out
 
-let log_ratio_of_medians ~rng ~resamples ~confidence ~baseline ~candidate =
-  let fn = "Bootstrap.log_ratio_of_medians" in
+let median_p90_intervals ~rng ~resamples ~confidence clusters =
+  let fn = "Bootstrap.median_p90_intervals" in
+  check_common fn ~resamples ~confidence;
+  List.iter (check_values fn) clusters;
+  let clusters = Array.of_list clusters in
+  let k = Array.length clusters in
+  if k = 0 then invalid_arg (fn ^ ": no clusters");
+  let medians = Array.make resamples 0. and p90s = Array.make resamples 0. in
+  for r = 0 to resamples - 1 do
+    let pooled =
+      Array.concat (List.init k (fun _ -> clusters.(Random.State.int rng k)))
+    in
+    medians.(r) <- Stats.median pooled;
+    p90s.(r) <- Stats.quantile pooled 0.9
+  done;
+  (percentile ~confidence medians, percentile ~confidence p90s)
+
+let mean values =
+  Array.fold_left ( +. ) 0. values /. float_of_int (Array.length values)
+
+let average f pairs =
+  Array.fold_left (fun acc p -> acc +. f p) 0. pairs
+  /. float_of_int (Array.length pairs)
+
+(* log (second / first) of the equal-weighted means of per-scenario means. *)
+let ratio_of_means pairs =
+  log (average (fun (_, y) -> mean y) pairs)
+  -. log (average (fun (x, _) -> mean x) pairs)
+
+(* The equal-weighted average of per-scenario log (second / first) medians. *)
+let mean_log_ratio pairs =
+  average (fun (x, y) -> log (Stats.median y) -. log (Stats.median x)) pairs
+
+let expanded_level ~confidence ~n =
+  if n < 2 then confidence
+  else
+    let t = Stats.student_t_quantile ~df:(n - 1) ((1. +. confidence) /. 2.) in
+    let z = sqrt (float_of_int n /. float_of_int (n - 1)) *. t in
+    Float.erf (z /. sqrt 2.)
+
+(* The fewest runs any scenario has in either arm. *)
+let fewest_runs pairs =
+  Array.fold_left
+    (fun acc (x, y) -> min acc (min (Array.length x) (Array.length y)))
+    max_int pairs
+
+(* A statistic on the log ratio scale, its point estimate and the percentile
+   interval of [resamples] replicates, each resampling every scenario's runs
+   within each arm (first arm, then second, scenario by scenario). [defined]
+   says whether the point estimate exists, and [level] gives the percentile
+   level for the requested confidence. *)
+let log_ratio fn ~statistic ~defined ~level ~rng ~resamples ~confidence
+    ~baseline ~candidate =
   check_common fn ~resamples ~confidence;
   List.iter
     (fun (a : arm) ->
@@ -116,27 +167,41 @@ let log_ratio_of_medians ~rng ~resamples ~confidence ~baseline ~candidate =
         invalid_arg (fn ^ ": negative value"))
     (baseline @ candidate);
   let pairs, flipped = canonical_pairs fn ~baseline ~candidate in
-  (* One arm's values pooled over scenarios, each scenario's block produced by
-     [f] in scenario order. *)
-  let pooled f = Array.concat (Array.to_list (Array.map f pairs)) in
-  let m1 = Stats.median (pooled fst) and m2 = Stats.median (pooled snd) in
-  if Float.equal m1 0. || Float.equal m2 0. then None
+  if not (defined pairs) then None
   else
-    let reps = Array.make resamples 0. in
-    for r = 0 to resamples - 1 do
-      let r1 = Stats.median (pooled (fun (x, _) -> resample rng x)) in
-      let r2 = Stats.median (pooled (fun (_, y) -> resample rng y)) in
-      reps.(r) <- log r2 -. log r1
-    done;
-    (* Both resampled medians zero gives log 0 - log 0 = NaN: the ratio is
-       undefined for that replicate, so it is dropped. *)
-    let defined =
+    let reps =
+      Array.init resamples (fun _ ->
+          statistic
+            (Array.map
+               (fun (x, y) ->
+                 let rx = resample rng x in
+                 (rx, resample rng y))
+               pairs))
+    in
+    (* A resample whose two arms both give zero yields log 0 - log 0 = NaN:
+       the ratio is undefined for that replicate, so it is dropped. *)
+    let defined_reps =
       Array.of_list
         (List.filter (fun x -> not (Float.is_nan x)) (Array.to_list reps))
     in
-    if Array.length defined = 0 then None
+    if Array.length defined_reps = 0 then None
     else
-      let est = log m2 -. log m1 in
+      let est = statistic pairs in
       Some
         ( (if flipped then -.est else est),
-          orient flipped (percentile ~confidence defined) )
+          orient flipped
+            (percentile ~confidence:(level pairs confidence) defined_reps) )
+
+let log_ratio_of_means =
+  log_ratio "Bootstrap.log_ratio_of_means" ~statistic:ratio_of_means
+    ~defined:(fun pairs ->
+      let positive f = average f pairs > 0. in
+      positive (fun (x, _) -> mean x) && positive (fun (_, y) -> mean y))
+    ~level:(fun pairs confidence ->
+      expanded_level ~confidence ~n:(fewest_runs pairs))
+
+let mean_log_ratio_of_medians =
+  log_ratio "Bootstrap.mean_log_ratio_of_medians" ~statistic:mean_log_ratio
+    ~defined:
+      (Array.for_all (fun (x, y) -> Stats.median x > 0. && Stats.median y > 0.))
+    ~level:(fun _ confidence -> confidence)

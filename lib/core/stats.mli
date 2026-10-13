@@ -84,6 +84,17 @@ val normal_quantile : float -> float
 
     Raises [Invalid_argument] if [p] is NaN or outside [[0, 1]]. *)
 
+val normal_cdf : float -> float
+(** Standard normal CDF, [0.5 *. Float.erfc (-. x /. sqrt 2.)], as
+    [scipy.stats.norm.cdf]. *)
+
+val student_t_quantile : df:int -> float -> float
+(** Inverse CDF of Student's t with [df] degrees of freedom, as
+    [scipy.stats.t.ppf]. The CDF is the closed form for integer [df] (Abramowitz
+    and Stegun 26.7.3 and 26.7.4), inverted by bisection to the nearest float.
+
+    Raises [Invalid_argument] if [df < 1] or [p] is outside [(0, 1)]. *)
+
 val bonferroni_level : confidence:float -> family:int -> float
 (** [1 - (1 - confidence) / family], the per-interval level that keeps the
     family-wise confidence at least [confidence].

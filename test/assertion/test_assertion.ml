@@ -270,7 +270,7 @@ let test_max_tokens () =
   is_pass "at limit" (A.Max_tokens 135) t;
   fails "over" ~mentions:[ "135" ] (A.Max_tokens 134) t
 
-(* Review M9: a call without usage must not pass a token limit. *)
+(* A call without usage must not pass a token limit. *)
 let test_max_tokens_usage_gap () =
   let t =
     entries
@@ -315,13 +315,13 @@ let test_no_egress () =
     (A.No_egress [ "evil.example" ]) t;
   is_pass "empty trace" (A.No_egress [ "evil.example" ]) (entries [ Done ])
 
-(* Review M7: nothing intercepts egress yet, so a clean trace proves nothing. *)
+(* Nothing intercepts egress yet, so a clean trace proves nothing. *)
 let test_no_egress_unverifiable () =
   fails "not intercepted" ~egress_intercepted:false
     ~mentions:[ "cannot be verified"; "not intercepted" ]
     (A.No_egress [ "evil.example" ]) (entries [ Done ])
 
-(* Review m14: list elements are matched multiset-wise. *)
+(* List elements are matched multiset-wise. *)
 let test_args_partial_multiset () =
   let two = {|{"attendees":["bob@x","bob@x"]}|} in
   let one = {|{"attendees":["bob@x"]}|} in
@@ -418,6 +418,8 @@ let test_decode_ok () =
   decoded "max_cost int" {|{"max_cost_usd":1}|} (A.Max_cost_usd 1.0);
   decoded "max_cost float" {|{"max_cost_usd":0.05}|} (A.Max_cost_usd 0.05);
   decoded "latency int" {|{"max_latency":250}|} (A.Max_latency_ms 250);
+  decoded "latency bare float is ms" {|{"max_latency":2.5}|}
+    (A.Max_latency_ms 3);
   decoded "latency ms" {|{"max_latency":"0.25s"}|} (A.Max_latency_ms 250);
   decoded "latency s" {|{"max_latency":"1.5s"}|} (A.Max_latency_ms 1500);
   decoded "latency m" {|{"max_latency":"2m"}|} (A.Max_latency_ms 120000);

@@ -25,6 +25,7 @@ val trace_date : Trace.entry list -> string option
 
 val evaluate :
   ?table:Pricing.table ->
+  ?stderr_dir:Eio.Fs.dir_ty Eio.Path.t ->
   process_mgr:_ Eio_unix.Process.mgr ->
   clock:_ Eio.Time.clock ->
   timeout:float ->
@@ -35,7 +36,10 @@ val evaluate :
   Trace.entry list ->
   item list
 (** Every assertion in order, then every checker. [timeout] bounds each checker
-    and [cwd] is where it runs. *)
+    and [cwd] is where it runs. A checker's stderr never reaches bactrian's
+    terminal: with [stderr_dir], checker [i]'s non-empty stderr (its last 64
+    KiB) is written to [checker-i.stderr] there, and a checker error names that
+    file. *)
 
 val checker_errors : item list -> string list
 (** One line per {!Checker_failed} item, naming it and giving the reason. *)

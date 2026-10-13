@@ -8,6 +8,9 @@ type located_error = {
 (** [line] and [column] start at 1. [path] is the document path, e.g.
     ["assertions[2].tool_args.tool"], empty for the document root. *)
 
+val located_line : located_error -> string
+(** [file:line:column: path: message], without the path when it is empty. *)
+
 val load :
   _ Eio.Path.t ->
   ( Bactrian_core.Canon.t * (string -> (int * int) option),

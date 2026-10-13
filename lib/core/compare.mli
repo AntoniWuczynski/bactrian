@@ -5,15 +5,17 @@
     under [`Scenarios] it is the hull (smallest interval containing both) of
     {!Bootstrap.hierarchical_diff} and {!Stats.stratified_newcombe_diff}, since
     the bootstrap alone collapses to zero width when every run of both arms
-    passes (statistics review of 2026-10-13, M1).
+    passes, and then calls a confident [No_change] on no evidence.
 
-    Cost, median latency and tokens are compared on
-    [log (median_candidate / median_baseline)] over the scenarios both arms have
-    outcomes for, with the interval of {!Bootstrap.log_ratio_of_medians}
-    (resampling within each scenario). Thresholds are given as relative changes
-    [δ] and applied as [log (1 + δ)]. Such a metric is undefined when any of
-    those scenarios has fewer than 5 values in either arm, or a pooled median is
-    zero.
+    Cost and tokens are compared on the log ratio of equal-weighted means,
+    {!Bootstrap.log_ratio_of_means}, because they add up and a change confined
+    to a few scenarios must show. Latency is compared on the equal-weighted
+    average of per-scenario log ratios of medians,
+    {!Bootstrap.mean_log_ratio_of_medians}. Both use the scenarios both arms
+    have outcomes for and resample within each scenario. Thresholds are given as
+    relative changes [δ] and applied as [log (1 + δ)]. Such a metric is
+    undefined when any of those scenarios has fewer than 5 values in either arm,
+    or a mean (cost, tokens) or median (latency) is zero.
 
     Only scenarios with outcomes in both arms are compared. The others are
     listed in [dropped] and count as missing data for the exit code. *)
@@ -29,9 +31,8 @@ type verdict =
 type metric_result = {
   metric : metric;
   estimate : float;
-      (** Pass rate difference, or log ratio for cost and latency. [nan] when
-          the metric is undefined (a median is zero, or an arm has no values).
-      *)
+      (** Pass rate difference, or log ratio for cost, latency and tokens. [nan]
+          when the metric is undefined. *)
   interval : Stats.interval;
   threshold : float;
       (** On the scale of [estimate]: [δ] for pass rate, [log (1 + δ)] for the
@@ -44,6 +45,10 @@ type metric_result = {
       (** [true] for every declared gate metric. An undefined gate metric stays
           in the gate with an [Inconclusive] verdict, so it exits 2 under
           [fail_on_inconclusive] rather than passing silently. *)
+  undefined : string option;
+      (** Why the metric is undefined, for example
+          ["scenario s01 has 3 values in b, fewer than 5"]. [None] when it is
+          defined. *)
 }
 
 type missing_reason = Errored | Not_run
@@ -93,6 +98,11 @@ type result = {
           shares, or any [dropped] scenario), else 2 when a gate metric is
           inconclusive and [fail_on_inconclusive] is set, else 0. *)
 }
+
+val metric_equal : metric -> metric -> bool
+
+val threshold_of : metric -> (metric * float) list -> float option
+(** The threshold a list such as [gate] gives the metric, if any. *)
 
 val decide :
   threshold:float -> worse_is:[ `Lower | `Higher ] -> Stats.interval -> verdict

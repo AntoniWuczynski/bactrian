@@ -27,35 +27,41 @@
       "threshold": 0.1,
       "threshold_scaled": 0.1,
       "level": 0.95,
-      "result": { "verdict": "inconclusive", "lean": "worse" }
+      "result": { "verdict": "inconclusive", "lean": "worse" },
+      "undefined": null,
+      "extra_repeats": 79
     },
     {
       "metric": "cost",
       "in_gate": false,
-      "estimate": 0.0870113769896,
-      "interval": { "lower": 0.0, "upper": 0.0870113769896 },
+      "estimate": 0.26178134402,
+      "interval": { "lower": 0.218394705916, "upper": 0.301943250748 },
       "threshold": 0.2,
       "threshold_scaled": 0.182321556794,
       "level": 0.95,
       "relative": {
-        "estimate": 0.0909090909091,
-        "interval": { "lower": 0.0, "upper": 0.0909090909091 }
+        "estimate": 0.299242424242,
+        "interval": { "lower": 0.244078015676, "upper": 0.35248447205 }
       },
-      "result": { "verdict": "no_change", "lean": null }
+      "result": { "verdict": "regression", "lean": null },
+      "undefined": null,
+      "extra_repeats": null
     },
     {
       "metric": "latency_p50",
       "in_gate": false,
-      "estimate": 0.377076104845,
-      "interval": { "lower": 0.340223435165, "upper": 0.406841255685 },
+      "estimate": 0.37532631955,
+      "interval": { "lower": 0.347817585135, "upper": 0.400768727847 },
       "threshold": 0.25,
       "threshold_scaled": 0.223143551314,
       "level": 0.95,
       "relative": {
-        "estimate": 0.458015267176,
-        "interval": { "lower": 0.405261540332, "upper": 0.502065642354 }
+        "estimate": 0.455466284237,
+        "interval": { "lower": 0.415973931487, "upper": 0.492971945733 }
       },
-      "result": { "verdict": "regression", "lean": null }
+      "result": { "verdict": "regression", "lean": null },
+      "undefined": null,
+      "extra_repeats": null
     }
   ],
   "scenarios": [
@@ -90,16 +96,289 @@
       "result": { "verdict": "inconclusive", "lean": "none" }
     }
   ],
+  "arms": {
+    "level": 0.983333333333,
+    "rows": [
+      {
+        "scenario": "book",
+        "variant": "a",
+        "finished": 10,
+        "passes": 8,
+        "errored": 0,
+        "not_run": 0,
+        "pass_rate_interval": {
+          "lower": 0.425683062503,
+          "upper": 0.955726058125
+        },
+        "pass_hat_k": [
+          0.8, 0.622222222222, 0.466666666667, 0.333333333333,
+          0.222222222222, 0.133333333333, 0.0666666666667, 0.0222222222222,
+          0.0, 0.0
+        ],
+        "cost_usd": {
+          "runs": 10,
+          "values": 10,
+          "median": 0.011,
+          "median_interval": { "lower": 0.01, "upper": 0.012 },
+          "p90": 0.012,
+          "p90_interval": { "lower": 0.011, "upper": 0.012 }
+        },
+        "tokens": {
+          "runs": 10,
+          "values": 10,
+          "median": 210.0,
+          "median_interval": { "lower": 210.0, "upper": 210.0 },
+          "p90": 210.0,
+          "p90_interval": { "lower": 210.0, "upper": 210.0 }
+        },
+        "latency_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 655.0,
+          "median_interval": { "lower": 625.0, "upper": 685.0 },
+          "p90": 691.0,
+          "p90_interval": { "lower": 653.158333333, "upper": 700.0 }
+        },
+        "ttft_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 163.5,
+          "median_interval": { "lower": 156.0, "upper": 172.0 },
+          "p90": 172.3,
+          "p90_interval": { "lower": 162.831666667, "upper": 175.0 }
+        }
+      },
+      {
+        "scenario": "book",
+        "variant": "b",
+        "finished": 8,
+        "passes": 8,
+        "errored": 1,
+        "not_run": 1,
+        "pass_rate_interval": { "lower": 0.5826173513889999, "upper": 1.0 },
+        "pass_hat_k": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ],
+        "cost_usd": {
+          "runs": 8,
+          "values": 8,
+          "median": 0.011,
+          "median_interval": { "lower": 0.01, "upper": 0.012 },
+          "p90": 0.012,
+          "p90_interval": { "lower": 0.011, "upper": 0.012 }
+        },
+        "tokens": {
+          "runs": 8,
+          "values": 8,
+          "median": 410.0,
+          "median_interval": { "lower": 410.0, "upper": 410.0 },
+          "p90": 410.0,
+          "p90_interval": { "lower": 410.0, "upper": 410.0 }
+        },
+        "latency_ms": {
+          "runs": 8,
+          "values": 8,
+          "median": 950.0,
+          "median_interval": { "lower": 920.0, "upper": 980.0 },
+          "p90": 983.0,
+          "p90_interval": { "lower": 946.0, "upper": 990.0 }
+        },
+        "ttft_ms": {
+          "runs": 8,
+          "values": 8,
+          "median": 237.5,
+          "median_interval": { "lower": 230.0, "upper": 245.0 },
+          "p90": 245.6,
+          "p90_interval": { "lower": 235.0, "upper": 247.0 }
+        }
+      },
+      {
+        "scenario": "refund",
+        "variant": "a",
+        "finished": 10,
+        "passes": 10,
+        "errored": 0,
+        "not_run": 0,
+        "pass_rate_interval": { "lower": 0.6356818677129999, "upper": 1.0 },
+        "pass_hat_k": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ],
+        "cost_usd": {
+          "runs": 10,
+          "values": 10,
+          "median": 0.011,
+          "median_interval": { "lower": 0.01, "upper": 0.012 },
+          "p90": 0.012,
+          "p90_interval": { "lower": 0.011, "upper": 0.012 }
+        },
+        "tokens": {
+          "runs": 10,
+          "values": 10,
+          "median": 210.0,
+          "median_interval": { "lower": 210.0, "upper": 210.0 },
+          "p90": 210.0,
+          "p90_interval": { "lower": 210.0, "upper": 210.0 }
+        },
+        "latency_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 655.0,
+          "median_interval": { "lower": 625.0, "upper": 685.0 },
+          "p90": 691.0,
+          "p90_interval": { "lower": 653.316666667, "upper": 700.0 }
+        },
+        "ttft_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 163.5,
+          "median_interval": { "lower": 156.0, "upper": 171.0 },
+          "p90": 172.3,
+          "p90_interval": { "lower": 163.600833333, "upper": 175.0 }
+        }
+      },
+      {
+        "scenario": "refund",
+        "variant": "b",
+        "finished": 10,
+        "passes": 7,
+        "errored": 0,
+        "not_run": 0,
+        "pass_rate_interval": {
+          "lower": 0.341101557758,
+          "upper": 0.913171189327
+        },
+        "pass_hat_k": [
+          0.7, 0.466666666667, 0.291666666667, 0.166666666667,
+          0.08333333333329999, 0.0333333333333, 0.008333333333330001, 0.0,
+          0.0, 0.0
+        ],
+        "cost_usd": {
+          "runs": 10,
+          "values": 10,
+          "median": 0.011,
+          "median_interval": { "lower": 0.01, "upper": 0.012 },
+          "p90": 0.012,
+          "p90_interval": { "lower": 0.011, "upper": 0.012 }
+        },
+        "tokens": {
+          "runs": 10,
+          "values": 10,
+          "median": 410.0,
+          "median_interval": { "lower": 410.0, "upper": 410.0 },
+          "p90": 410.0,
+          "p90_interval": { "lower": 410.0, "upper": 410.0 }
+        },
+        "latency_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 955.0,
+          "median_interval": { "lower": 920.0, "upper": 990.0 },
+          "p90": 991.0,
+          "p90_interval": { "lower": 955.0, "upper": 1000.0 }
+        },
+        "ttft_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 238.5,
+          "median_interval": { "lower": 231.0, "upper": 246.841666667 },
+          "p90": 247.3,
+          "p90_interval": { "lower": 238.0475, "upper": 250.0 }
+        }
+      },
+      {
+        "scenario": "search",
+        "variant": "a",
+        "finished": 10,
+        "passes": 10,
+        "errored": 0,
+        "not_run": 0,
+        "pass_rate_interval": { "lower": 0.6356818677129999, "upper": 1.0 },
+        "pass_hat_k": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ],
+        "cost_usd": {
+          "runs": 10,
+          "values": 10,
+          "median": 0.011,
+          "median_interval": { "lower": 0.01, "upper": 0.012 },
+          "p90": 0.012,
+          "p90_interval": { "lower": 0.011, "upper": 0.012 }
+        },
+        "tokens": {
+          "runs": 10,
+          "values": 10,
+          "median": 210.0,
+          "median_interval": { "lower": 210.0, "upper": 210.0 },
+          "p90": 210.0,
+          "p90_interval": { "lower": 210.0, "upper": 210.0 }
+        },
+        "latency_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 655.0,
+          "median_interval": { "lower": 625.0, "upper": 685.0 },
+          "p90": 691.0,
+          "p90_interval": { "lower": 661.158333333, "upper": 700.0 }
+        },
+        "ttft_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 163.5,
+          "median_interval": { "lower": 156.0, "upper": 170.841666667 },
+          "p90": 172.3,
+          "p90_interval": { "lower": 165.0, "upper": 175.0 }
+        }
+      },
+      {
+        "scenario": "search",
+        "variant": "b",
+        "finished": 10,
+        "passes": 10,
+        "errored": 0,
+        "not_run": 0,
+        "pass_rate_interval": { "lower": 0.6356818677129999, "upper": 1.0 },
+        "pass_hat_k": [ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 ],
+        "cost_usd": {
+          "runs": 10,
+          "values": 10,
+          "median": 0.021,
+          "median_interval": { "lower": 0.02, "upper": 0.022 },
+          "p90": 0.022,
+          "p90_interval": { "lower": 0.021, "upper": 0.022 }
+        },
+        "tokens": {
+          "runs": 10,
+          "values": 10,
+          "median": 410.0,
+          "median_interval": { "lower": 410.0, "upper": 410.0 },
+          "p90": 410.0,
+          "p90_interval": { "lower": 410.0, "upper": 410.0 }
+        },
+        "latency_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 955.0,
+          "median_interval": { "lower": 925.791666667, "upper": 985.0 },
+          "p90": 991.0,
+          "p90_interval": { "lower": 960.158333333, "upper": 1000.0 }
+        },
+        "ttft_ms": {
+          "runs": 10,
+          "values": 10,
+          "median": 238.5,
+          "median_interval": { "lower": 231.0, "upper": 246.0 },
+          "p90": 247.3,
+          "p90_interval": { "lower": 240.5, "upper": 250.0 }
+        }
+      }
+    ]
+  },
   "summaries": [
     {
       "variant": "a",
       "cost_usd": { "n": 30, "median": 0.011, "p90": 0.012 },
-      "latency_ms": { "n": 30, "median": 655.0, "p90": 691.0 }
+      "latency_ms": { "n": 30, "median": 655.0, "p90": 691.0 },
+      "tokens": { "n": 30, "median": 210.0, "p90": 210.0 }
     },
     {
       "variant": "b",
       "cost_usd": { "n": 28, "median": 0.012, "p90": 0.0213 },
-      "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 }
+      "latency_ms": { "n": 28, "median": 955.0, "p90": 990.0 },
+      "tokens": { "n": 28, "median": 410.0, "p90": 410.0 }
     }
   ],
   "behaviours": [
@@ -192,6 +471,7 @@
           "seq": 2,
           "status": 200,
           "t_ms": 20,
+          "ttft_ms": 232,
           "turn": 1,
           "type": "model_call",
           "v": 1
@@ -285,6 +565,7 @@
           "seq": 2,
           "status": 200,
           "t_ms": 20,
+          "ttft_ms": 240,
           "turn": 1,
           "type": "model_call",
           "v": 1
@@ -377,6 +658,7 @@
           "seq": 2,
           "status": 200,
           "t_ms": 20,
+          "ttft_ms": 247,
           "turn": 1,
           "type": "model_call",
           "v": 1
@@ -469,6 +751,7 @@
           "seq": 2,
           "status": 200,
           "t_ms": 20,
+          "ttft_ms": 160,
           "turn": 1,
           "type": "model_call",
           "v": 1
@@ -563,6 +846,7 @@
           "seq": 2,
           "status": 200,
           "t_ms": 20,
+          "ttft_ms": 170,
           "turn": 1,
           "type": "model_call",
           "v": 1

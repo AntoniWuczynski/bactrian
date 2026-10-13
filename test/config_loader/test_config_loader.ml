@@ -112,7 +112,7 @@ let test_missing_file () =
 
 let contains text needle = Re.execp (Re.compile (Re.str needle)) text
 
-(* Review M8: libyaml's message is kept whole and a bad character is found. *)
+(* libyaml's message is kept whole and a bad character is found. *)
 let test_tab_is_located () =
   with_dir @@ fun dir ->
   write dir "tab.yaml" "version: 1\nturns:\n\t- user: hi\n";
@@ -148,7 +148,7 @@ let test_bad_character_is_located () =
       Alcotest.(check bool) "tidy" false (contains e.message "returned")
   | _ -> Alcotest.fail "one error expected"
 
-(* Review m6: a duplicate key does not hide the other mistakes. *)
+(* A duplicate key does not hide the other mistakes. *)
 let test_duplicate_key_keeps_going () =
   with_dir @@ fun dir ->
   write dir "s.yaml"
@@ -160,7 +160,7 @@ let test_duplicate_key_keeps_going () =
   in
   Alcotest.(check (list int)) "both reported, in order" [ 3; 6 ] lines
 
-(* Review m4: a key with a dot is located at its own line. *)
+(* A key with a dot is located at its own line. *)
 let test_dotted_key_location () =
   with_dir @@ fun dir ->
   write dir "e.yaml"
@@ -177,7 +177,8 @@ let test_dotted_key_location () =
   | [ e ] -> Alcotest.(check int) "the host's line" 9 e.line
   | es -> Alcotest.failf "expected one error, got %d" (List.length es)
 
-(* Review m5, m1 *)
+(* Errors from every stage of loading are reported together, in file
+   order. *)
 let test_sorted_and_complete () =
   with_dir @@ fun dir ->
   write dir "s/sc.yaml"
@@ -201,7 +202,7 @@ let test_sorted_and_complete () =
     "unknown field, fixtures and the assertion together" [ 3; 6; 8 ]
     (List.map fst positions)
 
-(* Review m3 *)
+(* A missing file is reported plainly, without the exception's text. *)
 let test_missing_file_message () =
   with_dir @@ fun dir ->
   match errors (Loader.load Eio.Path.(dir / "nope.yaml")) with
@@ -210,7 +211,8 @@ let test_missing_file_message () =
       Alcotest.(check bool) "no exception text" false (contains e.message "Eio")
   | _ -> Alcotest.fail "one error expected"
 
-(* Review m20 *)
+(* Globs skip dot files, and [**] skips dot, build and dependency
+   directories, so a swap file or bactrian's own store is never a scenario. *)
 let test_globs_skip_hidden_and_build_dirs () =
   with_dir @@ fun dir ->
   List.iter

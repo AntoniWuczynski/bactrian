@@ -6,10 +6,10 @@ to be named.
   $ ID=20261013T090000Z-0badc0de
 
   $ bactrian compare $ID
-  bactrian: --baseline is required
+  bactrian: --baseline is required: the experiment file demo.yaml that the manifest records is gone
   [64]
   $ bactrian compare $ID --baseline a
-  bactrian: --candidate is required
+  bactrian: --candidate is required: the experiment file demo.yaml that the manifest records is gone
   [64]
   $ bactrian compare $ID --baseline a --candidate a
   bactrian: the baseline and the candidate are the same variant
@@ -18,13 +18,13 @@ to be named.
   bactrian: no runs of variant "c" in this experiment
   [64]
   $ bactrian compare $ID --baseline a --candidate b
-  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  bactrian: gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed
   [64]
   $ bactrian compare $ID --baseline a --candidate b --json
-  {"error":"gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)","exit":64}
+  {"error":"gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed","exit":64}
   [64]
   $ bactrian report $ID --baseline a --candidate b -o out/report.html
-  bactrian: gate metric pass_rate has no threshold: declare compare.thresholds.pass_rate in the experiment file (the file the manifest records is gone or has no compare section)
+  bactrian: gate metric pass_rate has no threshold, because the experiment file demo.yaml that the manifest records is gone, and a threshold is never assumed
   [64]
   $ bactrian compare nope --baseline a --candidate b
   bactrian: no experiment "nope"
@@ -41,17 +41,44 @@ the message names the metric.
   $ bactrian compare $ID
   bactrian: gate metric pass_rate has no entry in compare.thresholds
   [64]
+
+A mistake in the experiment file is reported where it is, not as a missing
+setting.
+
   $ ../snapshot.exe experiment .
+  $ printf '  confidence: 1.5\n' >> demo.yaml
+  $ bactrian compare $ID
+  demo.yaml:10:3: compare.confidence: must be strictly between 0 and 1, found 1.5
+  [64]
+  $ ../snapshot.exe experiment .
+
+Plan takes the scenarios and baseline rates from an experiment's finished runs,
+of compare.baseline unless --variant names another.
+
+  $ bactrian plan --from $ID --threshold 0.1 --simulations 50 --json | grep -o '"baseline_rates":[^]]*]'
+  "baseline_rates":[{"scenario":"book","rate":0.8},{"scenario":"refund","rate":1.0},{"scenario":"search","rate":1.0}]
+  $ bactrian plan --from $ID --variant b --threshold 0.1 --simulations 50 --json | grep -o '"baseline_rates":[^]]*]'
+  "baseline_rates":[{"scenario":"book","rate":1.0},{"scenario":"refund","rate":0.7},{"scenario":"search","rate":1.0}]
+  $ bactrian plan --from $ID --scenarios 3 --threshold 0.1
+  bactrian: --from gives the scenarios and their rates, so it takes no
+            --baseline-rate or --scenarios
+  [64]
+  $ bactrian plan --from $ID --variant zzz --threshold 0.1
+  bactrian: variant "zzz" has no finished runs in experiment
+            20261013T090000Z-0badc0de
+  [64]
 
 The terminal table. Without --gate the exit status is 0 whatever the verdict.
 
   $ bactrian compare $ID --baseline a --candidate b
   experiment demo (20261013T090000Z-0badc0de): candidate b against baseline a
   estimand suite, confidence 95%, seed 7, 10000 resamples
+  cost and tokens compare scenario-weighted means, latency the geometric mean of per-scenario ratios of medians
   gate: pass_rate (level 0.9500 per interval)
   
   metric     gate  estimate  interval              level   threshold  verdict
-  Pass rate  yes   -3.3 pp   -20.4 pp to +12.8 pp  0.9500  ±0.0 pp   Inconclusive, leans worse
+  Pass rate  yes   -3.3 pp   -20.4 pp to +12.8 pp  0.9500  ±5.0 pp   Inconclusive, leans worse
+  Pass rate is inconclusive: about 1341 more repeats per scenario and variant would resolve it, simulated with the observed pass rates as the truth (power 0.8).
   
   scenario  baseline  candidate  difference  interval              verdict
   book      8/10      8/8        +20.0 pp    -24.5 pp to +57.4 pp  Inconclusive, leans better
@@ -100,5 +127,5 @@ The report is one self-contained file.
   [1]
   $ rm demo.yaml
   $ bactrian report $ID -o out/report.html
-  bactrian: --baseline is required
+  bactrian: --baseline is required: the experiment file demo.yaml that the manifest records is gone
   [64]

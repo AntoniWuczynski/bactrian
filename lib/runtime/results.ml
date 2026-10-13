@@ -11,19 +11,29 @@ type error =
   | No_such_experiment of string
   | Bad_manifest of string
   | Bad_run of { run_id : string; file : string; reason : string }
+  | Bad_experiment of Config_loader.located_error list
 
 let pp_error ppf = function
   | No_such_experiment id -> Format.fprintf ppf "no experiment %S" id
   | Bad_manifest m -> Format.fprintf ppf "%s" m
   | Bad_run { run_id; file; reason } ->
       Format.fprintf ppf "run %s: %s: %s" run_id file reason
+  | Bad_experiment errors ->
+      Format.pp_print_list ~pp_sep:Format.pp_force_newline
+        (fun ppf e -> Format.pp_print_string ppf (Config_loader.located_line e))
+        ppf errors
 
 let ( let* ) = Result.bind
 
 (* Files *)
 
-let read_opt path =
-  match Eio.Path.load path with text -> Some text | exception Eio.Io _ -> None
+(* [Ok None] when the run did not write the file. Any other failure to read
+   it is an error naming the file. *)
+let read_opt dir file =
+  match Eio.Path.load Eio.Path.(dir / file) with
+  | text -> Ok (Some text)
+  | exception Eio.Io (Eio.Fs.E (Not_found _), _) -> Ok None
+  | exception (Eio.Io _ as e) -> Error (file, Format.asprintf "%a" Eio.Exn.pp e)
 
 type verdicts_wire_item = {
   name : string;
@@ -46,9 +56,10 @@ let check_of_wire w : (D.check, string) result =
   | other -> Error (Printf.sprintf "unknown verdict %S" other)
 
 let read_checks dir =
-  match read_opt Eio.Path.(dir / "verdicts.json") with
-  | None -> Ok []
-  | Some text -> (
+  match read_opt dir "verdicts.json" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("verdicts.json", m)
       | json -> (
@@ -65,9 +76,10 @@ let read_checks dir =
               |> Result.map List.rev))
 
 let read_trace dir =
-  match read_opt Eio.Path.(dir / "trace.jsonl") with
-  | None -> Ok []
-  | Some text ->
+  match read_opt dir "trace.jsonl" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) ->
       String.split_on_char '\n' text
       |> List.filter (fun l -> not (String.equal l ""))
       |> List.mapi (fun i line -> (i + 1, line))
@@ -85,7 +97,9 @@ let read_trace dir =
 
 (* What a run wrote about itself: cost from the ledger's attribution, and the
    latency and token totals of its model calls. A run without a meta.json (it
-   crashed before writing one) has none of them. *)
+   crashed before writing one) has none of them. meta.json holds much more
+   (run ID, outcome, patterns, unenforced settings), so this decoder reads
+   only these three fields of it and lets the others pass. *)
 type meta = {
   cost_usd : float option; [@default None]
   latency_ms : float option; [@default None]
@@ -94,9 +108,10 @@ type meta = {
 [@@deriving of_yojson { strict = false }]
 
 let read_meta dir =
-  match read_opt Eio.Path.(dir / "meta.json") with
-  | None -> Ok { cost_usd = None; latency_ms = None; tokens = None }
-  | Some text -> (
+  match read_opt dir "meta.json" with
+  | Error e -> Error e
+  | Ok None -> Ok { cost_usd = None; latency_ms = None; tokens = None }
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("meta.json", m)
       | json -> (
@@ -105,9 +120,10 @@ let read_meta dir =
           | Error m -> Error ("meta.json", m)))
 
 let read_divergences dir : (D.divergence list, string * string) result =
-  match read_opt Eio.Path.(dir / "divergences.json") with
-  | None -> Ok []
-  | Some text -> (
+  match read_opt dir "divergences.json" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("divergences.json", m)
       | json -> (
@@ -181,8 +197,18 @@ let valid_id id =
     (String.equal id "" || String.equal id "." || String.equal id ".."
    || String.contains id '/' || String.contains id '\000')
 
+(* [None] when the file no longer exists. Any other problem with it is an
+   error, so that a mistake in the file is shown where it is rather than as a
+   missing setting. *)
 let load_experiment ~fs file =
-  Result.to_option (Config_loader.load_experiment Eio.Path.(fs / file))
+  let path = Eio.Path.(fs / file) in
+  match Eio.Path.kind ~follow:true path with
+  | `Not_found -> Ok None
+  | `Unknown | `Fifo | `Character_special | `Directory | `Block_device
+  | `Regular_file | `Symbolic_link | `Socket -> (
+      match Config_loader.load_experiment path with
+      | Ok e -> Ok (Some e)
+      | Error errors -> Error (Bad_experiment errors))
 
 let load ~fs ~root ~experiment_id =
   if not (valid_id experiment_id) then Error (No_such_experiment experiment_id)
@@ -196,7 +222,7 @@ let load ~fs ~root ~experiment_id =
       | Error None -> Error (No_such_experiment experiment_id)
       | Error (Some m) -> Error (Bad_manifest m)
     in
-    let experiment = load_experiment ~fs manifest.experiment_file in
+    let* experiment = load_experiment ~fs manifest.experiment_file in
     let* runs =
       List.fold_left
         (fun acc r ->
@@ -233,7 +259,7 @@ let thresholds (c : Experiment.compare) =
       (fun acc name ->
         let* l = acc in
         let* m = metric_of_name name in
-        match List.assoc_opt m declared with
+        match Compare.threshold_of m declared with
         | Some delta -> Ok ((m, delta) :: l)
         | None ->
             Error
@@ -242,19 +268,34 @@ let thresholds (c : Experiment.compare) =
       (Ok []) c.gate
     |> Result.map List.rev
   in
-  Ok (gate, List.filter (fun (m, _) -> not (List.mem_assoc m gate)) declared)
+  Ok
+    ( gate,
+      List.filter
+        (fun (m, _) -> Option.is_none (Compare.threshold_of m gate))
+        declared )
 
-let choose ~what ~flag ~from_experiment =
+(* Why the experiment file cannot supply a setting, when it cannot. *)
+let unavailable (l : loaded) =
+  match l.experiment with
+  | None ->
+      Printf.sprintf "the experiment file %s that the manifest records is gone"
+        l.manifest.experiment_file
+  | Some _ ->
+      Printf.sprintf "the experiment file %s has no compare section"
+        l.manifest.experiment_file
+
+let choose l ~what ~flag ~from_experiment =
   match (flag, from_experiment) with
   | Some v, _ | None, Some v -> Ok v
-  | None, None -> Error (Printf.sprintf "--%s is required" what)
+  | None, None ->
+      Error (Printf.sprintf "--%s is required: %s" what (unavailable l))
 
 let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
   let compare =
     Option.bind l.experiment (fun (e : Experiment.t) -> e.compare)
   in
   let* baseline =
-    choose ~what:"baseline" ~flag:baseline
+    choose l ~what:"baseline" ~flag:baseline
       ~from_experiment:
         (Option.map (fun (c : Experiment.compare) -> c.baseline) compare)
   in
@@ -267,7 +308,7 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
     | None -> []
   in
   let* candidate =
-    choose ~what:"candidate" ~flag:candidate
+    choose l ~what:"candidate" ~flag:candidate
       ~from_experiment:(match others with [ only ] -> Some only | _ -> None)
   in
   let variants = List.map (fun (r : D.run) -> r.variant) l.runs in
@@ -277,7 +318,7 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
     else
       match
         List.find_opt
-          (fun v -> not (List.mem v variants))
+          (fun v -> not (List.exists (String.equal v) variants))
           [ baseline; candidate ]
       with
       | Some v ->
@@ -291,9 +332,10 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
         Ok (c.population, c.confidence, gate, report_metrics)
     | None ->
         Error
-          "gate metric pass_rate has no threshold: declare \
-           compare.thresholds.pass_rate in the experiment file (the file the \
-           manifest records is gone or has no compare section)"
+          (Printf.sprintf
+             "gate metric pass_rate has no threshold, because %s, and a \
+              threshold is never assumed"
+             (unavailable l))
   in
   Ok
     {
