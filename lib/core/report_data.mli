@@ -43,6 +43,9 @@ type run = {
 val latency_ms : Trace.entry list -> float option
 (** The sum of the model calls' durations, [None] without a model call. *)
 
+val ttft_ms : Trace.entry list -> float list
+(** The time to first token of each model call that has one, in order. *)
+
 val tokens : Trace.entry list -> int option
 (** Input plus output tokens over the model calls that report usage, [None] when
     none does. *)
@@ -108,6 +111,9 @@ type scenario_row = {
   verdict : Compare.verdict;
 }
 
+type arm_row = { scenario : string; variant : string; stats : Arm_stats.t }
+(** One scenario's runs in one compared variant. *)
+
 type summary = { variant : string; cost : dist option; latency : dist option }
 type signature_count = { signature : string list; count : int }
 
@@ -149,6 +155,12 @@ type t = {
   exit : int;
   metrics : metric_row list;
   scenarios : scenario_row list;
+  arms : arm_row list;
+      (** Every scenario with runs in either compared variant (sorted), the
+          baseline then the candidate. *)
+  arms_level : float;
+      (** The level of the arms' intervals: the confidence, Bonferroni-adjusted
+          across those scenarios. *)
   summaries : summary list;  (** Baseline, then candidate. *)
   behaviours : behaviour list;
   failures : failure list;
@@ -175,5 +187,6 @@ val to_json : t -> Yojson.Safe.t
 
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution
-    order: the header, verdicts, per-scenario results and cost and latency
-    summaries. What [bactrian compare --json] prints. *)
+    order: the header, verdicts, per-scenario results, the statistics of each
+    scenario and variant, and cost and latency summaries. What
+    [bactrian compare --json] prints. *)

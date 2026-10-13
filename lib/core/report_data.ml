@@ -45,6 +45,17 @@ let latency_ms trace =
   | calls ->
       Some (float_of_int (List.fold_left (fun a (d, _) -> a + d) 0 calls))
 
+let ttft_ms trace =
+  List.filter_map
+    (fun (e : Trace.entry) ->
+      match e.event with
+      | Model_call { ttft_ms = Some t; _ } -> Some (float_of_int t)
+      | Model_call { ttft_ms = None; _ }
+      | Run_start _ | Turn_start _ | Tool_call _ | Tool_result _ | Http_call _
+      | Agent_event _ | Reply _ | Sandbox_violation _ | Done ->
+          None)
+    trace
+
 let tokens trace =
   match List.filter_map snd (model_calls trace) with
   | [] -> None
@@ -155,6 +166,7 @@ type scenario_row = {
   verdict : Compare.verdict;
 }
 
+type arm_row = { scenario : string; variant : string; stats : Arm_stats.t }
 type summary = { variant : string; cost : dist option; latency : dist option }
 type signature_count = { signature : string list; count : int }
 
@@ -187,6 +199,8 @@ type t = {
   exit : int;
   metrics : metric_row list;
   scenarios : scenario_row list;
+  arms : arm_row list;
+  arms_level : float;
   summaries : summary list;
   behaviours : behaviour list;
   failures : failure list;
@@ -364,6 +378,47 @@ let scenario_row (settings : Compare.input) runs (scenario, interval, verdict) :
     verdict;
   }
 
+let arm_run (r : run) : Arm_stats.run =
+  {
+    outcome =
+      (match r.status with
+      | Passed -> Passed
+      | Failed | Diverged -> Failed
+      | Errored -> Errored
+      | Not_run | Pending | Interrupted -> Not_run);
+    cost = r.cost;
+    tokens = r.tokens;
+    latency_ms = r.latency_ms;
+    ttft_ms = ttft_ms r.trace;
+  }
+
+(* Each arm draws from its own generator, seeded by the experiment's seed and
+   the arm's place, so adding a scenario does not change the others. *)
+let arms (settings : Compare.input) ~level runs scenario_names =
+  List.concat
+    (List.mapi
+       (fun si scenario ->
+         List.mapi
+           (fun vi variant ->
+             let mine =
+               List.filter
+                 (fun (r : run) ->
+                   String.equal r.scenario scenario
+                   && String.equal r.variant variant)
+                 runs
+             in
+             {
+               scenario;
+               variant;
+               stats =
+                 Arm_stats.compute
+                   ~rng:(Random.State.make [| settings.seed; si; vi |])
+                   ~resamples:settings.resamples ~confidence:level
+                   (List.map arm_run mine);
+             })
+           [ settings.baseline; settings.candidate ])
+       scenario_names)
+
 let build ~experiment_id ~experiment ~(settings : Compare.input)
     ~(result : Compare.result) runs =
   let order =
@@ -377,6 +432,10 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
         if List.mem r.variant compared then Some r.scenario else None)
       runs
     |> List.sort_uniq String.compare
+  in
+  let arms_level =
+    Stats.bonferroni_level ~confidence:settings.confidence
+      ~family:(max 1 (List.length scenario_names))
   in
   {
     experiment_id;
@@ -403,6 +462,8 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
         (metric_row { settings with runs = List.map compare_run runs })
         result.metrics;
     scenarios = List.map (scenario_row settings runs) result.per_scenario;
+    arms = arms settings ~level:arms_level runs scenario_names;
+    arms_level;
     summaries = List.map (summary runs) compared;
     behaviours = List.map (behaviour settings runs) scenario_names;
     failures =
@@ -488,6 +549,36 @@ let dist_json : dist option -> Yojson.Safe.t =
           ("median", float_json d.median);
           ("p90", float_json d.p90);
         ])
+
+let measure_json : Arm_stats.measure option -> Yojson.Safe.t =
+  opt (fun (m : Arm_stats.measure) ->
+      `Assoc
+        [
+          ("runs", `Int m.runs);
+          ("values", `Int m.values);
+          ("median", float_json m.median);
+          ("median_interval", opt interval_json m.median_interval);
+          ("p90", float_json m.p90);
+          ("p90_interval", opt interval_json m.p90_interval);
+        ])
+
+let arm_json (a : arm_row) : Yojson.Safe.t =
+  let s = a.stats in
+  `Assoc
+    [
+      ("scenario", `String a.scenario);
+      ("variant", `String a.variant);
+      ("finished", `Int s.finished);
+      ("passes", `Int s.passes);
+      ("errored", `Int s.errored);
+      ("not_run", `Int s.not_run);
+      ("pass_rate_interval", opt interval_json s.wilson);
+      ("pass_hat_k", `List (List.map float_json s.pass_hat_k));
+      ("cost_usd", measure_json s.cost);
+      ("tokens", measure_json s.tokens);
+      ("latency_ms", measure_json s.latency_ms);
+      ("ttft_ms", measure_json s.ttft_ms);
+    ]
 
 let strings l : Yojson.Safe.t = `List (List.map (fun s -> `String s) l)
 
@@ -611,6 +702,12 @@ let summary_fields (t : t) =
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));
+    ( "arms",
+      `Assoc
+        [
+          ("level", float_json t.arms_level);
+          ("rows", `List (List.map arm_json t.arms));
+        ] );
     ( "summaries",
       `List
         (List.map

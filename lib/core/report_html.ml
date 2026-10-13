@@ -270,6 +270,85 @@ let label (d : D.t) v =
   else if String.equal v d.candidate then v ^ " (candidate)"
   else v
 
+(* Per scenario and variant *)
+
+let tokens_text x = Printf.sprintf "%.0f" x
+
+let measure_text format (m : Arm_stats.measure option) pick =
+  match m with
+  | None -> "none recorded"
+  | Some m -> (
+      let value, ival = pick m in
+      match ival with
+      | Some i -> Printf.sprintf "%s (%s)" (format value) (interval format i)
+      | None -> format value)
+
+let pass_hat_k_text = function
+  | [] -> "n/a"
+  | ps ->
+      String.concat ", "
+        (List.mapi (fun i p -> Printf.sprintf "%d: %.3f" (i + 1) p) ps)
+
+let arm_table (d : D.t) scenario (arms : D.arm_row list) =
+  let col f = List.map (fun (a : D.arm_row) -> Num (f a.stats)) arms in
+  let measure_rows name format (get : Arm_stats.t -> Arm_stats.measure option) =
+    [
+      ( name ^ ", median",
+        col (fun s ->
+            measure_text format (get s) (fun (m : Arm_stats.measure) ->
+                (m.median, m.median_interval))) );
+      ( name ^ ", 90th percentile",
+        col (fun s ->
+            measure_text format (get s) (fun (m : Arm_stats.measure) ->
+                (m.p90, m.p90_interval))) );
+    ]
+  in
+  table ~caption:scenario
+    ~head:("" :: List.map (fun (a : D.arm_row) -> label d a.variant) arms)
+    ([
+       ( "Finished runs",
+         col (fun s ->
+             Printf.sprintf "%d (%d errored, %d not run)" s.finished s.errored
+               s.not_run) );
+       ( "Pass rate",
+         col (fun s ->
+             match s.wilson with
+             | Some i ->
+                 Printf.sprintf "%s, %s (%s)"
+                   (F.share s.passes s.finished)
+                   (F.rate s.passes s.finished)
+                   (interval (fun x -> Printf.sprintf "%.0f%%" (100. *. x)) i)
+             | None -> "n/a") );
+       ("pass^k for k = 1 to n", col (fun s -> pass_hat_k_text s.pass_hat_k));
+     ]
+    @ measure_rows "Cost" F.usd (fun s -> s.cost)
+    @ measure_rows "Tokens" tokens_text (fun s -> s.tokens)
+    @ measure_rows "Latency" F.ms (fun s -> s.latency_ms)
+    @ measure_rows "Time to first token" F.ms (fun s -> s.ttft_ms))
+
+let arms_section (d : D.t) =
+  let scenarios =
+    List.sort_uniq String.compare
+      (List.map (fun (a : D.arm_row) -> a.scenario) d.arms)
+  in
+  section "arms" "Per scenario and variant"
+    (para ~cls:[ "note" ]
+       (Printf.sprintf
+          "Over finished runs. Pass rates have Wilson score intervals, the \
+           others percentile bootstrap intervals that resample whole runs, all \
+           at level %.4f (Bonferroni across %d scenarios), and need at least \
+           %d runs. pass^k estimates the chance that k runs in a row all pass. \
+           Latency is the time spent in model calls per run, time to first \
+           token is per model call."
+          d.arms_level (List.length scenarios) Arm_stats.min_runs)
+    :: List.map
+         (fun s ->
+           arm_table d s
+             (List.filter
+                (fun (a : D.arm_row) -> String.equal a.scenario s)
+                d.arms))
+         scenarios)
+
 let measure_block (d : D.t) ~id ~title ~noun ~format
     (get : D.summary -> D.dist option) =
   let present =
@@ -516,6 +595,7 @@ let page (d : D.t) =
                      d.metrics
                @ (missing_table d :: dropped_note d));
              forest_section d;
+             arms_section d;
              measures_section d;
              behaviour_section d;
              failures_section d;

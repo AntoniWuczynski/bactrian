@@ -107,6 +107,23 @@ let resample rng values =
   done;
   out
 
+let median_p90_intervals ~rng ~resamples ~confidence clusters =
+  let fn = "Bootstrap.median_p90_intervals" in
+  check_common fn ~resamples ~confidence;
+  List.iter (check_values fn) clusters;
+  let clusters = Array.of_list clusters in
+  let k = Array.length clusters in
+  if k = 0 then invalid_arg (fn ^ ": no clusters");
+  let medians = Array.make resamples 0. and p90s = Array.make resamples 0. in
+  for r = 0 to resamples - 1 do
+    let pooled =
+      Array.concat (List.init k (fun _ -> clusters.(Random.State.int rng k)))
+    in
+    medians.(r) <- Stats.median pooled;
+    p90s.(r) <- Stats.quantile pooled 0.9
+  done;
+  (percentile ~confidence medians, percentile ~confidence p90s)
+
 let mean values =
   Array.fold_left ( +. ) 0. values /. float_of_int (Array.length values)
 

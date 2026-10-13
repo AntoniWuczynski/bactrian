@@ -77,6 +77,19 @@ val expanded_level : confidence:float -> n:int -> float
     a mean from [n] values to make up for the bootstrap's own narrowness at
     small [n]. [confidence] itself when [n < 2]. *)
 
+val median_p90_intervals :
+  rng:Random.State.t ->
+  resamples:int ->
+  confidence:float ->
+  float array list ->
+  Stats.interval * Stats.interval
+(** Percentile intervals for the median and the 90th percentile (type 7) of
+    values that come in clusters, such as the model calls of one run. Each
+    resample draws whole clusters with replacement and pools their values, so
+    values of one cluster stay together. Raises [Invalid_argument] on no
+    clusters, an empty cluster, a NaN value, or the shared preconditions on
+    [resamples] and [confidence]. *)
+
 val mean_log_ratio_of_medians :
   rng:Random.State.t ->
   resamples:int ->

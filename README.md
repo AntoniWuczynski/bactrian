@@ -127,7 +127,7 @@ The assumed effect defaults to twice the threshold and the power to 0.8, and the
 bactrian report <experiment-id> -o report.html
 ```
 
-It holds the estimand, gate and missing data per arm, the verdicts, a forest plot per scenario, cost and latency charts, the signature comparison, and each failure with its assertion messages and a collapsible trace.
+It holds the estimand, gate and missing data per arm, the verdicts, a forest plot per scenario, each scenario and variant's pass rate (with a Wilson interval), pass^k for every k and the median and 90th percentile of cost, tokens, latency and time to first token (with bootstrap intervals), cost and latency charts, the signature comparison, and each failure with its assertion messages and a collapsible trace.
 
 ## Building from source
 

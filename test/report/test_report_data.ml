@@ -191,6 +191,34 @@ let test_gate_family_level () =
         (1. -. (0.05 /. 3.))
         t.gate_level
 
+let test_arms () =
+  Alcotest.(check (list (pair string string)))
+    "every scenario, baseline then candidate"
+    [
+      ("book", "a");
+      ("book", "b");
+      ("refund", "a");
+      ("refund", "b");
+      ("search", "a");
+      ("search", "b");
+    ]
+    (List.map (fun (a : R.arm_row) -> (a.scenario, a.variant)) d.arms);
+  Alcotest.(check (float 1e-12))
+    "Bonferroni across three scenarios"
+    (1. -. (0.05 /. 3.))
+    d.arms_level;
+  let refund_b =
+    List.find
+      (fun (a : R.arm_row) -> a.scenario = "refund" && a.variant = "b")
+      d.arms
+  in
+  Alcotest.(check (pair int int))
+    "refund b: 7 of 10 finished pass" (7, 10)
+    (refund_b.stats.passes, refund_b.stats.finished);
+  Alcotest.(check bool)
+    "in compare --json" true
+    (Yojson.Safe.Util.member "arms" (R.summary_json d) <> `Null)
+
 (* Every inconclusive gate metric carries the simulator's answer, and no other
    metric does. *)
 let test_extra_repeats () =
@@ -250,6 +278,7 @@ let test_json_deterministic () =
       "exit";
       "metrics";
       "scenarios";
+      "arms";
       "summaries";
       "behaviours";
       "failures";
@@ -257,8 +286,9 @@ let test_json_deterministic () =
     ]
     (Yojson.Safe.Util.keys j)
 
-(* Everything a seeded simulation touches: the intervals, the verdicts read
-   off them, the extra repeats and the exit status. *)
+(* Everything a seeded simulation touches: the intervals (and the arms that
+   hold some), the verdicts read off them, the extra repeats and the exit
+   status. *)
 let strip (j : Yojson.Safe.t) : Yojson.Safe.t =
   match j with
   | `Assoc fields ->
@@ -266,7 +296,7 @@ let strip (j : Yojson.Safe.t) : Yojson.Safe.t =
         (List.filter_map
            (fun (k, v) ->
              match (k, v) with
-             | ("exit" | "seed"), _ -> None
+             | ("exit" | "seed" | "arms"), _ -> None
              | "metrics", `List ms ->
                  Some
                    ( k,
@@ -356,6 +386,7 @@ let () =
           Alcotest.test_case "header and rows" `Quick test_header;
           Alcotest.test_case "gate family level" `Quick test_gate_family_level;
           Alcotest.test_case "extra repeats" `Quick test_extra_repeats;
+          Alcotest.test_case "per scenario and variant" `Quick test_arms;
         ] );
       ( "json",
         [
