@@ -197,6 +197,22 @@ let test_absent_skipped () =
     "allow_write left out" false
     (List.mem "/work/proj/out" argv)
 
+(* An allow_write path inside another run is bound, then hidden again by the
+   mask over every run, and not bound back like the run's own directories. *)
+let test_other_run_stays_hidden () =
+  let other = "/work/proj/.bactrian/runs/r2/state" in
+  let argv =
+    bwrap ~exists:(fun _ -> `Dir) { linux with allow_write = [ other ] }
+  in
+  let rec after_mask = function
+    | "--tmpfs" :: "/work/proj/.bactrian/runs" :: rest -> rest
+    | _ :: rest -> after_mask rest
+    | [] -> Alcotest.fail "no mask over the runs"
+  in
+  Alcotest.(check bool)
+    "not bound back" false
+    (List.mem other (after_mask argv))
+
 let test_keychains_macos_only () =
   let has i = List.mem "/home/u/Library/Keychains" (P.deny_list i) in
   Alcotest.(check bool) "macos" true (has base);
@@ -580,6 +596,8 @@ let () =
           Alcotest.test_case "absent entries skipped" `Quick test_absent_skipped;
           Alcotest.test_case "the preload library is bound" `Quick
             test_preload_bound;
+          Alcotest.test_case "another run stays hidden" `Quick
+            test_other_run_stays_hidden;
           Alcotest.test_case "keychains on macOS only" `Quick
             test_keychains_macos_only;
           Alcotest.test_case "linked defaults deny their targets" `Quick

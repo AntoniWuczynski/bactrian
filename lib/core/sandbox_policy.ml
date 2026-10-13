@@ -299,11 +299,15 @@ let bwrap_of ~exists ~resolve i =
     List.filter_map (fun l -> Option.map (fun s -> Ro s) l.socket) i.listeners
   in
   let binds = writable @ sockets in
+  (* Only the run's own directories and bactrian's sockets come back under the
+     mask that hides every run: an [allow_write] path inside another run stays
+     hidden. *)
+  let own = Rw i.state_dir :: Rw i.temp_dir :: sockets in
   let mask d =
     let rebinds () =
       if d.keep_own_run then
         List.concat_map mount_args
-          (List.filter (fun m -> is_under ~dir:d.path (mount_path m)) binds)
+          (List.filter (fun m -> is_under ~dir:d.path (mount_path m)) own)
       else []
     in
     match exists d.path with

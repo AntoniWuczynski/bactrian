@@ -119,8 +119,10 @@ val generate :
     then each directory mask made read-only with [--remount-ro] (a tmpfs is
     writable), then [bactrian __sandbox-init PORT=SOCKET... -- AGENT...]. Mounts
     come in that order because a later mount hides what an earlier one put at
-    the same path. The run's own directories are bound again after the
-    [.bactrian/runs] mask that hides the other runs. A deny-list path that
-    [exists] reports [`Absent] is left out, since there is nothing to hide, and
-    so is an [allow_write] path that is [`Absent], which leaves it read-only.
-    [state_dir], [temp_dir] and the sockets must exist when the command runs. *)
+    the same path. The run's own directories (and sockets under them) are bound
+    again after the [.bactrian/runs] mask that hides the other runs, and no
+    [allow_write] path is, so one inside another run stays hidden. A deny-list
+    path that [exists] reports [`Absent] is left out, since there is nothing to
+    hide, and so is an [allow_write] path that is [`Absent], which leaves it
+    read-only. [state_dir], [temp_dir] and the sockets must exist when the
+    command runs. *)
