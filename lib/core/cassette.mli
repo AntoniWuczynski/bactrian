@@ -12,7 +12,10 @@ type payload =
       (** BLAKE2b-256 hex digest of content stored beside the cassette. *)
 
 type response_body =
-  | Whole of payload
+  | Whole of { payload : payload; complete : bool }
+      (** [complete] is false when the body was cut off: written as
+          ["complete": false] beside ["whole"], and absent when true. Replay
+          sends the partial body and drops the connection. *)
   | Stream of { chunks : (int * string) list; complete : bool }
       (** Chunks in arrival order: milliseconds since the previous chunk (or
           since the request for the first), and the chunk's bytes. [complete] is

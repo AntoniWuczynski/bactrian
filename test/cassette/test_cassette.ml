@@ -24,7 +24,7 @@ let exchange ?(seq = 0) ?(channel = Cassette.Model)
         {
           status = 200;
           headers = [ ("content-type", "application/json") ];
-          body = Whole (Inline "ok");
+          body = Whole { payload = Inline "ok"; complete = true };
         }) () =
   {
     Cassette.seq;
@@ -103,7 +103,14 @@ let round_trip name e =
       Alcotest.check (Alcotest.list exchange_t) name [ e ] t.exchanges)
 
 let stream chunks = Cassette.Stream { chunks; complete = true }
-let whole p = Cassette.Response { status = 200; headers = []; body = Whole p }
+
+let whole p =
+  Cassette.Response
+    {
+      status = 200;
+      headers = [];
+      body = Whole { payload = p; complete = true };
+    }
 
 let round_trips =
   [
@@ -378,6 +385,35 @@ let test_stream_complete_wire () =
     (List.equal Cassette.equal_exchange (decode [ hl; body true ]).exchanges
        (decode [ hl; body false ]).exchanges)
 
+let test_whole_complete_wire () =
+  let outcome complete =
+    Cassette.Response
+      {
+        status = 200;
+        headers = [];
+        body = Whole { payload = Inline "{\"a\""; complete };
+      }
+  in
+  let line complete =
+    Cassette.exchange_line (exchange ~outcome:(outcome complete) ())
+  in
+  Alcotest.(check bool)
+    "cut-off marked" true
+    (contains (line false) {|"complete":false|});
+  Alcotest.(check bool)
+    "complete is implicit" false
+    (contains (line true) "complete");
+  Alcotest.check (Alcotest.list exchange_t) "cut-off round trips"
+    [ exchange ~outcome:(outcome false) () ]
+    (decode [ hl; line false ]).exchanges;
+  Alcotest.check (Alcotest.list exchange_t) "absence decodes as complete"
+    [ exchange ~outcome:(outcome true) () ]
+    (decode [ hl; line true ]).exchanges;
+  Alcotest.(check bool)
+    "completeness is part of equality" false
+    (List.equal Cassette.equal_exchange (decode [ hl; line true ]).exchanges
+       (decode [ hl; line false ]).exchanges)
+
 let test_split_multibyte () =
   let e =
     exchange
@@ -491,7 +527,9 @@ let gen_outcome =
        let* body =
          oneof
            [
-             map (fun p -> Cassette.Whole p) gen_payload;
+             map
+               (fun (payload, complete) -> Cassette.Whole { payload; complete })
+               (pair gen_payload bool);
              map
                (fun (chunks, complete) -> Cassette.Stream { chunks; complete })
                (pair
@@ -641,6 +679,8 @@ let () =
           Alcotest.test_case "binary encoding" `Quick test_binary_encoding;
           Alcotest.test_case "stream completeness" `Quick
             test_stream_complete_wire;
+          Alcotest.test_case "whole completeness" `Quick
+            test_whole_complete_wire;
           Alcotest.test_case "split multibyte" `Quick test_split_multibyte;
           Alcotest.test_case "chunk timing equality" `Quick
             test_equal_chunk_timing;

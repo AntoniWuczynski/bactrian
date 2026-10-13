@@ -34,7 +34,8 @@ let exchange ?(request = Cassette.Inline "{}") seq =
         {
           status = 200;
           headers = [ ("content-type", "application/json") ];
-          body = Cassette.Whole (Cassette.Inline "ok");
+          body =
+            Cassette.Whole { payload = Cassette.Inline "ok"; complete = true };
         };
   }
 

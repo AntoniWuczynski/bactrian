@@ -95,6 +95,9 @@ type state = {
   mutable refused_keys : int;
   mutable cap_refusals : Ledger.refusal list;  (** Newest first. *)
   mutable errors : string list;  (** Newest first. *)
+  mutable ended : bool;
+      (** The run is unregistered: its cassette is closed, so a call that
+          finishes late settles the ledger but records nothing. *)
 }
 
 type t = {
@@ -112,6 +115,9 @@ type t = {
     (unit, Upstream.error) result;
 }
 
+(* Runs are keyed by a digest of their token, so lookups never compare the
+   token itself and take time that does not depend on how much of it matches. *)
+let token_key token = Digest.BLAKE256.(to_hex (string token))
 let locked st f = Eio.Mutex.use_rw ~protect:true st.lock f
 
 (* [add_error] runs with the lock held, [note] takes it. *)
@@ -249,6 +255,8 @@ let describe_divergence : Matcher.divergence -> string = function
 
 let describe_upstream_error : Upstream.error -> string = function
   | Connect_failed reason -> "upstream unreachable: " ^ reason
+  | Failed_after_send reason ->
+      "upstream connection failed after the request was sent: " ^ reason
   | Timed_out -> "upstream timed out"
   | Truncated { bytes; reason } ->
       Printf.sprintf "upstream body cut off after %d bytes: %s" bytes reason
@@ -389,7 +397,8 @@ let actual_cost x ~model ~date (head : Upstream.head) chunks =
   else
     let (module A : Protocol.S) = x.adapter in
     match Option.map A.summarise (response_body x head chunks) with
-    | Some (Ok { usage = Some u; _ }) -> Pricing.cost ~model ~date u
+    | Some (Ok { usage = Some u; _ }) ->
+        Reservation.cost ~model ~date x.parsed u
     | Some (Ok { usage = None; _ }) | Some (Error _) | None -> None
 
 (* Live calls *)
@@ -420,8 +429,12 @@ let record_live st x ~head ~chunks finish =
                 }
           | Whole_body ->
               Whole
-                (Store.payload st.run.store
-                   (scrub st (String.concat "" (List.map snd chunks))))
+                {
+                  payload =
+                    Store.payload st.run.store
+                      (scrub st (String.concat "" (List.map snd chunks)));
+                  complete;
+                }
         in
         Response { status = h.status; headers = h.headers; body }
   in
@@ -449,7 +462,7 @@ let finish_live st x ~record ~model ~date ~reservation ~head ~chunks finish =
   let actual =
     match (finish, head) with
     | Upstream (Error (Connect_failed _)), _ -> Some 0.
-    | Upstream (Error (Timed_out | Truncated _)), _
+    | Upstream (Error (Failed_after_send _ | Timed_out | Truncated _)), _
     | Agent_gone, _
     | Upstream (Ok ()), None ->
         None
@@ -468,7 +481,7 @@ let finish_live st x ~record ~model ~date ~reservation ~head ~chunks finish =
       | Upstream (Ok ()) -> ());
       st.exchanges <- st.exchanges + 1;
       match st.run.cassette with
-      | Some writer when record ->
+      | Some writer when record && not st.ended ->
           Store.append writer (record_live st x ~head ~chunks finish);
           st.next_seq <- st.next_seq + 1
       | Some _ | None -> ())
@@ -508,8 +521,9 @@ let live t ~conn_sw st x ~record =
   | Some real_key -> (
       let reservation =
         match
-          Pricing.worst_case ~model ~date ~input_bytes:(String.length x.body)
-            ~max_output:(max_output x.parsed)
+          Reservation.worst_case ~model ~date
+            ~input_bytes:(String.length x.body)
+            ~max_output:(max_output x.parsed) x.parsed
         with
         | None -> Error (Ledger.Unknown_model model)
         | Some usd ->
@@ -571,10 +585,14 @@ let serve_recorded t st ~timing (e : Cassette.exchange) =
   match e.outcome with
   | Transport_error reason ->
       error_response ~status:502 ~type_:"bactrian_upstream_error" reason
-  | Response { status; headers; body = Whole payload } -> (
+  | Response { status; headers; body = Whole { payload; complete } } -> (
       match Store.read_payload st.run.store payload with
       | Ok bytes ->
-          respond ~on_exn:(agent_failed st) ~status ~headers (of_list [ bytes ])
+          let next = of_list [ bytes ] in
+          respond ~on_exn:(agent_failed st) ~status ~headers (fun () ->
+              match next () with
+              | Finished when not complete -> Dropped
+              | (Chunk _ | Finished | Dropped) as item -> item)
       | Error err ->
           error_response ~status:500 ~type_:"bactrian_internal_error"
             (Format.asprintf "%a" Store.pp_error err))
@@ -691,22 +709,31 @@ let unattributed_response t ~status ~type_ message =
 (* The placeholder key may arrive in the provider's key header and, for Gemini,
    also in the [key] query parameter. Each one present must be right, and at
    least one must be present. *)
+let max_body = 64 * 1024 * 1024
+
+type body = Body of string | Too_large
+
 (* The body is read before any check, so a refused request leaves a keep-alive
    connection ready for the next one. *)
+let read_body body =
+  match
+    Eio.Buf_read.take_all (Eio.Buf_read.of_flow ~max_size:max_body body)
+  with
+  | s -> Body s
+  | exception Eio.Buf_read.Buffer_limit_exceeded -> Too_large
+
 let handle t ((conn_sw, _), _) request body : response =
   let headers = Http.Request.headers request in
   let uri = Uri.of_string (Http.Request.resource request) in
-  match
-    ( Eio.Buf_read.parse ~max_size:max_int Eio.Buf_read.take_all body,
-      route (Uri.path uri) )
-  with
-  | Error (`Msg reason), _ ->
-      unattributed_response t ~status:400 ~type_:"bactrian_bad_request" reason
-  | Ok _, None ->
+  match (read_body body, route (Uri.path uri)) with
+  | Too_large, _ ->
+      unattributed_response t ~status:413 ~type_:"bactrian_payload_too_large"
+        "the request body is over 64 MiB"
+  | Body _, None ->
       unattributed_response t ~status:404 ~type_:"bactrian_not_found"
         "expected /r/<token>/<provider>/<path>"
-  | Ok body, Some (token, provider, path) -> (
-      match Runs.find_opt t.runs token with
+  | Body body, Some (token, provider, path) -> (
+      match Runs.find_opt t.runs (token_key token) with
       | None ->
           unattributed_response t ~status:403 ~type_:"bactrian_forbidden"
             "unknown or ended run"
@@ -790,7 +817,7 @@ let port t = t.port
 let unattributed t = t.unattributed
 
 let register t run =
-  if Runs.mem t.runs run.token then
+  if Runs.mem t.runs (token_key run.token) then
     invalid_arg "Model_proxy.register: token already registered";
   let serving =
     match run.mode with
@@ -804,7 +831,7 @@ let register t run =
             timing;
           }
   in
-  Runs.replace t.runs run.token
+  Runs.replace t.runs (token_key run.token)
     {
       run;
       serving;
@@ -819,14 +846,16 @@ let register t run =
       refused_keys = 0;
       cap_refusals = [];
       errors = [];
+      ended = false;
     }
 
 let unregister t ~token =
-  match Runs.find_opt t.runs token with
+  match Runs.find_opt t.runs (token_key token) with
   | None -> invalid_arg "Model_proxy.unregister: unknown token"
   | Some st ->
-      Runs.remove t.runs token;
+      Runs.remove t.runs (token_key token);
       locked st (fun () ->
+          st.ended <- true;
           let unconsumed =
             match st.serving with
             | Replaying r -> Matcher.finish r.matcher

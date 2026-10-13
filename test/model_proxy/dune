@@ -1,9 +1,25 @@
-(test
- (name test_model_proxy)
+(library
+ (name proxy_support)
+ (modules proxy_support)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  fake_upstream
+  eio_main
+  unix
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))
+
+(tests
+ (names test_model_proxy test_reservation)
+ (modules test_model_proxy test_reservation)
  (package bactrian)
  (deps
   (source_tree ../fixtures/protocols))
  (libraries
+  proxy_support
   bactrian.core
   bactrian.runtime
   fake_upstream

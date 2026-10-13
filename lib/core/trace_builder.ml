@@ -37,7 +37,7 @@ let is_sse headers =
 
 let response_bytes resolve (r : Cassette.response) =
   match r.body with
-  | Whole p -> resolve p
+  | Whole { payload; complete = _ } -> resolve payload
   | Stream { chunks; complete = _ } ->
       Some (String.concat "" (List.map snd chunks))
 

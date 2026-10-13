@@ -32,8 +32,13 @@ type head = { status : int; headers : (string * string) list }
 
 type error =
   | Connect_failed of string
-      (** No usable response head: refused, reset or closed before the head, an
-          unreadable head, or an [https] URL with no TLS connector. *)
+      (** No byte of the request was written: refused, DNS failure, failed TLS
+          handshake, or an [https] URL with no TLS connector. The provider never
+          saw the request. *)
+  | Failed_after_send of string
+      (** The request was written but no usable head came back: reset or closed
+          before the head, or an unreadable head. The provider may have run and
+          billed the request. *)
   | Timed_out
   | Truncated of { bytes : int; reason : string }
       (** The head arrived but the body ended early. [bytes] is the number

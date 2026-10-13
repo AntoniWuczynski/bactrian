@@ -8,7 +8,7 @@ let doc s =
 
 let body ~stream =
   if stream then Cassette.Stream { chunks = [ (0, "a") ]; complete = true }
-  else Cassette.Whole (Inline "ok")
+  else Cassette.Whole { payload = Inline "ok"; complete = true }
 
 let ex ?(channel = Cassette.Model) ?(occ = 0) ?(stream = false) ?canon seq key =
   let canonical =

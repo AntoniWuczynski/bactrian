@@ -19,6 +19,7 @@ type head = { status : int; headers : (string * string) list }
 
 type error =
   | Connect_failed of string
+  | Failed_after_send of string
   | Timed_out
   | Truncated of { bytes : int; reason : string }
 
@@ -94,7 +95,7 @@ let read_head r =
   in
   match status with
   | Some status -> Ok (status, headers [])
-  | None -> Error (Connect_failed ("bad status line: " ^ status_line))
+  | None -> Error (Failed_after_send ("bad status line: " ^ status_line))
 
 exception Dropped of string
 
@@ -165,6 +166,8 @@ let read_body ~clock ~t_head ~on_chunk framing r =
   | exception Dropped reason -> Error (Truncated { bytes = !total; reason })
   | exception (Eio.Io _ as e) ->
       Error (Truncated { bytes = !total; reason = Printexc.to_string e })
+  | exception Eio.Buf_read.Buffer_limit_exceeded ->
+      Error (Truncated { bytes = !total; reason = "chunk header too large" })
 
 let request_text (req : request) ~host =
   let target = match Uri.path_and_query req.url with "" -> "/" | t -> t in
@@ -199,6 +202,11 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
         | Some p -> Printf.sprintf "%s:%d" host p
         | None -> host
       in
+      let sent = ref false in
+      let failed reason =
+        Error
+          (if !sent then Failed_after_send reason else Connect_failed reason)
+      in
       try
         Eio.Net.with_tcp_connect ~host ~service:(string_of_int port) net
           (fun socket ->
@@ -210,6 +218,7 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
               match connector with Some wrap -> wrap req.url raw | None -> raw
             in
             Eio.Flow.copy_string (request_text req ~host:host_header) flow;
+            sent := true;
             let r = Eio.Buf_read.of_flow ~max_size:1_048_576 flow in
             match read_head r with
             | Error _ as e -> e
@@ -220,11 +229,9 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
                   (framing ~status raw_headers)
                   r)
       with
-      | Eio.Io _ as e -> Error (Connect_failed (Printexc.to_string e))
-      | End_of_file ->
-          Error (Connect_failed "connection closed before the response head")
-      | Eio.Buf_read.Buffer_limit_exceeded ->
-          Error (Connect_failed "response head too large"))
+      | Eio.Io _ as e -> failed (Printexc.to_string e)
+      | End_of_file -> failed "connection closed before the response head"
+      | Eio.Buf_read.Buffer_limit_exceeded -> failed "response head too large")
 
 let call ~sw:_ ~net ~clock ~timeout connector (req : request) ~on_head ~on_chunk
     =

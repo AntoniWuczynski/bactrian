@@ -11,7 +11,7 @@ type channel = Model | Mcp | Http
 type payload = Inline of string | Blob of string
 
 type response_body =
-  | Whole of payload
+  | Whole of { payload : payload; complete : bool }
   | Stream of { chunks : (int * string) list; complete : bool }
 
 type response = {
@@ -204,7 +204,10 @@ let chunks_of_yojson = function
       Error "stream must be a list of chunks"
 
 let response_body_to_yojson = function
-  | Whole p -> `Assoc [ ("whole", payload_to_yojson p) ]
+  | Whole { payload; complete = true } ->
+      `Assoc [ ("whole", payload_to_yojson payload) ]
+  | Whole { payload; complete = false } ->
+      `Assoc [ ("whole", payload_to_yojson payload); ("complete", `Bool false) ]
   | Stream { chunks; complete = true } ->
       `Assoc [ ("stream", chunks_to_yojson chunks) ]
   | Stream { chunks; complete = false } ->
@@ -216,10 +219,19 @@ let response_body_of_yojson = function
       Result.map
         (fun chunks -> Stream { chunks; complete = false })
         (chunks_of_yojson j)
+  | `Assoc [ ("complete", `Bool false); ("whole", j) ]
+  | `Assoc [ ("whole", j); ("complete", `Bool false) ] ->
+      Result.map
+        (fun payload -> Whole { payload; complete = false })
+        (payload_of_yojson j)
   | j ->
       tagged_of_yojson ~what:"body"
         [
-          ("whole", fun j -> Result.map (fun p -> Whole p) (payload_of_yojson j));
+          ( "whole",
+            fun j ->
+              Result.map
+                (fun payload -> Whole { payload; complete = true })
+                (payload_of_yojson j) );
           ( "stream",
             fun j ->
               Result.map
@@ -496,7 +508,8 @@ let string_pairs_equal = List.equal (pair_equal String.equal String.equal)
 
 let body_equal a b =
   match (a, b) with
-  | Whole x, Whole y -> payload_equal x y
+  | Whole x, Whole y ->
+      Bool.equal x.complete y.complete && payload_equal x.payload y.payload
   | Stream x, Stream y ->
       Bool.equal x.complete y.complete
       && List.equal (pair_equal Int.equal String.equal) x.chunks y.chunks

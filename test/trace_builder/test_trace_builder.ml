@@ -41,7 +41,9 @@ let exchange ~seq ~t_ms ?(case_request = None) case : Cassette.exchange =
         {
           status = 200;
           headers = [ ("content-type", "application/json") ];
-          body = Whole (Inline (read (file "response.raw")));
+          body =
+            Whole
+              { payload = Inline (read (file "response.raw")); complete = true };
         };
   }
 
@@ -193,7 +195,11 @@ let test_unparseable_and_transport_error () =
       e with
       outcome =
         Response
-          { status = 502; headers = []; body = Whole (Inline "not json") };
+          {
+            status = 502;
+            headers = [];
+            body = Whole { payload = Inline "not json"; complete = true };
+          };
     }
   in
   let failed =

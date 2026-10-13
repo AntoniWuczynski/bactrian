@@ -72,6 +72,7 @@ let with_env f () =
 let error_testable =
   let pp ppf = function
     | Upstream.Connect_failed s -> Format.fprintf ppf "Connect_failed %S" s
+    | Failed_after_send s -> Format.fprintf ppf "Failed_after_send %S" s
     | Timed_out -> Format.pp_print_string ppf "Timed_out"
     | Truncated { bytes; reason } ->
         Format.fprintf ppf "Truncated{%d,%S}" bytes reason
@@ -84,14 +85,21 @@ let some_head o =
 let expect_connect_failed o =
   match o.result with
   | Error (Connect_failed _) -> ()
-  | Ok () | Error Timed_out | Error (Truncated _) ->
+  | Ok () | Error (Timed_out | Failed_after_send _ | Truncated _) ->
       Alcotest.fail "expected Connect_failed"
+
+let expect_failed_after_send o =
+  match o.result with
+  | Error (Failed_after_send _) -> ()
+  | Ok () | Error (Timed_out | Connect_failed _ | Truncated _) ->
+      Alcotest.fail "expected Failed_after_send"
 
 let truncated_bytes o =
   match o.result with
   | Error (Truncated { bytes; _ }) -> bytes
   | Ok () -> Alcotest.fail "clean end after a dropped body"
-  | Error (Connect_failed _ | Timed_out) -> Alcotest.fail "expected Truncated"
+  | Error (Connect_failed _ | Failed_after_send _ | Timed_out) ->
+      Alcotest.fail "expected Truncated"
 
 (* --- tests --- *)
 
@@ -316,7 +324,23 @@ let test_drop_before_head env sw =
   let port = serve_raw ~sw (Eio.Stdenv.net env) ~reply:"" in
   let o = run_call ~env ~sw (get (url port "/")) in
   Alcotest.(check bool) "no head" true (o.head = None);
-  expect_connect_failed o
+  expect_failed_after_send o
+
+let test_bad_status_line env sw =
+  let port = serve_raw ~sw (Eio.Stdenv.net env) ~reply:"garbage\r\n\r\n" in
+  let o = run_call ~env ~sw (get (url port "/")) in
+  expect_failed_after_send o
+
+(* The head arrives, then a chunk-size line longer than the read buffer. *)
+let test_oversized_chunk_line env sw =
+  let reply =
+    "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+    ^ String.make 2_000_000 'a'
+  in
+  let port = serve_raw ~sw (Eio.Stdenv.net env) ~reply in
+  let o = run_call ~env ~sw (get (url port "/")) in
+  Alcotest.(check bool) "head delivered" true (o.head <> None);
+  ignore (truncated_bytes o)
 
 let test_timeout_no_response env sw =
   let clock = Eio.Stdenv.clock env in
@@ -375,6 +399,8 @@ let () =
           t "drop mid chunked stream" test_drop_chunked;
           t "drop mid content-length body" test_drop_content_length;
           t "drop before head" test_drop_before_head;
+          t "bad status line is after the send" test_bad_status_line;
+          t "oversized chunk line is a truncation" test_oversized_chunk_line;
           t "timeout with no response" test_timeout_no_response;
           t "timeout mid stream" test_timeout_mid_stream;
           t "connection refused" test_refused;
