@@ -94,20 +94,111 @@ let tagged_of_yojson ~what table = function
   | `Assoc _ ->
       Error (what ^ " must be an object with exactly one field")
 
+(* Bytes that are not valid UTF-8 would make the line invalid JSON, so they are
+   stored as base64 (RFC 4648, standard alphabet, padded). *)
+module Base64 = struct
+  let alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+  let encode s =
+    let n = String.length s in
+    let byte i = if i < n then Char.code s.[i] else 0 in
+    let buf = Buffer.create ((n + 2) / 3 * 4) in
+    let rec go i =
+      if i < n then begin
+        let v = (byte i lsl 16) lor (byte (i + 1) lsl 8) lor byte (i + 2) in
+        let sextet k = alphabet.[(v lsr (18 - (6 * k))) land 63] in
+        Buffer.add_char buf (sextet 0);
+        Buffer.add_char buf (sextet 1);
+        Buffer.add_char buf (if i + 1 < n then sextet 2 else '=');
+        Buffer.add_char buf (if i + 2 < n then sextet 3 else '=');
+        go (i + 3)
+      end
+    in
+    go 0;
+    Buffer.contents buf
+
+  let sextet c = String.index_opt alphabet c
+
+  (* Strict: length a multiple of 4, padding only as the last one or two
+     characters of the final group. *)
+  let decode s =
+    let n = String.length s in
+    if n mod 4 <> 0 then Error "base64 length must be a multiple of 4"
+    else
+      let pad =
+        if n >= 2 && Char.equal s.[n - 2] '=' then 2
+        else if n >= 1 && Char.equal s.[n - 1] '=' then 1
+        else 0
+      in
+      let buf = Buffer.create (n / 4 * 3) in
+      let rec go i =
+        if i >= n then Ok (Buffer.contents buf)
+        else
+          let digit k =
+            let pos = i + k in
+            if pad > 0 && pos >= n - pad then
+              if Char.equal s.[pos] '=' then Some 0 else None
+            else sextet s.[pos]
+          in
+          match (digit 0, digit 1, digit 2, digit 3) with
+          | Some a, Some b, Some c, Some d ->
+              let v = (a lsl 18) lor (b lsl 12) lor (c lsl 6) lor d in
+              let last = i + 4 >= n in
+              let keep = if last then 3 - pad else 3 in
+              for k = 0 to keep - 1 do
+                Buffer.add_char buf (Char.chr ((v lsr (16 - (8 * k))) land 255))
+              done;
+              go (i + 4)
+          | None, _, _, _ | _, None, _, _ | _, _, None, _ | _, _, _, None ->
+              Error "invalid base64"
+      in
+      go 0
+end
+
 let payload_to_yojson = function
-  | Inline s -> `Assoc [ ("inline", `String s) ]
+  | Inline s when String.is_valid_utf_8 s -> `Assoc [ ("inline", `String s) ]
+  | Inline s -> `Assoc [ ("inline_b64", `String (Base64.encode s)) ]
   | Blob s -> `Assoc [ ("blob", `String s) ]
 
 let payload_of_yojson =
   let text make = function
-    | `String s -> Ok (make s)
+    | `String s -> make s
     | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `List _ | `Assoc _ ->
         Error "payload content must be a string"
   in
   tagged_of_yojson ~what:"payload"
-    [ ("inline", text (fun s -> Inline s)); ("blob", text (fun s -> Blob s)) ]
+    [
+      ("inline", text (fun s -> Ok (Inline s)));
+      ( "inline_b64",
+        text (fun s -> Result.map (fun b -> Inline b) (Base64.decode s)) );
+      ("blob", text (fun s -> Ok (Blob s)));
+    ]
 
-type chunks = (int * string) list [@@deriving yojson]
+let chunk_to_yojson (ms, data) =
+  if String.is_valid_utf_8 data then `List [ `Int ms; `String data ]
+  else `List [ `Int ms; `Assoc [ ("b64", `String (Base64.encode data)) ] ]
+
+let chunk_of_yojson = function
+  | `List [ `Int ms; `String data ] -> Ok (ms, data)
+  | `List [ `Int ms; `Assoc [ ("b64", `String b) ] ] ->
+      Result.map (fun data -> (ms, data)) (Base64.decode b)
+  | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _
+  | `Assoc _ ->
+      Error "a chunk is [ms, text] or [ms, {\"b64\": data}]"
+
+let chunks_to_yojson chunks = `List (List.map chunk_to_yojson chunks)
+
+let chunks_of_yojson = function
+  | `List l ->
+      List.fold_right
+        (fun j acc ->
+          match (chunk_of_yojson j, acc) with
+          | Ok c, Ok cs -> Ok (c :: cs)
+          | Error e, _ | Ok _, Error e -> Error e)
+        l (Ok [])
+  | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `Assoc _ ->
+      Error "stream must be a list of chunks"
 
 let response_body_to_yojson = function
   | Whole p -> `Assoc [ ("whole", payload_to_yojson p) ]
@@ -328,6 +419,11 @@ let rec drop_trailing_empty = function
   | "" :: rest -> drop_trailing_empty rest
   | lines -> lines
 
+let is_truncation ~first ~last = function
+  | Invalid_json _ -> last && not first
+  | Unsupported_version _ | Bad_line _ | Missing_header | Out_of_order _ ->
+      false
+
 let of_lines lines =
   let open Result.Syntax in
   let lines = List.rev (drop_trailing_empty (List.rev lines)) in
@@ -335,20 +431,28 @@ let of_lines lines =
   let rec go n header acc last_seq = function
     | [] -> Ok { header; exchanges = List.rev acc; complete = false }
     | line :: rest -> (
-        let* parsed = decode n line in
-        match parsed with
-        | Header _ -> Error (Bad_line { line = n; reason = "duplicate header" })
-        | End -> (
-            match rest with
-            | [] -> Ok { header; exchanges = List.rev acc; complete = true }
-            | _ :: _ ->
-                Error
-                  (Bad_line { line = n + 1; reason = "line after the end line" })
-            )
-        | Exchange e -> (
-            match last_seq with
-            | Some s when e.seq <= s -> Error (Out_of_order { line = n })
-            | Some _ | None -> go (n + 1) header (e :: acc) (Some e.seq) rest))
+        match decode n line with
+        | Error e when is_truncation ~first:(n = 1) ~last:(List.is_empty rest) e
+          ->
+            (* A write cut off by a killed run: drop it, keep the rest. *)
+            Ok { header; exchanges = List.rev acc; complete = false }
+        | Error e -> Error e
+        | Ok parsed -> (
+            match parsed with
+            | Header _ ->
+                Error (Bad_line { line = n; reason = "duplicate header" })
+            | End -> (
+                match rest with
+                | [] -> Ok { header; exchanges = List.rev acc; complete = true }
+                | _ :: _ ->
+                    Error
+                      (Bad_line
+                         { line = n + 1; reason = "line after the end line" }))
+            | Exchange e -> (
+                match last_seq with
+                | Some s when e.seq <= s -> Error (Out_of_order { line = n })
+                | Some _ | None ->
+                    go (n + 1) header (e :: acc) (Some e.seq) rest)))
   in
   match lines with
   | [] -> Error Missing_header

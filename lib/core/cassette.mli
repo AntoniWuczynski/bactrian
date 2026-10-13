@@ -69,7 +69,15 @@ val end_line : string
 
 val of_lines : string list -> (t, error) result
 (** Decodes a whole file split into lines (empty trailing lines ignored).
-    [complete] is true only when the last line is the end line. *)
+    [complete] is true only when the last line is the end line.
+
+    A last non-empty line (after the header) that is not valid JSON is a write
+    cut off by a killed run: it is dropped and [complete] is false. An invalid
+    line anywhere else is an error.
+
+    Payloads and stream chunks that are not valid UTF-8 are written as base64 so
+    every line is valid JSON: [{"inline_b64": ...}] for a payload and
+    [[ms, {"b64": ...}]] for a chunk. *)
 
 val equal_exchange : exchange -> exchange -> bool
 val pp_error : Format.formatter -> error -> unit

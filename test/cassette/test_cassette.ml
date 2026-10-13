@@ -245,12 +245,141 @@ let test_bad_lines () =
 
 let test_invalid_json () =
   expect_error "header" (Invalid_json { line = 1; reason = "" }) [ "{nope" ];
-  expect_error "later"
-    (Invalid_json { line = 3; reason = "" })
-    [ hl; Cassette.exchange_line (exchange ()); "{\"v\":" ];
+  expect_error "followed by another line"
+    (Invalid_json { line = 2; reason = "" })
+    [ hl; "{\"v\":"; Cassette.exchange_line (exchange ~seq:1 ()) ];
   expect_error "blank in the middle"
     (Invalid_json { line = 2; reason = "" })
     [ hl; ""; Cassette.end_line ]
+
+let test_truncated_last_line () =
+  let e0 = exchange ~seq:0 () and e1 = exchange ~seq:1 () in
+  let l1 = Cassette.exchange_line e1 in
+  let cut = String.sub l1 0 (String.length l1 / 2) in
+  let t = decode [ hl; Cassette.exchange_line e0; cut ] in
+  Alcotest.(check bool) "incomplete" false t.complete;
+  Alcotest.check (Alcotest.list exchange_t) "kept" [ e0 ] t.exchanges;
+  let t = decode [ hl; Cassette.exchange_line e0; cut; ""; "" ] in
+  Alcotest.(check int) "blank lines after it" 1 (List.length t.exchanges);
+  let t = decode [ hl; "{\"v\":1,\"ty" ] in
+  Alcotest.(check int) "nothing else" 0 (List.length t.exchanges);
+  Alcotest.(check bool) "still incomplete" false t.complete;
+  (* only a line that is not JSON at all is forgiven, and only the last one *)
+  expect_error "earlier line"
+    (Invalid_json { line = 2; reason = "" })
+    [ hl; cut; l1 ];
+  expect_error "before the end line"
+    (Invalid_json { line = 2; reason = "" })
+    [ hl; cut; Cassette.end_line ];
+  expect_error "the header"
+    (Invalid_json { line = 1; reason = "" })
+    [ "{\"v\":1,\"ty" ];
+  expect_error "valid JSON, bad line"
+    (Bad_line { line = 2; reason = "" })
+    [ hl; drop "key" l1 ]
+
+let b64_cases =
+  [
+    ("\xff", "/w==");
+    ("\xff\xfe", "//4=");
+    ("\xff\xfe\xfd", "//79");
+    ("\xe2\x82", "4oI=");
+  ]
+
+let contains line sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length line
+    && (String.equal (String.sub line i n) sub || go (i + 1))
+  in
+  go 0
+
+let test_binary_encoding () =
+  List.iter
+    (fun (raw, b64) ->
+      let line = Cassette.exchange_line (exchange ~request:(Inline raw) ()) in
+      Alcotest.(check bool)
+        ("payload " ^ b64) true
+        (contains line (Printf.sprintf {|"inline_b64":"%s"|} b64));
+      Alcotest.(check bool) "valid UTF-8" true (String.is_valid_utf_8 line);
+      let line =
+        Cassette.exchange_line
+          (exchange
+             ~outcome:
+               (Response
+                  { status = 200; headers = []; body = Stream [ (3, raw) ] })
+             ())
+      in
+      Alcotest.(check bool)
+        ("chunk " ^ b64) true
+        (contains line (Printf.sprintf {|[3,{"b64":"%s"}]|} b64)))
+    b64_cases;
+  let line =
+    Cassette.exchange_line (exchange ~request:(Inline "h\xc3\xa9") ())
+  in
+  Alcotest.(check bool)
+    "UTF-8 stays inline" true
+    (contains line {|"inline":"h|});
+  let line =
+    Cassette.exchange_line
+      (exchange
+         ~outcome:
+           (Response { status = 200; headers = []; body = Stream [ (3, "ok") ] })
+         ())
+  in
+  Alcotest.(check bool) "text chunk" true (contains line {|[3,"ok"]|});
+  Alcotest.(check bool)
+    "empty payload stays inline" true
+    (contains
+       (Cassette.exchange_line (exchange ~request:(Inline "") ()))
+       {|"inline":""|})
+
+let test_split_multibyte () =
+  let e =
+    exchange
+      ~outcome:
+        (Response
+           {
+             status = 200;
+             headers = [];
+             body = Stream [ (0, "data: \xe2\x82"); (1, "\xacx\n\n") ];
+           })
+      ()
+  in
+  let line = Cassette.exchange_line e in
+  Alcotest.(check bool) "valid UTF-8 line" true (String.is_valid_utf_8 line);
+  let t = decode [ hl; line; Cassette.end_line ] in
+  Alcotest.check (Alcotest.list exchange_t) "round trip" [ e ] t.exchanges
+
+let test_bad_base64 () =
+  let el = Cassette.exchange_line (exchange ()) in
+  let with_request v =
+    set "request" (`Assoc [ ("inline_b64", `String v) ]) el
+  in
+  List.iter
+    (fun v ->
+      expect_error ("rejects " ^ v)
+        (Bad_line { line = 2; reason = "" })
+        [ hl; with_request v ])
+    [ "!!!!"; "abc"; "ab=c"; "a==="; "=abc" ];
+  let t = decode [ hl; with_request "//79" ] in
+  Alcotest.check (Alcotest.list exchange_t) "accepts good input"
+    [ exchange ~request:(Inline "\xff\xfe\xfd") () ]
+    t.exchanges
+
+let test_equal_chunk_timing () =
+  let stream ms =
+    exchange
+      ~outcome:
+        (Response { status = 200; headers = []; body = Stream [ (ms, "a") ] })
+      ()
+  in
+  Alcotest.(check bool)
+    "same" true
+    (Cassette.equal_exchange (stream 1) (stream 1));
+  Alcotest.(check bool)
+    "different timing" false
+    (Cassette.equal_exchange (stream 1) (stream 2))
 
 let test_encoding () =
   let line = Cassette.exchange_line (exchange ~request:(Inline "a\nb") ()) in
@@ -415,6 +544,31 @@ let prop_round_trip =
                (List.map Cassette.exchange_line t.exchanges)
                (List.map Cassette.exchange_line es))
 
+let gen_bytes = QCheck.Gen.(string_size ~gen:char (int_range 0 12))
+
+let prop_binary =
+  QCheck.Test.make ~name:"arbitrary bytes round-trip as valid UTF-8 lines"
+    ~count:500
+    (QCheck.make
+       QCheck.Gen.(
+         triple gen_bytes gen_bytes
+           (list_size (int_range 0 3) (pair gen_nat gen_bytes)))
+       ~print:(fun (a, b, _) -> String.escaped a ^ " / " ^ String.escaped b))
+    (fun (request, whole_body, chunks) ->
+      let mk outcome = exchange ~request:(Inline request) ~outcome () in
+      List.for_all
+        (fun e ->
+          let line = Cassette.exchange_line e in
+          String.is_valid_utf_8 line
+          &&
+          match Cassette.of_lines [ hl; line ] with
+          | Ok { exchanges = [ e' ]; _ } -> Cassette.equal_exchange e e'
+          | Ok _ | Error _ -> false)
+        [
+          mk (whole (Inline whole_body));
+          mk (Response { status = 200; headers = []; body = Stream chunks });
+        ])
+
 let () =
   Alcotest.run "cassette"
     [
@@ -431,7 +585,21 @@ let () =
           Alcotest.test_case "unknown fields" `Quick test_unknown_fields;
           Alcotest.test_case "bad lines" `Quick test_bad_lines;
           Alcotest.test_case "invalid json" `Quick test_invalid_json;
+          Alcotest.test_case "truncated last line" `Quick
+            test_truncated_last_line;
+          Alcotest.test_case "bad base64" `Quick test_bad_base64;
         ] );
-      ("encoding", [ Alcotest.test_case "encoding" `Quick test_encoding ]);
-      ("props", [ QCheck_alcotest.to_alcotest prop_round_trip ]);
+      ( "encoding",
+        [
+          Alcotest.test_case "encoding" `Quick test_encoding;
+          Alcotest.test_case "binary encoding" `Quick test_binary_encoding;
+          Alcotest.test_case "split multibyte" `Quick test_split_multibyte;
+          Alcotest.test_case "chunk timing equality" `Quick
+            test_equal_chunk_timing;
+        ] );
+      ( "props",
+        [
+          QCheck_alcotest.to_alcotest prop_round_trip;
+          QCheck_alcotest.to_alcotest prop_binary;
+        ] );
     ]
