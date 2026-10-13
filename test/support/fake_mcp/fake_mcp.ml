@@ -159,11 +159,26 @@ let answer era line =
   | Rejected outcome -> envelope ~id:Canon.null outcome
   | Message m -> envelope ~id:(id_of m) (handle era m)
 
-let serve_stdio ~era ~log ic oc =
+(* The city of a [tools/call] line, if it is one. *)
+let called_city line =
+  match parse line with
+  | Rejected _ -> None
+  | Message m -> (
+      match Canon.str_member "method" m with
+      | Some "tools/call" ->
+          Option.bind (Canon.member "params" m) (fun p ->
+              Option.bind (Canon.member "arguments" p) (Canon.str_member "city"))
+      | Some _ | None -> None)
+
+let serve_stdio ?crash_on ~era ~log ic oc =
   let rec loop () =
     match In_channel.input_line ic with
     | None -> ()
     | Some line when String.equal (String.trim line) "" -> loop ()
+    | Some line
+      when Option.is_some crash_on
+           && Option.equal String.equal (called_city line) crash_on ->
+        Option.iter (fun path -> append_line path line) log
     | Some line ->
         Option.iter (fun path -> append_line path line) log;
         Option.iter

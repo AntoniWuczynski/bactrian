@@ -70,6 +70,12 @@ type run = {
   pricing : Pricing.table;
       (** Prices for this run's reservations and settlements. *)
   run_started : float;  (** Eio clock time, for exchange t_ms. *)
+  mcp : Mcp_proxy.config list;
+      (** The run's MCP servers and their policies, served on
+          [/r/<token>/mcp/<name>] (stdio, through [mcp-shim]) and
+          [/r/<token>/mcp-http/<name>/...] (Streamable HTTP), see {!Mcp_proxy}.
+          Their exchanges share this run's cassette, redaction, masks, matcher
+          and findings. *)
 }
 
 type findings = {
@@ -105,8 +111,10 @@ val start :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
+  process_mgr:_ Eio_unix.Process.mgr ->
   (t, string) result
-(** Binds 127.0.0.1 on an OS-chosen port. The listener runs until [sw] ends. *)
+(** Binds 127.0.0.1 on an OS-chosen port. The listener runs until [sw] ends.
+    [process_mgr] starts the runs' stdio MCP servers, which [sw] also bounds. *)
 
 val port : t -> int
 
@@ -121,10 +129,19 @@ val register : t -> run -> unit
 (** Raises [Invalid_argument] if the token is already registered. *)
 
 val unregister : t -> token:string -> findings
-(** Stops serving the token (later requests get 403) and returns its findings.
-    Raises [Invalid_argument] for a token that is not registered. *)
+(** Stops serving the token (later requests get 403), kills the run's stdio MCP
+    servers and returns its findings. Raises [Invalid_argument] for a token that
+    is not registered. *)
 
 val base_url : t -> token:string -> provider -> string
 (** e.g. "http://127.0.0.1:<port>/r/<token>/openai/v1" for OpenAI (SDK base URLs
     include /v1 for OpenAI and OpenRouter's /api/v1, not for Anthropic or
     Gemini). *)
+
+val mcp_url : t -> token:string -> string
+(** "http://127.0.0.1:<port>/r/<token>/mcp": the run's
+    {!Mcp_proxy.url_variable}, to which [mcp-shim NAME] appends "/NAME". *)
+
+val mcp_http_url : t -> token:string -> string -> string
+(** "http://127.0.0.1:<port>/r/<token>/mcp-http/<name>": the URL the agent uses
+    for the Streamable HTTP server [name]. *)

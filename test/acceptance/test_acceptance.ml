@@ -107,7 +107,10 @@ let acceptance agent () =
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let proxy =
-    match P.start ~sw ~net ~clock:(Eio.Stdenv.clock env) with
+    match
+      P.start ~sw ~net ~clock:(Eio.Stdenv.clock env)
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
+    with
     | Ok p -> p
     | Error e -> Alcotest.fail e
   in
@@ -146,6 +149,7 @@ let acceptance agent () =
         unenforced = [];
         turn_timeout = 60.;
         total_timeout = 90.;
+        mcp = [];
       }
     in
     ok

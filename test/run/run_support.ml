@@ -48,6 +48,7 @@ let with_ctx name f () =
   let proxy =
     match
       P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
     with
     | Ok p -> p
     | Error e -> Alcotest.fail e
@@ -87,6 +88,7 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     unenforced = [];
     turn_timeout = 20.;
     total_timeout = 30.;
+    mcp = [];
   }
 
 let execute ?random_bytes:(rb = random_bytes) ?(cap = 100.) ctx config =

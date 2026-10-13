@@ -93,6 +93,10 @@ type config = {
       (** For the run's reservations, settlement and [max_cost_usd]. *)
   turn_timeout : float;
   total_timeout : float;  (** Longest the whole run may take. *)
+  mcp : Mcp_proxy.config list;
+      (** The run's MCP servers, see {!Model_proxy.run}. When there is one, the
+          agent gets {!Mcp_proxy.url_variable} (for [mcp-shim]) and, for each
+          HTTP server, {!Mcp_proxy.http_variable} with its proxied URL. *)
 }
 
 type result = {
@@ -122,9 +126,9 @@ val execute :
 (** Creates the run directory, cassette and state dir, builds the agent's
     environment (spec §5 step 2 minus egress, sandbox and libfaketime: provider
     base URLs from the proxy, placeholder keys, SIM_NOW, TZ, BACTRIAN_RUN_ID,
-    BACTRIAN_STATE_DIR, PATH, HOME, LANG, TERM and the passthrough list, and
-    nothing else), drives the turns, tears down, derives and writes trace.jsonl
-    and meta.json (atomically), and returns the outcome.
+    BACTRIAN_STATE_DIR, the MCP variables, PATH, HOME, LANG, TERM and the
+    passthrough list, and nothing else), drives the turns, tears down, derives
+    and writes trace.jsonl and meta.json (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
     failure, unreadable fixtures, an invalid pattern): no agent was started.

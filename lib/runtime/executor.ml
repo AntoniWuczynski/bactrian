@@ -441,6 +441,7 @@ let run_config (l : loaded) (scenario : Scenario.t) ~scenario_dir
     unenforced = Experiment.unenforced l.experiment;
     turn_timeout = l.turn_timeout;
     total_timeout = l.total_timeout;
+    mcp = [];
   }
 
 (* One process runs an experiment at a time: two would both start the pending
@@ -599,7 +600,8 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       let* proxy =
         Result.map_error
           (fun m -> Environment m)
-          (P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env))
+          (P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+             ~process_mgr:(Eio.Stdenv.process_mgr env))
       in
       announce experiment_id;
       List.iter warn (Experiment.unenforced experiment);

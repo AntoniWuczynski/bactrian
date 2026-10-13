@@ -1,0 +1,37 @@
+(library
+ (name mcp_support)
+ (modules mcp_support)
+ (libraries
+  proxy_support
+  bactrian.core
+  bactrian.runtime
+  fake_mcp
+  eio_main
+  unix
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))
+
+(tests
+ (names test_mcp_stdio test_mcp_http test_mcp_shim)
+ (modules test_mcp_stdio test_mcp_http test_mcp_shim)
+ (package bactrian)
+ (deps %{bin:bactrian} ../support/fake_mcp/fake_mcp_server.exe)
+ (action
+  (setenv
+   BACTRIAN_BIN
+   %{bin:bactrian}
+   (run %{test})))
+ (libraries
+  mcp_support
+  proxy_support
+  bactrian.core
+  bactrian.runtime
+  fake_mcp
+  eio_main
+  unix
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))

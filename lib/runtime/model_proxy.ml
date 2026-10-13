@@ -65,6 +65,7 @@ type run = {
   redact : Redact.pattern list;
   pricing : Pricing.table;
   run_started : float;
+  mcp : Mcp_proxy.config list;
 }
 
 type findings = {
@@ -103,6 +104,7 @@ type state = {
   mutable ended : bool;
       (** The run is unregistered: its cassette is closed, so a call that
           finishes late settles the ledger but records nothing. *)
+  mcp : Mcp_proxy.t Lazy.t;  (** Forced by the run's first MCP request. *)
 }
 
 type t = {
@@ -118,6 +120,7 @@ type t = {
     on_head:(Upstream.head -> unit) ->
     on_chunk:(dt_ms:int -> string -> unit) ->
     (unit, Upstream.error) result;
+  mcp_env : Mcp_proxy.env;
 }
 
 (* Runs are keyed by a digest of their token, so lookups never compare the
@@ -211,62 +214,14 @@ let refusal_response st ?extra ~status ~type_ message =
   note st message;
   error_response ?extra ~status ~type_ message
 
-let divergence_json : Matcher.divergence -> Canon.t = function
-  | Missing_request { nearest = None; _ } ->
-      obj [ ("kind", Canon.string "missing_request") ]
-  | Missing_request { nearest = Some (e, changes, similarity); _ } ->
-      obj
-        ([
-           ("kind", Canon.string "missing_request");
-           ("nearest_seq", Canon.int e.seq);
-           ( "diff",
-             Canon.list
-               (List.map (fun (c : Diff.change) -> Canon.string c.path) changes)
-           );
-         ]
-        @
-        match Canon.float similarity with
-        | Ok v -> [ ("similarity", v) ]
-        | Error _ -> [])
-  | Reordered { expected; _ } ->
-      obj
-        [
-          ("kind", Canon.string "reordered");
-          ("expected_seq", Canon.int expected.seq);
-        ]
-  | Shape_mismatch { recorded; _ } ->
-      obj
-        [
-          ("kind", Canon.string "shape_mismatch");
-          ("recorded_seq", Canon.int recorded.seq);
-        ]
-  | Unconsumed e ->
-      obj [ ("kind", Canon.string "unconsumed"); ("seq", Canon.int e.seq) ]
-
-let describe_divergence : Matcher.divergence -> string = function
-  | Missing_request { nearest = None; _ } ->
-      "the request is not in the recording"
-  | Missing_request { nearest = Some (e, _, sim); _ } ->
-      Printf.sprintf
-        "the request is not in the recording (nearest: seq %d, similarity %.3f)"
-        e.seq sim
-  | Reordered { expected; _ } ->
-      Printf.sprintf "the request arrived out of order (expected seq %d)"
-        expected.seq
-  | Shape_mismatch { recorded; _ } ->
-      Printf.sprintf "streaming differs from the recording (seq %d)"
-        recorded.seq
-  | Unconsumed e -> Printf.sprintf "seq %d was never requested" e.seq
-
-let describe_upstream_error : Upstream.error -> string = function
-  | Connect_failed reason -> "upstream unreachable: " ^ reason
-  | Failed_after_send reason ->
-      "upstream connection failed after the request was sent: " ^ reason
-  | Timed_out -> "upstream timed out"
-  | Truncated { bytes; reason } ->
-      Printf.sprintf "upstream body cut off after %d bytes: %s" bytes reason
-
 (* Request analysis *)
+
+let next_occurrence st key =
+  let n = Option.value (Counts.find_opt key st.seen) ~default:0 in
+  st.seen <- Counts.add key (n + 1) st.seen;
+  n
+
+let t_ms t st = Float.to_int ((t.now () -. st.run.run_started) *. 1000.)
 
 (* One model request on its way through the proxy. *)
 type pending = {
@@ -424,7 +379,7 @@ type finish = Upstream of (unit, Upstream.error) result | Agent_gone
 let record_live st x ~head ~chunks finish =
   let outcome : Cassette.outcome =
     match (head, finish) with
-    | None, Upstream (Error e) -> Transport_error (describe_upstream_error e)
+    | None, Upstream (Error e) -> Transport_error (Upstream.describe_error e)
     | None, Upstream (Ok ()) -> Transport_error "no response head"
     | None, Agent_gone ->
         Transport_error "the agent disconnected before the response head"
@@ -491,7 +446,7 @@ let finish_live st x ~record ~model ~date ~reservation ~head ~chunks finish =
       (match finish with
       | Upstream (Error e) ->
           st.transport_errors <- st.transport_errors + 1;
-          add_error st (describe_upstream_error e)
+          add_error st (Upstream.describe_error e)
       | Agent_gone ->
           add_error st "the agent disconnected before the response ended"
       | Upstream (Ok ()) -> ());
@@ -592,7 +547,7 @@ let live t ~conn_sw st x ~record =
                 ~headers:h.headers (fun () -> Eio.Stream.take items)
           | Error e ->
               error_response ~status:502 ~type_:"bactrian_upstream_error"
-                (describe_upstream_error e)))
+                (Upstream.describe_error e)))
 
 (* Replay *)
 
@@ -623,32 +578,33 @@ let serve_recorded t st ~timing (e : Cassette.exchange) =
               | Fast -> ());
               Chunk piece)
 
+(* The matcher's decision, with its findings kept and a served exchange copied
+   into this run's cassette. Shared with MCP. *)
+let decide st (r : replaying) ~t_ms request =
+  locked st (fun () ->
+      let m, decision, found = Matcher.decide r.matcher request in
+      r.matcher <- m;
+      st.divergences <- List.rev_append found st.divergences;
+      (match decision with
+      | Matcher.Refuse d -> st.divergences <- d :: st.divergences
+      | Serve { exchange; _ } -> (
+          st.exchanges <- st.exchanges + 1;
+          match st.run.cassette with
+          | Some writer ->
+              Store.append writer { exchange with seq = st.next_seq; t_ms };
+              st.next_seq <- st.next_seq + 1
+          | None -> ())
+      | Go_live -> ());
+      decision)
+
 let replay t ~conn_sw st x (r : replaying) =
-  let decision =
-    locked st (fun () ->
-        let m, decision, found = Matcher.decide r.matcher x.request in
-        r.matcher <- m;
-        st.divergences <- List.rev_append found st.divergences;
-        (match decision with
-        | Matcher.Refuse d -> st.divergences <- d :: st.divergences
-        | Serve { exchange; _ } -> (
-            st.exchanges <- st.exchanges + 1;
-            match st.run.cassette with
-            | Some writer ->
-                Store.append writer
-                  { exchange with seq = st.next_seq; t_ms = x.t_ms };
-                st.next_seq <- st.next_seq + 1
-            | None -> ())
-        | Go_live -> ());
-        decision)
-  in
-  match decision with
+  match decide st r ~t_ms:x.t_ms x.request with
   | Serve { exchange; _ } -> serve_recorded t st ~timing:r.timing exchange
   | Go_live -> live t ~conn_sw st x ~record:true
   | Refuse d ->
       refusal_response st ~status:409 ~type_:"bactrian_replay_miss"
-        ~extra:[ ("divergence", divergence_json d) ]
-        (describe_divergence d)
+        ~extra:[ ("divergence", Replay_miss.json d) ]
+        (Replay_miss.describe d)
 
 (* Routing *)
 
@@ -699,12 +655,7 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
             then Streamed
             else Whole_body
           in
-          let occurrence =
-            locked st (fun () ->
-                let n = Option.value (Counts.find_opt key st.seen) ~default:0 in
-                st.seen <- Counts.add key (n + 1) st.seen;
-                n)
-          in
+          let occurrence = locked st (fun () -> next_occurrence st key) in
           let x =
             {
               provider = p;
@@ -720,12 +671,65 @@ let model_request t ~conn_sw st p ~meth ~uri ~path ~headers ~body =
               model;
               request = { channel = Model; key; canonical; shape };
               occurrence;
-              t_ms = Float.to_int ((t.now () -. st.run.run_started) *. 1000.);
+              t_ms = t_ms t st;
             }
           in
           match st.serving with
           | Live { record } -> live t ~conn_sw st x ~record
           | Replaying r -> replay t ~conn_sw st x r))
+
+(* MCP *)
+
+(* What MCP shares with the model routes of the same run (decision 0006). *)
+let mcp_shared t st : Mcp_proxy.shared =
+  {
+    serving =
+      (match st.serving with
+      | Live { record } -> Live { record }
+      | Replaying r -> Replaying { decide = decide st r });
+    store = st.run.store;
+    connector = st.run.connector;
+    t_ms = (fun () -> t_ms t st);
+    scrub = (fun text -> locked st (fun () -> scrub st text));
+    mask =
+      (fun canonical ->
+        let masks, canonical = Mask.canon st.run.normalise canonical in
+        locked st (fun () -> st.masks_fired <- st.masks_fired + masks);
+        canonical);
+    occurrence = (fun key -> locked st (fun () -> next_occurrence st key));
+    exchange =
+      (fun ~record e ->
+        locked st (fun () ->
+            st.exchanges <- st.exchanges + 1;
+            match st.run.cassette with
+            | Some writer when record && not st.ended ->
+                Store.append writer { e with seq = st.next_seq };
+                st.next_seq <- st.next_seq + 1
+            | Some _ | None -> ()));
+    failed =
+      (fun message ->
+        locked st (fun () ->
+            st.transport_errors <- st.transport_errors + 1;
+            add_error st message));
+    note = note st;
+  }
+
+let mcp_response (r : Mcp_proxy.reply) =
+  respond ~status:r.status ~headers:r.headers (of_list [ r.body ])
+
+let mcp_request st ~meth ~uri ~segment ~path ~headers ~body =
+  let mcp = Lazy.force st.mcp in
+  match (segment, String.split_on_char '/' path) with
+  | "mcp", [ ""; name ] -> mcp_response (Mcp_proxy.stdio mcp ~name body)
+  | _, "" :: name :: rest ->
+      mcp_response
+        (Mcp_proxy.http mcp ~name ~meth
+           ~rest:(String.concat "" (List.map (fun s -> "/" ^ s) rest))
+           ~query:(match Uri.verbatim_query uri with Some "" -> None | q -> q)
+           ~headers body)
+  | _, _ ->
+      refusal_response st ~status:404 ~type_:"bactrian_not_found"
+        "expected /r/<token>/mcp/<server> or /r/<token>/mcp-http/<server>/..."
 
 let route path =
   match String.split_on_char '/' path with
@@ -770,6 +774,13 @@ let handle t ((conn_sw, _), _) request body : response =
             "unknown or ended run"
       | Some st -> (
           match provider_of_segment provider with
+          | None
+            when String.equal provider "mcp" || String.equal provider "mcp-http"
+            ->
+              mcp_request st ~uri ~segment:provider ~path
+                ~meth:(Http.Method.to_string (Http.Request.meth request))
+                ~headers:(Http.Header.to_list headers)
+                ~body
           | None ->
               unattributed_response t ~status:404
                 ~type_:"bactrian_unknown_provider"
@@ -812,7 +823,7 @@ let on_error t = function
       t.unattributed <- t.unattributed + 1;
       Printf.eprintf "bactrian model proxy: %s\n%!" (Printexc.to_string ex)
 
-let start ~sw ~net ~clock =
+let start ~sw ~net ~clock ~process_mgr =
   match
     Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true net
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
@@ -822,6 +833,10 @@ let start ~sw ~net ~clock =
       match Eio.Net.listening_addr sock with
       | `Unix _ -> Error "the listener is not TCP"
       | `Tcp (_, port) ->
+          let call ~sw connector request ~on_head ~on_chunk =
+            Upstream.call ~sw ~net ~clock ~timeout:upstream_timeout connector
+              request ~on_head ~on_chunk
+          in
           let t =
             {
               port;
@@ -829,10 +844,14 @@ let start ~sw ~net ~clock =
               runs = Runs.create 8;
               now = (fun () -> Eio.Time.now clock);
               sleep = Eio.Time.sleep clock;
-              call =
-                (fun ~sw connector request ~on_head ~on_chunk ->
-                  Upstream.call ~sw ~net ~clock ~timeout:upstream_timeout
-                    connector request ~on_head ~on_chunk);
+              call;
+              mcp_env =
+                {
+                  sw;
+                  process_mgr :> Eio_unix.Process.mgr_ty Eio.Resource.t;
+                  clock :> float Eio.Time.clock_ty Eio.Resource.t;
+                  call;
+                };
             }
           in
           let server =
@@ -862,7 +881,7 @@ let register t run =
             timing;
           }
   in
-  Runs.replace t.runs (token_key run.token)
+  let rec st =
     {
       run;
       serving;
@@ -879,13 +898,17 @@ let register t run =
       cap_refusals = [];
       errors = [];
       ended = false;
+      mcp = lazy (Mcp_proxy.create t.mcp_env (mcp_shared t st) run.mcp);
     }
+  in
+  Runs.replace t.runs (token_key run.token) st
 
 let unregister t ~token =
   match Runs.find_opt t.runs (token_key token) with
   | None -> invalid_arg "Model_proxy.unregister: unknown token"
   | Some st ->
       Runs.remove t.runs (token_key token);
+      if Lazy.is_val st.mcp then Mcp_proxy.stop (Lazy.force st.mcp);
       locked st (fun () ->
           st.ended <- true;
           let unconsumed =
@@ -907,3 +930,9 @@ let unregister t ~token =
 let base_url t ~token p =
   Printf.sprintf "http://127.0.0.1:%d/r/%s/%s%s" t.port token (segment p)
     (sdk_base p)
+
+let mcp_url t ~token =
+  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp" t.port token
+
+let mcp_http_url t ~token name =
+  Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp-http/%s" t.port token name

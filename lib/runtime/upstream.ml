@@ -23,10 +23,19 @@ type error =
   | Timed_out
   | Truncated of { bytes : int; reason : string }
 
+let describe_error = function
+  | Connect_failed reason -> "upstream unreachable: " ^ reason
+  | Failed_after_send reason ->
+      "upstream connection failed after the request was sent: " ^ reason
+  | Timed_out -> "upstream timed out"
+  | Truncated { bytes; reason } ->
+      Printf.sprintf "upstream body cut off after %d bytes: %s" bytes reason
+
 let allowed name =
   String.equal name "content-type"
   || String.equal name "retry-after"
   || String.equal name "x-request-id"
+  || String.equal name "mcp-session-id"
   || String.starts_with ~prefix:"x-ratelimit-" name
   || String.starts_with ~prefix:"anthropic-ratelimit-" name
 

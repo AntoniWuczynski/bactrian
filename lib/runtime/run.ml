@@ -53,6 +53,7 @@ type config = {
   pricing : Pricing.table;
   turn_timeout : float;
   total_timeout : float;
+  mcp : Mcp_proxy.config list;
 }
 
 type result = {
@@ -242,6 +243,18 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~sim_now =
             (key_variable p, "bactrian-" ^ token);
           ])
         table
+    @ (match config.mcp with
+      | [] -> []
+      | _ :: _ -> [ (Mcp_proxy.url_variable, P.mcp_url proxy ~token) ])
+    @ List.filter_map
+        (fun (c : Mcp_proxy.config) ->
+          match c.server with
+          | Http _ ->
+              Some
+                ( Mcp_proxy.http_variable c.name,
+                  P.mcp_http_url proxy ~token c.name )
+          | Stdio _ -> None)
+        config.mcp
   in
   let passthrough =
     List.filter_map
@@ -541,6 +554,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         redact;
         pricing = config.pricing;
         run_started = !started;
+        mcp = config.mcp;
       };
     registered := true;
     Fun.protect ~finally:(fun () -> ignore (unregister ())) @@ fun () ->

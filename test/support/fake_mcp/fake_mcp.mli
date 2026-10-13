@@ -16,12 +16,19 @@ val session_id : string
 (** {1 Stdio} *)
 
 val serve_stdio :
-  era:era -> log:string option -> In_channel.t -> Out_channel.t -> unit
+  ?crash_on:string ->
+  era:era ->
+  log:string option ->
+  In_channel.t ->
+  Out_channel.t ->
+  unit
 (** Answers one JSON-RPC message per input line until end of input, flushing
-    after every reply. Notifications get no reply, a batch gets [-32600], text
-    that is not JSON gets [-32700]. With [log], each raw input line is appended
-    to that file before it is answered. May raise [Sys_error] if the log cannot
-    be written. *)
+    after every reply. With [crash_on], a [tools/call] for that city is logged
+    and then the function returns at once without answering, as a server that
+    crashed mid-call would. Notifications get no reply, a batch gets [-32600],
+    text that is not JSON gets [-32700]. With [log], each raw input line is
+    appended to that file before it is answered. May raise [Sys_error] if the
+    log cannot be written. *)
 
 (** {1 Streamable HTTP}
 

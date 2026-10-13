@@ -117,6 +117,7 @@ let run_command ~json ~live (config : Run.config) =
               match
                 P.start ~sw ~net:(Eio.Stdenv.net env)
                   ~clock:(Eio.Stdenv.clock env)
+                  ~process_mgr:(Eio.Stdenv.process_mgr env)
               with
               | Error m -> fail ~json Output.exit_environment m
               | Ok proxy -> (
@@ -302,6 +303,7 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     unenforced = [];
     turn_timeout;
     total_timeout;
+    mcp = [];
   }
 
 let positive name v =
@@ -878,6 +880,44 @@ let plan_cmd =
        $ population $ between_sd $ power $ confidence $ max_repeats
        $ simulations $ seed))
 
+let mcp_shim_cmd =
+  let name =
+    Arg.(
+      required
+      & pos 0 (some string) None
+      & info [] ~docv:"NAME" ~doc:"The MCP server's name in the experiment.")
+  in
+  let run name =
+    match Sys.getenv_opt Mcp_proxy.url_variable with
+    | None | Some "" ->
+        prerr_endline
+          ("bactrian mcp-shim: " ^ Mcp_proxy.url_variable
+         ^ " is not set: run the agent under bactrian");
+        Output.exit_usage
+    | Some url ->
+        Eio_main.run (fun env ->
+            Mcp_shim.run ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+              ~stdin:(Eio.Stdenv.stdin env) ~stdout:(Eio.Stdenv.stdout env) ~url
+              ~name);
+        Output.exit_ok
+  in
+  let info =
+    Cmd.info "mcp-shim" ~exits
+      ~doc:"Stand in for a stdio MCP server inside an agent run"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Point the agent's MCP configuration at $(b,bactrian mcp-shim) \
+             $(i,NAME) instead of the server's own command. The shim passes \
+             each JSON-RPC line from its stdin to bactrian, which starts, \
+             records or replays the real server $(i,NAME), and writes the \
+             replies to its stdout. It reads $(b,BACTRIAN_MCP_URL), which \
+             bactrian sets for the agent, and exits when its stdin closes.";
+        ]
+  in
+  Cmd.v info Term.(const run $ name)
+
 let cmd =
   let info =
     Cmd.info "bactrian" ~version:Bactrian_core.Version.current ~exits
@@ -893,6 +933,7 @@ let cmd =
       compare_cmd;
       plan_cmd;
       report_cmd;
+      mcp_shim_cmd;
     ]
 
 let () =

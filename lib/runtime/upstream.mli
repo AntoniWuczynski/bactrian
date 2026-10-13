@@ -26,9 +26,10 @@ type request = {
 
 type head = { status : int; headers : (string * string) list }
 (** [headers] holds only [content-type], [retry-after], [x-ratelimit-*],
-    [anthropic-ratelimit-*] and [x-request-id], names lowercased, in response
-    order. [content-length], [transfer-encoding], [set-cookie] and everything
-    else never appear. *)
+    [anthropic-ratelimit-*], [x-request-id] and [mcp-session-id] (the legacy MCP
+    session, which the agent needs back), names lowercased, in response order.
+    [content-length], [transfer-encoding], [set-cookie] and everything else
+    never appear. *)
 
 type error =
   | Connect_failed of string
@@ -43,6 +44,9 @@ type error =
   | Truncated of { bytes : int; reason : string }
       (** The head arrived but the body ended early. [bytes] is the number
           already passed to [on_chunk]. *)
+
+val describe_error : error -> string
+(** One line for a run's errors and recorded transport errors. *)
 
 val call :
   sw:Eio.Switch.t ->

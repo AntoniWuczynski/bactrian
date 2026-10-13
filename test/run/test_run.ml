@@ -80,6 +80,46 @@ let allowed =
     "LC_CTYPE";
   ]
 
+(* MCP servers add the shim URL and one URL per HTTP server. *)
+let test_mcp_environment =
+  with_ctx "mcp-env" @@ fun ctx ->
+  let mcp : Mcp_proxy.config list =
+    [
+      {
+        name = "calendar";
+        policy = Block;
+        server = Stdio { argv = [ "true" ]; env = []; cwd = None };
+      };
+      {
+        name = "web-search";
+        policy = Block;
+        server = Http { url = Uri.of_string "http://127.0.0.1:9" };
+      };
+    ]
+  in
+  let r = ok (execute ctx { (config ()) with mcp }) in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  let env =
+    Yojson.Safe.Util.to_assoc (Yojson.Safe.from_file (file r "state/env.json"))
+  in
+  let value k =
+    Option.map Yojson.Safe.Util.to_string (List.assoc_opt k env)
+    |> Option.value ~default:"<unset>"
+  in
+  let prefix = Printf.sprintf "http://127.0.0.1:%d/r/" (P.port ctx.proxy) in
+  let shim = value "BACTRIAN_MCP_URL" in
+  Alcotest.(check bool)
+    ("shim URL " ^ shim) true
+    (String.starts_with ~prefix shim && String.ends_with ~suffix:"/mcp" shim);
+  let web = value "BACTRIAN_MCP_HTTP_WEB_SEARCH" in
+  Alcotest.(check bool)
+    ("HTTP URL " ^ web) true
+    (String.starts_with ~prefix web
+    && String.ends_with ~suffix:"/mcp-http/web-search" web);
+  Alcotest.(check string)
+    "no URL for a stdio server" "<unset>"
+    (value "BACTRIAN_MCP_HTTP_CALENDAR")
+
 let test_environment =
   with_ctx "env" @@ fun ctx ->
   Unix.putenv "PARENT_ONLY_SECRET" "leak";
@@ -593,6 +633,7 @@ let () =
           Alcotest.test_case "records and derives the trace" `Slow test_record;
           Alcotest.test_case "environment is the allowlist" `Slow
             test_environment;
+          Alcotest.test_case "MCP variables" `Slow test_mcp_environment;
         ] );
       ( "replay",
         [

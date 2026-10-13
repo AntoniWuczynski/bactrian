@@ -162,6 +162,7 @@ let with_ctx name f () =
   let proxy =
     match
       P.start ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
     with
     | Ok p -> p
     | Error e -> Alcotest.fail e
@@ -204,8 +205,8 @@ let redaction source =
   | Error _ -> Alcotest.failf "pattern %S" source
 
 let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
-    ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default) ctx ~token
-    ~upstream =
+    ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default) ?(mcp = [])
+    ctx ~token ~upstream =
   let run_id = run_id_of token in
   {
     P.run_id;
@@ -224,6 +225,7 @@ let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
     redact = List.map redaction redact;
     pricing;
     run_started = Eio.Time.now (Eio.Stdenv.clock ctx.env);
+    mcp;
   }
 
 let recording ctx (run : P.run) =
@@ -446,6 +448,6 @@ let record_all ctx ~token fixtures =
   recording ctx run
 
 let replay_run ?(record = true) ?(matcher = Matcher.Strict) ?(timing = P.Fast)
-    ctx ~token ~upstream recording =
-  make_run ctx ~token ~upstream ~record
+    ?mcp ctx ~token ~upstream recording =
+  make_run ?mcp ctx ~token ~upstream ~record
     ~mode:(P.Replay { recording; matcher; allow_reorder = false; timing })

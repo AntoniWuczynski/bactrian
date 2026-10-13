@@ -6,4 +6,4 @@
 (executable
  (name fake_mcp_server)
  (modules fake_mcp_server)
- (libraries fake_mcp cmdliner))
+ (libraries fake_mcp cmdliner unix))
