@@ -2,7 +2,7 @@
 
 This document describes how bactrian is designed. Sections are numbered so that code comments can point at them. Parts of the design that the current build does not implement are marked as planned. The README's Status section says what works today, and [`decisions/`](decisions/) records individual choices with their reasons.
 
-Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), clock enforcement with `libfaketime`, HTTPS for HTTP-mode agents, the `doctor` and `ca` commands, published JSON Schemas, and the MCP server mode (`serve-mcp`).
+Planned, not yet implemented: interception of HTTPS egress (and with it live recording against real providers), HTTPS for HTTP-mode agents, the `doctor` and `ca` commands, published JSON Schemas, and the MCP server mode (`serve-mcp`).
 
 ## 1. Purpose
 
@@ -37,7 +37,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 | Model comparison | v1: the agent picks the model from variant environment variables. Later: bactrian translates between protocols to swap models underneath an agent. |
 | Provider protocols | Five adapters: OpenAI Chat Completions (also used for OpenRouter), OpenAI Responses, Anthropic Messages, Gemini `generateContent` and Gemini Interactions. |
 | Tool determinism | Three mechanisms, picked per experiment: MCP interception, fixtures seeded into the state directory, and HTTPS egress interception with a generated certificate authority (planned). Per-host or per-server policy: `record`, `replay`, `passthrough`, `block`. |
-| Clock | A `SIM_NOW` and `TZ` contract for every agent, plus `libfaketime` where it works (Linux, best effort on macOS, planned). Each run records whether the clock was enforced or contract-only. |
+| Clock | A `SIM_NOW` and `TZ` contract for every agent, plus `libfaketime` on Linux. macOS is contract-only in v1, because SIP strips `DYLD_*` variables from platform binaries (decision record 0009). Each run records whether the clock was enforced or contract-only, and why. |
 | Scoring | v1: declarative YAML assertions plus external checker commands. Golden pass and fail traces test the assertions themselves. Language-model judges and human evaluation come later. |
 | Regression rule | A regression only when the whole confidence interval of the difference lies beyond the threshold. Otherwise `improvement`, `no-change` or `inconclusive` (with the extra runs needed). |
 | Process architecture | One binary, one process, Eio fibres. One listener per proxy type, routed by run. |
@@ -66,6 +66,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Assertion` | Declarative assertions evaluated over a trace. |
 | `Stats`, `Bootstrap`, `Plan_sim` | Wilson and Newcombe intervals, pass^k, the hierarchical bootstrap with a seeded pseudo-random number generator, Bonferroni adjustment, and the `plan` simulator. |
 | `Compare` | The four-way verdict and gate exit codes. |
+| `Clock_label`, `Elf_probe`, `Shebang`, `Rfc3339` | The clock label of a run and the pure parts of deciding it: an ELF reader (dynamic or static, Go build ID note), the `#!` line, and the Unix time of `SIM_NOW`. |
 | `Pricing`, `Reservation` | Price table, cost from usage (input, cached input, cache writes, output, thinking tokens, long-context tiers) and the worst-case cost of a request. |
 | `Redact`, `Mask` | Deterministic scrubbing of secrets and configured patterns, and the `normalise` masks applied before keying. |
 | `Mcp_msg` | MCP messages for both protocol eras (2026-07-28 and 2025-11-25). |
@@ -79,7 +80,8 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Model_proxy` | One HTTP listener. Routes by run token in the path (`/r/<token>/...`). Record, replay and passthrough, including streams. MCP traffic shares the listener and the run registry through `Mcp_proxy` (decision 0006), so one port and one token cover models and tools. |
 | `Mcp_proxy`, `Mcp_shim` | MCP endpoints on the listener for Streamable HTTP servers, and `bactrian mcp-shim <name>` for stdio servers that the agent launches itself. |
 | `Egress_proxy`, `Ca` (planned) | HTTP `CONNECT` proxy. The run ID arrives as the proxy username. Mints a leaf certificate per host from the project certificate authority (CA) and terminates Transport Layer Security (TLS) with a fresh single-certificate configuration per connection. Applies per-host policy. Its own process environment is scrubbed of `SSL_CERT_FILE` so its upstream trust is never replaced by its own CA. |
-| `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. `libfaketime` injection is planned. |
+| `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. |
+| `Agent_clock` | Finds `libfaketimeMT.so.1`, decides whether the agent's clock is enforced, and adds the `LD_PRELOAD` and `FAKETIME` variables to its environment (section 5 step 2, decision record 0009). |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
 | `Checker_runner` | Runs external checker commands with the trace on standard input. Checkers will run sandboxed as well. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
@@ -102,7 +104,7 @@ One run:
    - provider base URLs pointing at `http://127.0.0.1:<port>/r/<run-token>/...`
    - `HTTPS_PROXY=http://<run-id>:<run-token>@127.0.0.1:<port>` and `NODE_USE_ENV_PROXY=1` (planned, with egress interception)
    - a trust bundle of the system roots plus the bactrian CA, exported as `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE` (planned)
-   - `SIM_NOW`, `TZ`, and `libfaketime` variables where supported
+   - `SIM_NOW`, `TZ`, and on Linux with `libfaketime` installed the variables that start the agent's clock at `SIM_NOW` and let it run: `LD_PRELOAD` (the library first, then the agent's own value), `FAKETIME=@<Unix time of SIM_NOW>` with `FAKETIME_FMT=%s`, `FAKETIME_DONT_RESET=1` and `FAKETIME_DONT_FAKE_MONOTONIC=1`. The label `enforced` needs the agent's executable to be a dynamically linked ELF file that is not a Go program; every other run is `contract-only` with a reason (`macos`, `faketime-off`, `library-not-found`, `invalid-sim-now`, `static-binary`, `go-binary` or `unreadable-executable`), in `meta.json` under `clock` and in the trace and cassette headers
    - `BACTRIAN_RUN_ID`, `BACTRIAN_STATE_DIR` and the variant's own variables
    - provider key variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) set to a placeholder `bactrian-<run-token>`, never the real key (section 5.3)
    - `HOME` set to the state directory, with `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `npm_config_cache` inside it, `TMPDIR` set to the run's temporary directory, and `PYTHONDONTWRITEBYTECODE=1`, so runtimes keep their caches inside the run. This holds with or without the sandbox, so a run's environment does not depend on the host
@@ -381,7 +383,7 @@ Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per r
    - toy agents in `examples/` (TypeScript with pnpm, Python with uv) run as real subprocesses through record, strict replay with zero divergence, and a prompt change with the exact expected divergence
    - MCP: fake servers for both protocol eras through `mcp-shim` and over Streamable HTTP
    - egress (planned): a fake HTTPS server reached through the interception proxy from Node `fetch` and from Python `httpx` and `requests`
-   - clock (planned): an agent prints its time. On Linux it must equal `SIM_NOW`. On macOS the run must be flagged contract-only.
+   - clock: a Python and a Node agent print their time, in a time zone other than UTC and inside the sandbox too. On Linux with `libfaketime` it must equal `SIM_NOW` and the run is `enforced`. On macOS the run is flagged `contract-only` (`macos`). ELF, `#!`, library search and environment injection are unit-tested on constructed fixtures.
    - sandbox: escape-attempt agents in TypeScript and Python (`test/sandbox/`) make one model call through the proxy, then try a direct HTTPS request ignoring proxy variables, a raw TCP connection, a WebSocket, a DNS lookup, a write to `$HOME` and outside the state directory, and a read of a deny-listed path. Every attempt must fail, and each reports its own outcome. On macOS each must also appear as a `sandbox_violation` event. On Linux the operating system logs nothing, so the agent's reported failure is the evidence. The agent dumps its environment, and the test searches it and every file of the run's world for the real provider key, which is set in bactrian's own environment as well. It must find the placeholder and never the key.
 6. Determinism: the same inputs and seed give a byte-identical JSON report.
 7. Live smoke tests are opt-in, limited by spend caps, and never run in continuous integration, because a public repository's workflows get no secrets.
@@ -408,7 +410,7 @@ The facts below were checked in October 2026 against vendor documentation and lo
 | Statistics | hand-rolled, tested against SciPy and statsmodels fixtures | Owl's last release was January 2025. `pareto` does not install on OCaml 5. |
 | MCP | in-tree | No OCaml library targets 2026-07-28. The server side targets 2026-07-28 (stateless, `server/discover`, a tasks extension for long operations) with a 2025-11-25 fallback. The proxy and the shim pass either era through unchanged, so a recording replays its own handshake (`server/discover` or `initialize`). The HTTP route answers 405 to the legacy GET stream so older clients fail fast. Claude Code negotiates 2026-07-28. Cursor still speaks 2025-11-25. |
 | Sandbox | `sandbox-exec` (macOS), bubblewrap (Linux) | The same model as Anthropic's Apache-2.0 sandbox runtime (`anthropic-experimental/sandbox-runtime`). Checked on macOS 26.6.1: external HTTPS and DNS blocked, loopback allowed, writes outside the allowed subpath denied. Ubuntu 24.04 needs the AppArmor user-namespace restriction lifted for `bwrap --unshare-net`. Landlock was considered and rejected as the network layer, because it filters TCP by port only, not by address, and needs Linux 6.7. |
-| Clock (planned) | libfaketime 0.9.13 | Works on Linux via `LD_PRELOAD`. On macOS it is blocked for SIP-protected and hardened-runtime binaries. Go binaries bypass it everywhere. |
+| Clock | libfaketime 0.9.13 (Ubuntu ships 0.9.10 to 0.9.12, and 0.9.10 parses the same) | Works on Linux via `LD_PRELOAD`, with the multi-thread build `libfaketimeMT.so.1`. Not injected on macOS in v1: SIP strips `DYLD_*` variables from platform binaries and hardened-runtime ones ignore them. Go binaries and statically linked ones bypass it everywhere. The `@` start-at form is read by `mktime` in the process's own `TZ`, so bactrian passes a Unix time with `FAKETIME_FMT=%s` instead (decision record 0009). |
 
 Agent-side interception facts:
 - Node: `fetch` honours `HTTPS_PROXY` only with `NODE_USE_ENV_PROXY=1` (Node 22.21+ or 24.5+). `NODE_EXTRA_CA_CERTS` adds the CA. The official OpenAI and Anthropic TypeScript SDKs use global `fetch`. WebSocket clients built on `ws` (including Gemini Live in `@google/genai`) skip the proxy entirely. Under the sandbox their connections fail at the operating-system level.
@@ -443,7 +445,7 @@ Built-in prices, in US dollars per million tokens. They are data and can be over
 - Fault injection (latency, errors, truncated streams) as an experiment option.
 - OpenTelemetry Protocol (OTLP) export of traces.
 - Transparent (non-proxy) interception, HTTP/2 upstreams, and WebSocket and gRPC capture.
-- Full clock virtualisation on macOS and for Go binaries.
+- Clock enforcement on macOS and for Go and statically linked binaries.
 - Reading and writing Inspect AI log files.
 - Windows.
 

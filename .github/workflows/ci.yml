@@ -33,15 +33,17 @@ jobs:
           uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py
       - run: opam install . --deps-only --with-test --locked
       # The sandbox tests need bubblewrap and unprivileged user namespaces,
-      # which Ubuntu's AppArmor restriction blocks by default.
+      # which Ubuntu's AppArmor restriction blocks by default. The clock tests
+      # need libfaketime.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap libfaketime
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bwrap --version
+          dpkg -L libfaketime | grep libfaketimeMT.so.1
       - run: opam exec -- dune build
       - run: opam exec -- dune test
       - run: opam exec -- dune build @acceptance
