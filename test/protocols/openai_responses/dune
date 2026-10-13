@@ -1,0 +1,13 @@
+(test
+ (name test_openai_responses)
+ (package bactrian)
+ (libraries
+  bactrian.core
+  protocol_test_support
+  alcotest
+  qcheck-core
+  qcheck-alcotest)
+ (deps
+  (source_tree ../../fixtures/protocols/openai_responses))
+ (flags
+  (:standard -w -70)))

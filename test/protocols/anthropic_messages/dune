@@ -1,0 +1,13 @@
+(test
+ (name test_anthropic_messages)
+ (package bactrian)
+ (libraries
+  bactrian.core
+  protocol_test_support
+  alcotest
+  qcheck-core
+  qcheck-alcotest)
+ (deps
+  (source_tree ../../fixtures/protocols/anthropic_messages))
+ (flags
+  (:standard -w -70)))

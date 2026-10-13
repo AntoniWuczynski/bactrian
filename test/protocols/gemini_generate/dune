@@ -1,0 +1,12 @@
+(test
+ (name test_gemini_generate)
+ (flags
+  (:standard -w -70))
+ (libraries
+  bactrian.core
+  protocol_test_support
+  alcotest
+  qcheck-core
+  qcheck-alcotest)
+ (deps
+  (source_tree ../../fixtures/protocols/gemini_generate)))
