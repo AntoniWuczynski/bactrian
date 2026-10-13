@@ -27,8 +27,13 @@ let ( let* ) = Result.bind
 
 (* Files *)
 
-let read_opt path =
-  match Eio.Path.load path with text -> Some text | exception Eio.Io _ -> None
+(* [Ok None] when the run did not write the file. Any other failure to read
+   it is an error naming the file. *)
+let read_opt dir file =
+  match Eio.Path.load Eio.Path.(dir / file) with
+  | text -> Ok (Some text)
+  | exception Eio.Io (Eio.Fs.E (Not_found _), _) -> Ok None
+  | exception (Eio.Io _ as e) -> Error (file, Format.asprintf "%a" Eio.Exn.pp e)
 
 type verdicts_wire_item = {
   name : string;
@@ -51,9 +56,10 @@ let check_of_wire w : (D.check, string) result =
   | other -> Error (Printf.sprintf "unknown verdict %S" other)
 
 let read_checks dir =
-  match read_opt Eio.Path.(dir / "verdicts.json") with
-  | None -> Ok []
-  | Some text -> (
+  match read_opt dir "verdicts.json" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("verdicts.json", m)
       | json -> (
@@ -70,9 +76,10 @@ let read_checks dir =
               |> Result.map List.rev))
 
 let read_trace dir =
-  match read_opt Eio.Path.(dir / "trace.jsonl") with
-  | None -> Ok []
-  | Some text ->
+  match read_opt dir "trace.jsonl" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) ->
       String.split_on_char '\n' text
       |> List.filter (fun l -> not (String.equal l ""))
       |> List.mapi (fun i line -> (i + 1, line))
@@ -90,7 +97,9 @@ let read_trace dir =
 
 (* What a run wrote about itself: cost from the ledger's attribution, and the
    latency and token totals of its model calls. A run without a meta.json (it
-   crashed before writing one) has none of them. *)
+   crashed before writing one) has none of them. meta.json holds much more
+   (run ID, outcome, patterns, unenforced settings), so this decoder reads
+   only these three fields of it and lets the others pass. *)
 type meta = {
   cost_usd : float option; [@default None]
   latency_ms : float option; [@default None]
@@ -99,9 +108,10 @@ type meta = {
 [@@deriving of_yojson { strict = false }]
 
 let read_meta dir =
-  match read_opt Eio.Path.(dir / "meta.json") with
-  | None -> Ok { cost_usd = None; latency_ms = None; tokens = None }
-  | Some text -> (
+  match read_opt dir "meta.json" with
+  | Error e -> Error e
+  | Ok None -> Ok { cost_usd = None; latency_ms = None; tokens = None }
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("meta.json", m)
       | json -> (
@@ -110,9 +120,10 @@ let read_meta dir =
           | Error m -> Error ("meta.json", m)))
 
 let read_divergences dir : (D.divergence list, string * string) result =
-  match read_opt Eio.Path.(dir / "divergences.json") with
-  | None -> Ok []
-  | Some text -> (
+  match read_opt dir "divergences.json" with
+  | Error e -> Error e
+  | Ok None -> Ok []
+  | Ok (Some text) -> (
       match Yojson.Safe.from_string text with
       | exception Yojson.Json_error m -> Error ("divergences.json", m)
       | json -> (
@@ -248,7 +259,7 @@ let thresholds (c : Experiment.compare) =
       (fun acc name ->
         let* l = acc in
         let* m = metric_of_name name in
-        match List.assoc_opt m declared with
+        match Compare.threshold_of m declared with
         | Some delta -> Ok ((m, delta) :: l)
         | None ->
             Error
@@ -257,7 +268,11 @@ let thresholds (c : Experiment.compare) =
       (Ok []) c.gate
     |> Result.map List.rev
   in
-  Ok (gate, List.filter (fun (m, _) -> not (List.mem_assoc m gate)) declared)
+  Ok
+    ( gate,
+      List.filter
+        (fun (m, _) -> Option.is_none (Compare.threshold_of m gate))
+        declared )
 
 (* Why the experiment file cannot supply a setting, when it cannot. *)
 let unavailable (l : loaded) =
@@ -303,7 +318,7 @@ let settings (l : loaded) ~baseline ~candidate ~fail_on_inconclusive =
     else
       match
         List.find_opt
-          (fun v -> not (List.mem v variants))
+          (fun v -> not (List.exists (String.equal v) variants))
           [ baseline; candidate ]
       with
       | Some v ->

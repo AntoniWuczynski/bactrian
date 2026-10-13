@@ -232,15 +232,6 @@ let power_at a ~repeats =
   check_positive "repeats" repeats;
   power_of (setup_of_assumption a) ~stream:Report repeats
 
-let metric_equal (a : Compare.metric) (b : Compare.metric) =
-  match (a, b) with
-  | Pass_rate, Pass_rate
-  | Cost, Cost
-  | Latency_p50, Latency_p50
-  | Tokens, Tokens ->
-      true
-  | (Pass_rate | Cost | Latency_p50 | Tokens), _ -> false
-
 let extra_power = 0.8
 let extra_simulations = 200
 let extra_max_repeats = 2000
@@ -295,11 +286,7 @@ let observed_setup (input : Compare.input) ~threshold ~level =
     } )
 
 let extra_runs_needed (input : Compare.input) ~metric =
-  let declared l =
-    List.find_map
-      (fun (m, t) -> if metric_equal m metric then Some t else None)
-      l
-  in
+  let declared = Compare.threshold_of metric in
   (* The level [Compare] judges the metric at: Bonferroni across the gate
      family for a gate metric, the confidence itself otherwise. *)
   let threshold, level =

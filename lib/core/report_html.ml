@@ -441,7 +441,11 @@ let measures_section (d : D.t) =
 
 let signatures_table (b : D.behaviour) =
   let count (l : D.signature_count list) s =
-    match List.find_opt (fun (x : D.signature_count) -> x.signature = s) l with
+    match
+      List.find_opt
+        (fun (x : D.signature_count) -> List.equal String.equal x.signature s)
+        l
+    with
     | Some x -> x.count
     | None -> 0
   in
@@ -450,7 +454,10 @@ let signatures_table (b : D.behaviour) =
     @ List.map
         (fun (x : D.signature_count) -> x.signature)
         b.baseline_signatures
-    |> List.fold_left (fun acc s -> if List.mem s acc then acc else s :: acc) []
+    |> List.fold_left
+         (fun acc s ->
+           if List.exists (List.equal String.equal s) acc then acc else s :: acc)
+         []
     |> List.rev
   in
   table ~caption:"Tool-call sequences"
@@ -463,7 +470,9 @@ let signatures_table (b : D.behaviour) =
            [
              Num (Printf.sprintf "%d (%s)" cb (F.rate cb b.baseline_traced));
              Num (Printf.sprintf "%d (%s)" cc (F.rate cc b.candidate_traced));
-             (if List.mem s b.new_signatures then New else Text "");
+             (if List.exists (List.equal String.equal s) b.new_signatures then
+                New
+              else Text "");
            ] ))
        all)
 

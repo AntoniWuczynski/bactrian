@@ -99,6 +99,11 @@ type result = {
           inconclusive and [fail_on_inconclusive] is set, else 0. *)
 }
 
+val metric_equal : metric -> metric -> bool
+
+val threshold_of : metric -> (metric * float) list -> float option
+(** The threshold a list such as [gate] gives the metric, if any. *)
+
 val decide :
   threshold:float -> worse_is:[ `Lower | `Higher ] -> Stats.interval -> verdict
 (** Both ends of the closed interval are compared strictly: an interval whose

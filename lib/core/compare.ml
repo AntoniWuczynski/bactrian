@@ -52,6 +52,18 @@ type result = {
 
 module Smap = Map.Make (String)
 
+let metric_equal a b =
+  match (a, b) with
+  | Pass_rate, Pass_rate
+  | Cost, Cost
+  | Latency_p50, Latency_p50
+  | Tokens, Tokens ->
+      true
+  | (Pass_rate | Cost | Latency_p50 | Tokens), _ -> false
+
+let threshold_of metric l =
+  List.find_map (fun (m, t) -> if metric_equal m metric then Some t else None) l
+
 let decide ~threshold ~worse_is (i : Stats.interval) =
   let below = i.upper < -.threshold and above = i.lower > threshold in
   let worse, better =
@@ -249,7 +261,7 @@ let run (input : input) =
         if
           (String.equal r.variant input.baseline
           || String.equal r.variant input.candidate)
-          && not (List.mem r.scenario common)
+          && not (List.exists (String.equal r.scenario) common)
         then Some r.scenario
         else None)
       input.runs

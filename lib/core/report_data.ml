@@ -263,7 +263,7 @@ let summary ~dropped runs variant =
 
 let metric_row (settings : Compare.input) (m : Compare.metric_result) =
   let delta =
-    List.assoc_opt m.metric (settings.gate @ settings.report_metrics)
+    Compare.threshold_of m.metric (settings.gate @ settings.report_metrics)
     |> Option.value ~default:0.
   in
   let relative =
@@ -377,7 +377,14 @@ let scenario_row (settings : Compare.input) runs (scenario, interval, verdict) :
         (fun (r : run) -> String.equal r.scenario scenario && finished r)
         (of_variant variant runs)
     in
-    ( List.length (List.filter (fun (r : run) -> r.status = Passed) rs),
+    ( List.length
+        (List.filter
+           (fun (r : run) ->
+             match r.status with
+             | Passed -> true
+             | Failed | Diverged | Errored | Not_run | Pending | Interrupted ->
+                 false)
+           rs),
       List.length rs )
   in
   let bp, bn = tally settings.baseline and cp, cn = tally settings.candidate in
@@ -446,7 +453,8 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
   let scenario_names =
     List.filter_map
       (fun (r : run) ->
-        if List.mem r.variant compared then Some r.scenario else None)
+        if List.exists (String.equal r.variant) compared then Some r.scenario
+        else None)
       runs
     |> List.sort_uniq String.compare
   in
@@ -485,7 +493,8 @@ let build ~experiment_id ~experiment ~(settings : Compare.input)
     behaviours = List.map (behaviour settings runs) scenario_names;
     failures =
       List.filter
-        (fun (r : run) -> List.mem r.variant compared && is_failure r)
+        (fun (r : run) ->
+          List.exists (String.equal r.variant) compared && is_failure r)
         order
       |> List.map failure;
     order;
