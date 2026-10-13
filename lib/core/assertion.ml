@@ -22,18 +22,10 @@ type outcome = Pass | Fail of string
 
 module D = Config_decode
 
-(* Perl syntax from [Re.Perl], plus a leading [(?i)] for case-insensitive
-   matching, which [Re.Perl] does not parse. *)
 let compile_regex source =
-  let cased, opts =
-    match String.starts_with ~prefix:"(?i)" source with
-    | true -> (String.sub source 4 (String.length source - 4), [ `Caseless ])
-    | false -> (source, [])
-  in
-  match Re.Perl.re_result ~opts cased with
-  | Ok re -> Ok (Re.compile re)
-  | Error (`Not_supported | `Parse_error) ->
-      Error (Printf.sprintf "%S is not a valid regular expression" source)
+  Regex.compile ~allow_empty_match:true source
+  |> Result.map_error (fun reason ->
+      Printf.sprintf "%S is not a valid regular expression: %s" source reason)
 
 let raw ~path:_ v = Ok v
 let comma = String.concat ", "

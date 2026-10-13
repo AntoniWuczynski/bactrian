@@ -93,7 +93,11 @@ let seconds_of_duration s =
     let factor =
       match s.[n - 1] with 's' -> Some 1.0 | 'm' -> Some 60.0 | _ -> None
     in
-    let digits = String.sub s 0 (n - 1) in
+    let factor, unit_len =
+      if n > 2 && String.ends_with ~suffix:"ms" s then (Some 0.001, 2)
+      else (factor, 1)
+    in
+    let digits = String.sub s 0 (n - unit_len) in
     let numeric =
       String.for_all (function '0' .. '9' | '.' -> true | _ -> false) digits
     in
@@ -108,15 +112,15 @@ let duration ~path c =
   | None ->
       fail ~path
         (Printf.sprintf
-           "invalid duration %S, expected a positive number with unit s or m, \
-            such as \"120s\" or \"2m\""
+           "invalid duration %S, expected a positive number with unit ms, s or \
+            m, such as \"250ms\", \"120s\" or \"2m\""
            s)
 
 let regex ~path c =
   let* s = string ~path c in
-  match Redact.pattern s with
+  match Regex.compile s with
   | Ok _ -> Ok s
-  | Error (Invalid_pattern { reason; _ }) ->
+  | Error reason ->
       fail ~path (Printf.sprintf "invalid regular expression %S: %s" s reason)
 
 let enum ~what cases ~path c =

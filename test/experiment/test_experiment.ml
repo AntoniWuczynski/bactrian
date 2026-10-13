@@ -156,6 +156,22 @@ let test_http () =
       ()
   | Http _ | Command _ -> Alcotest.fail "agent"
 
+let test_ms_duration () =
+  let t =
+    decoded
+      (doc
+         ~agent:
+           {|"agent": {"protocol": "command", "command": ["x"], "timeouts": {"turn": "250ms", "total": "1.5s"}}|}
+         "")
+  in
+  match t.agent with
+  | Command { turn_timeout = 0.25; total_timeout = 1.5; _ } -> ()
+  | Command _ | Http _ -> Alcotest.fail "ms duration"
+
+let test_caseless_normalise () =
+  let t = decoded (doc {|, "normalise": ["(?i)date: .*"]|}) in
+  Alcotest.(check int) "normalise" 1 (List.length t.normalise)
+
 let test_variant_list () =
   let t =
     decoded
@@ -195,6 +211,8 @@ let () =
           Alcotest.test_case "defaults" `Quick test_defaults;
           Alcotest.test_case "compare defaults" `Quick test_compare_defaults;
           Alcotest.test_case "http agent and durations" `Quick test_http;
+          Alcotest.test_case "millisecond durations" `Quick test_ms_duration;
+          Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
         ] );
       ( "errors",

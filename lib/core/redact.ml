@@ -13,16 +13,9 @@ let count st = st.next - 1
 let placeholder n = Printf.sprintf "<secret:%d>" n
 
 let compile ~group source =
-  match Re.Perl.re_result source with
-  | Error `Parse_error ->
-      Error (Invalid_pattern { source; reason = "invalid syntax" })
-  | Error `Not_supported ->
-      Error (Invalid_pattern { source; reason = "unsupported syntax" })
-  | Ok core ->
-      let re = Re.compile core in
-      if Re.execp re "" then
-        Error (Invalid_pattern { source; reason = "matches the empty string" })
-      else Ok { re; group }
+  match Regex.compile source with
+  | Error reason -> Error (Invalid_pattern { source; reason })
+  | Ok re -> Ok { re; group }
 
 let pattern source = compile ~group:0 source
 
