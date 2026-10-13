@@ -1,0 +1,12 @@
+(test
+ (name test_sandbox_init)
+ (package bactrian)
+ (deps %{bin:bactrian})
+ (action
+  (setenv
+   BACTRIAN_BIN
+   %{bin:bactrian}
+   (run %{test})))
+ (libraries bactrian.runtime eio_main unix yojson alcotest)
+ (flags
+  (:standard -w -70)))

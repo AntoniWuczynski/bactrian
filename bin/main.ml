@@ -542,6 +542,51 @@ let mcp_shim_cmd =
   in
   Cmd.v info Term.(const run $ name)
 
+(* cmdliner drops the [--] between the pairs and the agent, so the forwarder
+   reads the raw arguments after its own name. *)
+let sandbox_init_arguments () =
+  match
+    List.drop_while
+      (fun a -> not (String.equal a "__sandbox-init"))
+      (Array.to_list Sys.argv)
+  with
+  | _ :: args -> args
+  | [] -> []
+
+let sandbox_init_cmd =
+  let args =
+    Arg.(value & pos_all string [] & info [] ~docv:"PORT=SOCKET... -- AGENT...")
+  in
+  let run (_ : string list) =
+    match Sandbox_init.parse (sandbox_init_arguments ()) with
+    | Error e ->
+        prerr_endline
+          ("bactrian __sandbox-init: " ^ Sandbox_init.describe_parse_error e);
+        Output.exit_usage
+    | Ok config -> (
+        Eio_main.run @@ fun env ->
+        let log =
+          match Sys.getenv_opt Sandbox_init.log_variable with
+          | None | Some "" -> None
+          | Some path -> Some Eio.Path.(Eio.Stdenv.fs env / path)
+        in
+        match
+          Sandbox_init.run ?log ~net:(Eio.Stdenv.net env)
+            ~process_mgr:(Eio.Stdenv.process_mgr env)
+            config
+        with
+        | Ok code -> code
+        | Error e ->
+            prerr_endline
+              ("bactrian __sandbox-init: " ^ Sandbox_init.describe_error e);
+            Output.exit_environment)
+  in
+  let info =
+    Cmd.info "__sandbox-init" ~docs:Manpage.s_none ~exits:Cli.exits
+      ~doc:"Internal: the forwarder bactrian runs inside the Linux sandbox"
+  in
+  Cmd.v info Term.(const run $ args)
+
 let cmd =
   let info =
     Cmd.info "bactrian" ~version:Bactrian_core.Version.current ~exits:Cli.exits
@@ -558,6 +603,7 @@ let cmd =
       Plan_cmd.cmd;
       Report_cmd.cmd;
       mcp_shim_cmd;
+      sandbox_init_cmd;
     ]
 
 let () =
