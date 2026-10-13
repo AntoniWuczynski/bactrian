@@ -10,3 +10,8 @@ val signal : int -> int -> bool
 val wait_gone : clock:_ Eio.Time.clock -> timeout:float -> int -> bool
 (** [wait_gone ~clock ~timeout pgid] polls every 20 ms until the group is gone.
     [false] if it still exists after [timeout] seconds. *)
+
+val terminate : clock:_ Eio.Time.clock -> grace:float -> int -> unit
+(** [terminate ~clock ~grace pgid] sends SIGTERM to the group and, if it is
+    still there after [grace] seconds, SIGKILL, then waits up to [grace] seconds
+    more for it to go. Nothing happens to a group that is already gone. *)

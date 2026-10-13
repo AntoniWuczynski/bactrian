@@ -22,11 +22,6 @@ val locate :
 val linux : unit -> bool
 (** Whether this host is Linux. *)
 
-val find : path:string option -> cwd:string -> string -> string option
-(** [find ~path ~cwd name] is the executable file [name] names: a name with a
-    [/] is a file path (relative to [cwd]), any other is looked up in the
-    directories of [path]. *)
-
 val probe_executable :
   path:string option -> cwd:string -> string -> Elf_probe.kind
 (** [probe_executable ~path ~cwd argv0] finds [argv0] (a name looked up in the

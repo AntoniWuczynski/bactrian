@@ -97,7 +97,7 @@ let agent_check ~path ~cwd : Experiment.agent -> check = function
       match argv with
       | [] -> check "agent" Fail "the agent command is empty"
       | argv0 :: _ -> (
-          match Agent_clock.find ~path ~cwd argv0 with
+          match Proc_util.find_executable ~path ~cwd argv0 with
           | Some file -> check "agent" Pass (argv0 ^ " resolves to " ^ file)
           | None ->
               check "agent" Fail

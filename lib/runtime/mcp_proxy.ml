@@ -227,16 +227,6 @@ let read_lines flow f =
   in
   loop ()
 
-let terminate env pgid =
-  if
-    Process_group.signal pgid Sys.sigterm
-    && not (Process_group.wait_gone ~clock:env.clock ~timeout:kill_grace pgid)
-  then begin
-    ignore (Process_group.signal pgid Sys.sigkill : bool);
-    ignore
-      (Process_group.wait_gone ~clock:env.clock ~timeout:kill_grace pgid : bool)
-  end
-
 (* Runs in its own fibre for the life of the server: spawns it, routes its
    answers, and kills its process group when the run stops it or the proxy's
    switch ends. *)
@@ -305,7 +295,7 @@ let supervise env ~note ~argv ~bindings ~cwd ~started ~stop_p ~stop ~stopped =
   Eio.Promise.await stop_p;
   fail_pending p Run_ended;
   (try Eio.Resource.close stdin_w with Eio.Io _ -> ());
-  terminate env pgid
+  Process_group.terminate ~clock:env.clock ~grace:kill_grace pgid
 
 let spawn env ~note ~argv ~bindings ~cwd =
   let started_p, started = Eio.Promise.create () in

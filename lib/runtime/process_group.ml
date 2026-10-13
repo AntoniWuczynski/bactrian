@@ -13,3 +13,9 @@ let wait_gone ~clock ~timeout pgid =
   match Eio.Time.with_timeout clock timeout (fun () -> Ok (poll ())) with
   | Ok () -> true
   | Error `Timeout -> false
+
+let terminate ~clock ~grace pgid =
+  if signal pgid Sys.sigterm && not (wait_gone ~clock ~timeout:grace pgid) then begin
+    ignore (signal pgid Sys.sigkill : bool);
+    ignore (wait_gone ~clock ~timeout:grace pgid : bool)
+  end

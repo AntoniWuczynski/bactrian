@@ -77,11 +77,7 @@ let scrub ~exe =
     Ok ()
   else
     match
-      let exe =
-        Unix.realpath
-          (if Filename.is_relative exe then Filename.concat (Sys.getcwd ()) exe
-           else exe)
-      in
+      let exe = Unix.realpath (Proc_util.absolute exe) in
       let fd = write_env env in
       Unix.execve exe Sys.argv
         (Array.of_list

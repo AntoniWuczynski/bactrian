@@ -49,9 +49,9 @@ val key_checks :
     With one, it is [Fail] for a funded provider and [Skip] for the others. *)
 
 val agent_check : path:string option -> cwd:string -> Experiment.agent -> check
-(** A command agent's executable must be found ({!Agent_clock.find}). An HTTP
-    agent's URL must be an [http] or [https] URL with a host. Nothing connects.
-*)
+(** A command agent's executable must be found ({!Proc_util.find_executable}).
+    An HTTP agent's URL must be an [http] or [https] URL with a host. Nothing
+    connects. *)
 
 val loopback_check : unit -> check
 (** Binds 127.0.0.1 on a port the system picks, and closes it. *)

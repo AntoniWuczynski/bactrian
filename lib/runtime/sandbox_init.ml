@@ -195,11 +195,7 @@ let with_signal_forwarding f =
     Atomic.set flag true;
     Eio.Condition.broadcast arrived
   in
-  let previous =
-    List.map
-      (fun (s, flag) -> (s, Sys.signal s (Sys.Signal_handle (handle flag))))
-      flags
-  in
+
   let rec forward pgid =
     List.iter
       (fun (s, flag) ->
@@ -209,9 +205,8 @@ let with_signal_forwarding f =
     Eio.Condition.await_no_mutex arrived;
     forward pgid
   in
-  Fun.protect
-    ~finally:(fun () ->
-      List.iter (fun (s, old) -> Sys.set_signal s old) previous)
+  Interrupt.with_handlers
+    (List.map (fun (s, flag) -> (s, handle flag)) flags)
     (fun () -> f forward)
 
 let rec serve_all ~sw ~net ~log ~on_listening = function

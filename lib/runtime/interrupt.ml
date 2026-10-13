@@ -1,6 +1,15 @@
 let signals = [ Sys.sigint; Sys.sigterm ]
 let exit_status = 130
 
+let with_handlers handlers f =
+  let previous =
+    List.map (fun (s, h) -> (s, Sys.signal s (Sys.Signal_handle h))) handlers
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter (fun (s, old) -> Sys.set_signal s old) previous)
+    f
+
 let run f =
   let received = ref None in
   let arrived = Eio.Condition.create () in
@@ -9,12 +18,7 @@ let run f =
     if Option.is_none !received then received := Some signal;
     Eio.Condition.broadcast arrived
   in
-  let previous =
-    List.map (fun s -> (s, Sys.signal s (Sys.Signal_handle handle))) signals
-  in
-  Fun.protect ~finally:(fun () ->
-      List.iter (fun (s, old) -> Sys.set_signal s old) previous)
-  @@ fun () ->
+  with_handlers (List.map (fun s -> (s, handle)) signals) @@ fun () ->
   let rec wait () =
     match !received with
     | Some signal -> signal

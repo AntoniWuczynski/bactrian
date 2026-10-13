@@ -85,6 +85,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Agent_clock` | Finds `libfaketimeMT.so.1`, decides whether the agent's clock is enforced, and adds the `LD_PRELOAD` and `FAKETIME` variables to its environment (section 5 step 2, decision record 0009). |
 | `Sandbox` | Builds the per-run sandbox: Seatbelt profile on macOS, bubblewrap invocation on Linux, deny-lists, the preflight probe, and the `__sandbox-init` forwarder. |
 | `Launch_env` | Re-executes `record`, `replay` and `run` with an allowlisted launch environment and restores the rest from an unlinked temporary file (section 5.2, decision record 0010). |
+| `Proc_util`, `Process_group`, `Interrupt` | Helpers shared by the modules that start processes: paths, finding an executable on `PATH`, exit-status text, ending a process group (SIGTERM, then SIGKILL), and signal handlers. |
 | `Checker_runner` | Runs external checker commands with the trace on standard input. Running checkers sandboxed is planned. |
 | `Store` | Run directories under `.bactrian/`, content-addressed blobs, atomic writes. |
 | `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |

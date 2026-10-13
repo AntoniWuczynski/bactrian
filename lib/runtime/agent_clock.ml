@@ -12,12 +12,6 @@ let candidates =
       "/usr/local/lib/faketime";
     ]
 
-let regular_file path =
-  match (Unix.stat path).st_kind with
-  | S_REG -> true
-  | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> false
-  | exception Unix.Unix_error _ -> false
-
 (* The sandbox binds the library at the path the preload names, so that path
    is the resolved one. *)
 let resolved path =
@@ -29,34 +23,14 @@ let locate ?(candidates = candidates) ~override () =
   let found =
     match override with
     | Some path when not (String.equal path "") ->
-        if regular_file path then Some path else None
-    | Some _ | None -> List.find_opt regular_file candidates
+        if Proc_util.regular_file path then Some path else None
+    | Some _ | None -> List.find_opt Proc_util.regular_file candidates
   in
   Option.bind found resolved
 
 let linux () = Sys.file_exists "/proc/sys/kernel/ostype"
 
 (* Executables *)
-
-let executable_file path =
-  regular_file path
-  &&
-  match Unix.access path [ X_OK ] with
-  | () -> true
-  | exception Unix.Unix_error _ -> false
-
-let in_cwd ~cwd path =
-  if Filename.is_relative path then Filename.concat cwd path else path
-
-let executable_at path = if executable_file path then Some path else None
-
-let find ~path ~cwd name =
-  if String.contains name '/' then executable_at (in_cwd ~cwd name)
-  else
-    String.split_on_char ':' (Option.value path ~default:"")
-    |> List.find_map (fun dir ->
-        if String.equal dir "" then None
-        else executable_at (Filename.concat (in_cwd ~cwd dir) name))
 
 let read_prefix file =
   match
@@ -73,7 +47,7 @@ let probe_executable ~path ~cwd argv0 =
     | Some prefix -> Elf_probe.probe prefix
     | None -> Elf_probe.Not_elf
   in
-  match find ~path ~cwd argv0 with
+  match Proc_util.find_executable ~path ~cwd argv0 with
   | None -> Elf_probe.Not_elf
   | Some file -> (
       match read_prefix file with
@@ -85,7 +59,7 @@ let probe_executable ~path ~cwd argv0 =
               let program =
                 match script with Interpreter p | Env_program p -> p
               in
-              match find ~path ~cwd program with
+              match Proc_util.find_executable ~path ~cwd program with
               | Some interpreter -> kind_of interpreter
               | None -> Elf_probe.Not_elf)))
 

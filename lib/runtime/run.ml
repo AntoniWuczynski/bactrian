@@ -103,11 +103,6 @@ let keys_from_environment () =
 
 (* Formatting *)
 
-let hex s =
-  String.concat ""
-    (List.init (String.length s) (fun i ->
-         Printf.sprintf "%02x" (Char.code s.[i])))
-
 let rfc3339 t =
   let tm = Unix.gmtime t in
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
@@ -117,17 +112,9 @@ let fresh_id ~random_bytes now =
   let tm = Unix.gmtime now in
   Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ-%s" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
-    (hex (random_bytes 4))
+    (Proc_util.hex (random_bytes 4))
 
 let store_error e = Format.asprintf "%a" Store.pp_error e
-
-let absolute path =
-  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
-  else path
-
-let describe_exit : Eio.Process.exit_status -> string = function
-  | `Exited n -> Printf.sprintf "exit status %d" n
-  | `Signaled n -> Printf.sprintf "killed by signal %d" n
 
 let describe_driver_error : D.error -> string = function
   | Spawn_failed s -> "spawn_failed: " ^ s
@@ -140,7 +127,7 @@ let describe_driver_error : D.error -> string = function
       "protocol_violation: stdout closed before the final reply"
   | Agent_exited (Some st) ->
       "protocol_violation: stdout closed before the final reply ("
-      ^ describe_exit st ^ ")"
+      ^ Proc_util.describe_exit st ^ ")"
   | Http_error s -> "agent_http_error: " ^ s
   | Http_status { status; body } ->
       Printf.sprintf "agent_http_error: status %d: %s" status body
@@ -500,7 +487,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let clock = Eio.Stdenv.clock env in
   let now = Eio.Time.now clock in
   let run_id = fresh_id ~random_bytes now in
-  let token = hex (random_bytes 16) in
+  let token = Proc_util.hex (random_bytes 16) in
   on_start run_id;
   let keys = match keys with Some k -> k | None -> keys_from_environment () in
   let* run_dir =
@@ -536,7 +523,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     | "", None -> rfc3339 now
     | s, (Some _ | None) -> s
   in
-  let run_dir_path = absolute (Eio.Path.native_exn run_dir) in
+  let run_dir_path = Proc_util.absolute (Eio.Path.native_exn run_dir) in
   let state_dir = Eio.Path.(run_dir / "state") in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 state_dir;
   let state_dir_path = Filename.concat run_dir_path "state" in
@@ -568,8 +555,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           ~stripped:(Sandbox.strips_preload config.sandbox)
           ~linux:(Agent_clock.linux ()) ~faketime:config.faketime
           ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
-          ~env:agent_process_env ~cwd:(absolute config.cwd) ~agent:argv ~sim_now
-          ()
+          ~env:agent_process_env
+          ~cwd:(Proc_util.absolute config.cwd)
+          ~agent:argv ~sim_now ()
     | Http _ -> Agent_clock.http_mode
   in
   let clock_label = Agent_clock.label agent_clock in
@@ -709,7 +697,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                 | Ok (Error reason, _) -> Some reason
                 | Ok (Ok (), `Exited 0) -> None
                 | Ok (Ok (), ((`Exited _ | `Signaled _) as st)) ->
-                    Some ("exit_nonzero: " ^ describe_exit st)))
+                    Some ("exit_nonzero: " ^ Proc_util.describe_exit st)))
       | Http { url; namespace_header } -> (
           let http_config : D.http_config =
             {

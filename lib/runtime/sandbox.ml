@@ -54,10 +54,6 @@ let ( let* ) = Result.bind
 
 (* Paths *)
 
-let absolute path =
-  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path
-  else path
-
 (* Symbolic links resolved as far as the path exists, because Seatbelt matches
    resolved paths. *)
 let rec resolve path =
@@ -68,7 +64,7 @@ let rec resolve path =
       if String.equal parent path then path
       else Filename.concat (resolve parent) (Filename.basename path)
 
-let resolved path = resolve (absolute path)
+let resolved path = resolve (Proc_util.absolute path)
 
 let kind path : Policy.kind =
   match (Unix.stat path).st_kind with
@@ -150,17 +146,6 @@ let tool_env () = [| path_var () |]
 
 (* Linux tools *)
 
-let on_path name =
-  Option.value (Sys.getenv_opt "PATH") ~default:""
-  |> String.split_on_char ':'
-  |> List.find_map (fun dir ->
-      let path = Filename.concat dir name in
-      if String.equal dir "" then None
-      else
-        match Unix.access path [ X_OK ] with
-        | () -> Some path
-        | exception Unix.Unix_error _ -> None)
-
 (* "bubblewrap 0.9.0" *)
 let bwrap_version text =
   match String.split_on_char ' ' (String.trim text) with
@@ -174,7 +159,10 @@ let bwrap_version text =
   | [] | [ _ ] | _ :: _ :: _ -> None
 
 let bubblewrap ~env =
-  match on_path "bwrap" with
+  match
+    Proc_util.find_executable ~path:(Sys.getenv_opt "PATH") ~cwd:(Sys.getcwd ())
+      "bwrap"
+  with
   | None ->
       Error
         "bubblewrap (bwrap) is not installed. Fix: install it, for example \
@@ -225,11 +213,6 @@ let apparmor_fix bwrap =
 
 let probe_timeout = 30.
 
-let hex s =
-  String.concat ""
-    (List.init (String.length s) (fun i ->
-         Printf.sprintf "%02x" (Char.code s.[i])))
-
 let greet ~sw listener =
   Eio.Fiber.fork_daemon ~sw (fun () ->
       Eio.Net.run_server listener
@@ -240,10 +223,6 @@ let last_line text =
   String.split_on_char '\n' text
   |> List.filter (fun l -> not (String.equal (String.trim l) ""))
   |> List.fold_left (fun _ l -> Some l) None
-
-let describe_status : Eio.Process.exit_status -> string = function
-  | `Exited n -> Printf.sprintf "exit status %d" n
-  | `Signaled n -> Printf.sprintf "signal %d" n
 
 (* Runs [argv] and returns its standard output, or why it gave none. *)
 let run_probe_command ~sw ~env ~vars argv =
@@ -280,7 +259,7 @@ let run_probe_command ~sw ~env ~vars argv =
           | None ->
               Error
                 (Printf.sprintf "the probe gave no report (%s)%s"
-                   (describe_status status)
+                   (Proc_util.describe_exit status)
                    (match last_line err with Some l -> ": " ^ l | None -> ""))))
 
 let host_netns () =
@@ -289,7 +268,7 @@ let host_netns () =
   | exception Unix.Unix_error _ -> None
 
 let probe ~env (host : host) =
-  let id = hex (Mirage_crypto_rng.generate 6) in
+  let id = Proc_util.hex (Mirage_crypto_rng.generate 6) in
   let dir = Filename.concat host.bactrian_dir ("sandbox-probe-" ^ id) in
   let state_dir = Filename.concat dir "state"
   and temp_dir = Filename.concat dir "tmp"
@@ -376,7 +355,7 @@ let check ~env settings =
          Linux bubblewrap)"
   in
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700
-    Eio.Path.(Eio.Stdenv.fs env / absolute settings.bactrian_dir);
+    Eio.Path.(Eio.Stdenv.fs env / Proc_util.absolute settings.bactrian_dir);
   let bactrian_dir = resolved settings.bactrian_dir in
   let host =
     {

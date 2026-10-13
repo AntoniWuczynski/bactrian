@@ -139,15 +139,7 @@ let shutdown t =
             Eio.Process.await t.proc)
   in
   (* The leader is gone; children may remain. *)
-  if
-    Process_group.signal pgid Sys.sigterm
-    && not
-         (Process_group.wait_gone ~clock:t.clock ~timeout:t.config.kill_grace
-            pgid)
-  then begin
-    ignore (Process_group.signal pgid Sys.sigkill : bool);
-    ignore (Process_group.wait_gone ~clock:t.clock ~timeout:5. pgid : bool)
-  end;
+  Process_group.terminate ~clock:t.clock ~grace:t.config.kill_grace pgid;
   status
 
 let spawn_error e = Error (Spawn_failed (Printexc.to_string e))
