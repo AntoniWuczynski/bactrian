@@ -17,19 +17,30 @@ let test_record =
   in
   Alcotest.(check bool) "cassette complete" true cassette.complete;
   Alcotest.(check int) "cassette exchanges" 2 (List.length cassette.exchanges);
-  Alcotest.check strs "trace"
+  (* The agent's event reaches bactrian on its standard output, and its next
+     model request reaches the proxy, so their relative order depends on which
+     channel bactrian reads first. Only the order within each channel is
+     fixed. *)
+  let types = trace_types r in
+  Alcotest.check strs "trace without the agent's event"
     [
       "run_start";
       "turn_start";
       "model_call";
       "tool_call";
-      "agent_event";
       "tool_result";
       "model_call";
       "reply";
       "done";
     ]
-    (trace_types r);
+    (List.filter (fun t -> not (String.equal t "agent_event")) types);
+  let index name =
+    Option.get (List.find_index (fun t -> String.equal t name) types)
+  in
+  Alcotest.(check bool)
+    "the agent's event between its tool call and its reply" true
+    (index "tool_call" < index "agent_event"
+    && index "agent_event" < index "reply");
   let trace = read (file r "trace.jsonl") in
   Alcotest.(check bool)
     "usage in trace" true
