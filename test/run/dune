@@ -1,5 +1,10 @@
 (tests
- (names test_run test_run_checks test_run_mcp test_run_sandbox)
+ (names
+  test_run
+  test_run_checks
+  test_run_mcp
+  test_run_sandbox
+  test_run_clock)
  (package bactrian)
  (deps
   (source_tree ../fixtures/protocols)

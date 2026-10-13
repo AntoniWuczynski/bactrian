@@ -215,6 +215,7 @@ let with_world name f =
         total_timeout = 90.;
         mcp;
         sandbox;
+        faketime = true;
       }
     in
     ok

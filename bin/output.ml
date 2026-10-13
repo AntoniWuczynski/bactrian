@@ -62,6 +62,7 @@ let render_json (r : Run.result) =
               ] );
           ("spend_usd", `Float r.spend);
           ("sandbox", Sandbox.label_json r.sandbox);
+          ("clock", Bactrian_core.Clock_label.to_json r.clock);
         ]
        @ violations_json r.violations))
 

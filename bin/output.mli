@@ -51,4 +51,5 @@ val render_json : Bactrian_runtime.Run.result -> string
 (** One JSON object: run ID, directory, outcome with its reason, divergences
     with their kinds and nearest-exchange diff paths, findings, spend, the
     sandbox label and its violations ([sandbox_violations], [null] with
-    [sandbox_violations_not_collected] when they could not be read). *)
+    [sandbox_violations_not_collected] when they could not be read), and the
+    clock label ([clock]). *)

@@ -55,6 +55,7 @@ type config = {
   total_timeout : float;
   mcp : Mcp_proxy.config list;
   sandbox : Sandbox.t;
+  faketime : bool;
 }
 
 type result = {
@@ -65,6 +66,7 @@ type result = {
   spend : float;
   sandbox : Sandbox.label;
   violations : Sandbox.violations;
+  clock : Clock_label.t;
 }
 
 let ( let* ) = Result.bind
@@ -389,7 +391,7 @@ let violations_json : Sandbox.violations -> Yojson.Safe.t = function
         ]
 
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
-    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations =
+    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -398,7 +400,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
        ("variant", `String config.variant);
        ("bactrian_version", `String Version.current);
        ("sim_now", `String sim_now);
-       ("clock", `String "contract_only");
+       ("clock", Clock_label.to_json clock);
        ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
        ("sandbox_violations", violations_json violations);
        ("outcome", `String (outcome_kind outcome));
@@ -548,6 +550,16 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 temp_dir;
   let temp_dir_path = Filename.concat run_dir_path "tmp" in
   let* () = copy_fixtures ~env ~state_dir config.fixtures in
+  let agent_env =
+    build_env config ~proxy ~token ~run_id ~state_dir:state_dir_path
+      ~temp_dir:temp_dir_path ~sim_now
+  in
+  let agent_clock =
+    Agent_clock.decide ~linux:(Agent_clock.linux ()) ~faketime:config.faketime
+      ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
+      ~env:agent_env ~cwd:(absolute config.cwd) ~agent:config.agent ~sim_now ()
+  in
+  let clock_label = Agent_clock.label agent_clock in
   let header : Cassette.header =
     {
       run_id;
@@ -556,7 +568,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       bactrian_version = Version.current;
       recorded_at = rfc3339 now;
       sim_now;
-      clock = Contract_only;
+      clock = Clock_label.to_clock clock_label;
     }
   in
   let mode : P.mode =
@@ -633,10 +645,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     let driver_config : D.config =
       {
         argv = sandboxed.argv;
-        env =
-          build_env config ~proxy ~token ~run_id ~state_dir:state_dir_path
-            ~temp_dir:temp_dir_path ~sim_now
-          @ sandboxed.env;
+        env = Agent_clock.inject agent_clock agent_env @ sandboxed.env;
         cwd = Some Eio.Path.(Eio.Stdenv.fs env / config.cwd);
         stderr_path = Eio.Path.(run_dir / "agent.stderr");
         turn_timeout = config.turn_timeout;
@@ -732,7 +741,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           scenario = config.scenario;
           variant = config.variant;
           sim_now;
-          clock = Contract_only;
+          clock = Clock_label.to_clock clock_label;
           cassette;
           agent = List.rev !events;
           resolve = (fun p -> Result.to_option (Store.read_payload store p));
@@ -786,7 +795,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~tokens:(Report_data.tokens entries)
               ~normalise:normalise_sources ~redact:redact_sources
               ~replay_of:(Option.map (fun (_, id, _) -> id) recording)
-              ~violations)
+              ~violations ~clock:clock_label)
         ^ "\n")
     with
     | () ->
@@ -799,6 +808,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
             spend;
             sandbox = label;
             violations;
+            clock = clock_label;
           }
     | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
   in

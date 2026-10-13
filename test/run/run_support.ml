@@ -90,6 +90,7 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     total_timeout = 30.;
     mcp = [];
     sandbox = Sandbox.off;
+    faketime = false;
   }
 
 let execute ?random_bytes:(rb = random_bytes) ?(cap = 100.) ctx config =
