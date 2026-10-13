@@ -125,6 +125,15 @@ The report is one self-contained file.
   $ grep -c '<script' out/report.html
   0
   [1]
+
+With --json it says the same in one JSON object: the file and the comparison
+that compare --json gives.
+
+  $ bactrian report $ID --baseline a --candidate b -o out/again.html --json > report.json
+  $ bactrian compare $ID --baseline a --candidate b --json > compare.json
+  $ python3 -c 'import json; r = json.load(open("report.json")); print(r["output"], r["summary"] == json.load(open("compare.json")))'
+  out/again.html True
+  $ cmp out/report.html out/again.html
   $ rm demo.yaml
   $ bactrian report $ID -o out/report.html
   bactrian: --baseline is required: the experiment file demo.yaml that the manifest records is gone

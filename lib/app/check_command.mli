@@ -16,3 +16,8 @@ val passed : t -> bool
 
 val exit_code : t -> int
 (** {!Exit_code.ok} when {!passed}, else {!Exit_code.failed}. *)
+
+val to_json : t -> Yojson.Safe.t
+(** [{"passed", "scenarios": [{"scenario", "passed", "offenders": [{"trace",
+     "expected", "reason"}], "errors", "warnings"}]}], where [expected] is
+    ["pass"] or ["fail"]. *)

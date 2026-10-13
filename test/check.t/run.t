@@ -119,3 +119,12 @@ path, and exit 64.
   [64]
   $ bactrian check 2> /dev/null
   [64]
+
+With --json the result is one JSON object on stdout, with the same exit status.
+
+  $ bactrian check good.yaml lax.yaml passonly.yaml --json
+  {"passed":false,"scenarios":[{"scenario":"good.yaml","passed":true,"offenders":[],"errors":[],"warnings":[]},{"scenario":"lax.yaml","passed":false,"offenders":[{"trace":"golden/double.jsonl","expected":"fail","reason":"expected to fail but every assertion and checker passed"}],"errors":[],"warnings":[]},{"scenario":"passonly.yaml","passed":true,"offenders":[],"errors":[],"warnings":["no golden.fail trace, so an assertion or checker that always passes would go unnoticed"]}]}
+  [1]
+  $ bactrian check broken.yaml --json
+  {"errors":[{"file":"broken.yaml","line":3,"column":1,"path":"turns","message":"must contain at least one item"},{"file":"broken.yaml","line":5,"column":5,"path":"assertions[0].max_steps","message":"expected an integer, found a string"},{"file":"broken.yaml","line":6,"column":1,"path":"surprise","message":"unknown field"}],"exit":64}
+  [64]

@@ -45,16 +45,19 @@ let experiment_command ~json ~experiment ~resume ~sandbox =
            Output.render_summary_text ~colour:(Lazy.force Output.colour) result);
       Run_command.exit_code result
 
-let check_command scenarios =
+let check_command json scenarios =
   Eio_main.run @@ fun env ->
   match Check_command.run ~env { scenarios } with
-  | Error e -> Cli.fail_with ~json:false e
+  | Error e -> Cli.fail_with ~json e
   | Ok reports ->
-      List.iter
-        (fun r ->
-          print_string
-            (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
-        reports;
+      if json then
+        print_endline (Yojson.Safe.to_string (Check_command.to_json reports))
+      else
+        List.iter
+          (fun r ->
+            print_string
+              (Output.render_golden_text ~colour:(Lazy.force Output.colour) r))
+          reports;
       Check_command.exit_code reports
 
 (* Arguments *)
@@ -378,7 +381,7 @@ let check_cmd =
              configuration error, printed as file:line:column.";
         ]
   in
-  Cmd.v info Term.(const check_command $ scenarios)
+  Cmd.v info Term.(const check_command $ Cli.json $ scenarios)
 
 let mcp_shim_cmd =
   let name =

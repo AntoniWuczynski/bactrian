@@ -9,7 +9,7 @@ type request = {
   output : string;
 }
 
-type t = { output : string }
+type t = { output : string; data : Bactrian_core.Report_data.t }
 
 let run ~env (r : request) =
   let* data =
@@ -21,7 +21,14 @@ let run ~env (r : request) =
       Eio.Path.(Eio.Stdenv.fs env / r.output)
       (Bactrian_core.Report_html.render data)
   with
-  | () -> Ok { output = r.output }
+  | () -> Ok { output = r.output; data }
   | exception Eio.Io _ ->
       Error
         (Command_error.Environment (Printf.sprintf "cannot write %s" r.output))
+
+let to_json t =
+  `Assoc
+    [
+      ("output", `String t.output);
+      ("summary", Bactrian_core.Report_data.summary_json t.data);
+    ]
