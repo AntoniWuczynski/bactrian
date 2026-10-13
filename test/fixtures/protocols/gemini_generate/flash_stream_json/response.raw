@@ -1,0 +1,70 @@
+[{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "get_weather",
+              "args": {
+                "city": "Paris"
+              },
+              "id": "call_925"
+            },
+            "thoughtSignature": "EpsCCpgCAWkUfRPSBB1IDWb+AyqDD9nj1JKSiqOI6Pmji/46JvcdB6Kzu21CDCB2PfB4eRLEW4qb0OxJSsnAlgqoJ3sOZshvjyYUsd3jNQhFepHdxn8lAjFPDO2uPWdZD++TU25y485vUKNI2OextU6VujxWt14O9WQZG8Y/Y2TOAH0UimcbMGwJPlE/Rrow7QdOipbotCm/8PcVlcgzNmoLmtgWis8IYQo0/T/xaBRxOq5xBKnI/Ohv0p9LcD/USrJ+bPsVWGeM7D2TEWDfCrK0uCaZcT+WhFF9ubM8Xq3/0luiBwm78rttGR3OubnBYpVQiljdkecGIbJA5PBxgouQiIcKku/LVUlKAEfppAYPVFXaab2cTqfz1c/+HQ=="
+          }
+        ],
+        "role": "model"
+      },
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 69,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 123,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 69
+      }
+    ],
+    "thoughtsTokenCount": 38,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.8-flash",
+  "responseId": "oYTNasHAA5iLvdIP7KC0uQw"
+}
+,
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": ""
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 69,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 123,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 69
+      }
+    ],
+    "thoughtsTokenCount": 38,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.8-flash",
+  "responseId": "oYTNasHAA5iLvdIP7KC0uQw"
+}
+]

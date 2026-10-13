@@ -1,0 +1,30 @@
+event: interaction.created
+data: {"interaction":{"id":"v1_ChZxWVROYXZhQk5zaWIzYm9QckxqRENREhZxWVROYXZhQk5zaWIzYm9QckxqRENR","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.created"}
+
+event: interaction.status_update
+data: {"interaction_id":"v1_ChZxWVROYXZhQk5zaWIzYm9QckxqRENREhZxWVROYXZhQk5zaWIzYm9QckxqRENR","status":"in_progress","event_type":"interaction.status_update"}
+
+event: step.start
+data: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}
+
+event: step.delta
+data: {"index":0,"delta":{"signature":"Eq0CCqoCAWkUfRNQMbzzLGPh6F0GjNjEbHDE+bh2jpFOp26h1dajTKxuvDJZkffuVDGEzAIT+jsr1TWhjvPujeKuwWWDVlT3MXH9ug02/h9PkV9eBpxEvX5ZI/O1V8K4GVSHkxyyD2w+eD8A+ByIRvgtkjOuidfgUaXRs60t54SFLbCdobsNDi9oIljc+uFPjnnmaU5PyPNO/hHPRwUUqlCmMGsl0MSWzdzl/scf/JBdvUNziSJt8Un7UWK3/UXM4GQ512sc/vQCaXE5Z8J4vEx+0xggqJT9Xpp5kfXpG1Etm6aRTCftu3SQOHIkWb0XFDgNkNgQQ8HZv2WJmwnGGc5P61QHzwgYCPG0mN0VtxQXaFDunp3TjceBd10GcQDFmPRY+Pu/VvRo4z4YDf2sBg==","type":"thought_signature"},"event_type":"step.delta"}
+
+event: step.stop
+data: {"index":0,"event_type":"step.stop"}
+
+event: step.start
+data: {"index":1,"step":{"id":"call_343217","signature":"AWkUfRNQMbzzLGPh6F0GjNjEbHDE+bh2jpFOp26h1dajTKxuvDJZkffuVDGEzAIT+jsr1TWhjvPujeKuwWWDVlT3MXH9ug02/h9PkV9eBpxEvX5ZI/O1V8K4GVSHkxyyD2w+eD8A+ByIRvgtkjOuidfgUaXRs60t54SFLbCdobsNDi9oIljc+uFPjnnmaU5PyPNO/hHPRwUUqlCmMGsl0MSWzdzl/scf/JBdvUNziSJt8Un7UWK3/UXM4GQ512sc/vQCaXE5Z8J4vEx+0xggqJT9Xpp5kfXpG1Etm6aRTCftu3SQOHIkWb0XFDgNkNgQQ8HZv2WJmwnGGc5P61QHzwgYCPG0mN0VtxQXaFDunp3TjceBd10GcQDFmPRY+Pu/VvRo4z4YDf2sBg==","type":"function_call","name":"get_weather","arguments":{}},"event_type":"step.start"}
+
+event: step.delta
+data: {"index":1,"delta":{"arguments":"{\"city\":\"Paris\"}","type":"arguments_delta"},"event_type":"step.delta"}
+
+event: step.stop
+data: {"index":1,"event_type":"step.stop"}
+
+event: interaction.completed
+data: {"interaction":{"id":"v1_ChZxWVROYXZhQk5zaWIzYm9QckxqRENREhZxWVROYXZhQk5zaWIzYm9QckxqRENR","status":"requires_action","usage":{"total_tokens":127,"total_input_tokens":69,"input_tokens_by_modality":[{"modality":"text","tokens":69}],"total_cached_tokens":0,"total_output_tokens":16,"total_tool_use_tokens":0,"total_thought_tokens":42,"raw_prompt_token":109,"model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":109}],"candidates_tokens_details":[{"modality":"text","tokens":22}],"thoughts_tokens_details":[{"modality":"text","tokens":42}]}],"non_grounding_model_invocation_token_counts":[{"prompt_tokens_details":[{"modality":"text","tokens":109}],"candidates_tokens_details":[{"modality":"text","tokens":22}],"thoughts_tokens_details":[{"modality":"text","tokens":42}]}]},"created":"2026-10-13T01:09:01Z","updated":"2026-10-13T01:09:01Z","service_tier":"standard","object":"interaction","model":"gemini-3.8-flash"},"event_type":"interaction.completed"}
+
+event: done
+data: [DONE]
+

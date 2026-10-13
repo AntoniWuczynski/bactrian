@@ -1,0 +1,15 @@
+{
+  "protocol": "gemini_generate",
+  "method": "POST",
+  "path": "/v1beta/models/gemini-3.8-flash:streamGenerateContent",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json"
+  },
+  "response_headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "model": "gemini-3.8-flash",
+  "captured": "2026-10-13T01:08:49+00:00"
+}

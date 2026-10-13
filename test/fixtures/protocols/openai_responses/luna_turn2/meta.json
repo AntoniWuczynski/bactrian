@@ -1,0 +1,22 @@
+{
+  "protocol": "openai_responses",
+  "method": "POST",
+  "path": "/v1/responses",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json"
+  },
+  "response_headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit-requests": "5000",
+    "x-ratelimit-limit-tokens": "2000000",
+    "x-ratelimit-remaining-requests": "4999",
+    "x-ratelimit-remaining-tokens": "2000000",
+    "x-ratelimit-reset-requests": "12ms",
+    "x-ratelimit-reset-tokens": "0s",
+    "x-request-id": "req_d29f37f7bb2c4ddaa7bb89647f66ab70"
+  },
+  "model": "gpt-6-luna",
+  "captured": "2026-10-13T01:08:22+00:00"
+}

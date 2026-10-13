@@ -1,0 +1,62 @@
+{
+  "model": "gemini-3.8-flash",
+  "input": [
+    {
+      "type": "user_input",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the weather in Paris right now? Use the get_weather tool."
+        }
+      ]
+    },
+    {
+      "type": "thought",
+      "signature": "Eq0CCqoCAWkUfRNQMbzzLGPh6F0GjNjEbHDE+bh2jpFOp26h1dajTKxuvDJZkffuVDGEzAIT+jsr1TWhjvPujeKuwWWDVlT3MXH9ug02/h9PkV9eBpxEvX5ZI/O1V8K4GVSHkxyyD2w+eD8A+ByIRvgtkjOuidfgUaXRs60t54SFLbCdobsNDi9oIljc+uFPjnnmaU5PyPNO/hHPRwUUqlCmMGsl0MSWzdzl/scf/JBdvUNziSJt8Un7UWK3/UXM4GQ512sc/vQCaXE5Z8J4vEx+0xggqJT9Xpp5kfXpG1Etm6aRTCftu3SQOHIkWb0XFDgNkNgQQ8HZv2WJmwnGGc5P61QHzwgYCPG0mN0VtxQXaFDunp3TjceBd10GcQDFmPRY+Pu/VvRo4z4YDf2sBg=="
+    },
+    {
+      "id": "call_343217",
+      "signature": "AWkUfRNQMbzzLGPh6F0GjNjEbHDE+bh2jpFOp26h1dajTKxuvDJZkffuVDGEzAIT+jsr1TWhjvPujeKuwWWDVlT3MXH9ug02/h9PkV9eBpxEvX5ZI/O1V8K4GVSHkxyyD2w+eD8A+ByIRvgtkjOuidfgUaXRs60t54SFLbCdobsNDi9oIljc+uFPjnnmaU5PyPNO/hHPRwUUqlCmMGsl0MSWzdzl/scf/JBdvUNziSJt8Un7UWK3/UXM4GQ512sc/vQCaXE5Z8J4vEx+0xggqJT9Xpp5kfXpG1Etm6aRTCftu3SQOHIkWb0XFDgNkNgQQ8HZv2WJmwnGGc5P61QHzwgYCPG0mN0VtxQXaFDunp3TjceBd10GcQDFmPRY+Pu/VvRo4z4YDf2sBg==",
+      "type": "function_call",
+      "name": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      }
+    },
+    {
+      "type": "function_result",
+      "name": "get_weather",
+      "call_id": "call_343217",
+      "result": [
+        {
+          "type": "text",
+          "text": "18 degrees Celsius, cloudy"
+        }
+      ]
+    }
+  ],
+  "stream": true,
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    }
+  ],
+  "generation_config": {
+    "max_output_tokens": 400
+  },
+  "store": false
+}

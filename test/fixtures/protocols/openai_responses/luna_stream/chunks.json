@@ -1,0 +1,77 @@
+[
+  {
+    "offset": 0,
+    "length": 132,
+    "ms": 425.7
+  },
+  {
+    "offset": 132,
+    "length": 1369,
+    "ms": 425.8
+  },
+  {
+    "offset": 1501,
+    "length": 1369,
+    "ms": 425.8
+  },
+  {
+    "offset": 2870,
+    "length": 22,
+    "ms": 425.9
+  },
+  {
+    "offset": 2892,
+    "length": 310,
+    "ms": 768.6
+  },
+  {
+    "offset": 3202,
+    "length": 251,
+    "ms": 768.7
+  },
+  {
+    "offset": 3453,
+    "length": 250,
+    "ms": 768.7
+  },
+  {
+    "offset": 3703,
+    "length": 252,
+    "ms": 768.7
+  },
+  {
+    "offset": 3955,
+    "length": 28,
+    "ms": 779.8
+  },
+  {
+    "offset": 3983,
+    "length": 222,
+    "ms": 779.9
+  },
+  {
+    "offset": 4205,
+    "length": 251,
+    "ms": 779.9
+  },
+  {
+    "offset": 4456,
+    "length": 239,
+    "ms": 873.3
+  },
+  {
+    "offset": 4695,
+    "length": 326,
+    "ms": 877.9
+  },
+  {
+    "offset": 5021,
+    "length": 1364,
+    "ms": 962.7
+  },
+  {
+    "offset": 6385,
+    "length": 459,
+    "ms": 962.7
+  }
+]

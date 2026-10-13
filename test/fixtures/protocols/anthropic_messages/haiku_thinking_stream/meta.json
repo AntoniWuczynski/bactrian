@@ -1,0 +1,29 @@
+{
+  "protocol": "anthropic_messages",
+  "method": "POST",
+  "path": "/v1/messages",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json",
+    "accept": "text/event-stream",
+    "anthropic-version": "2023-06-01"
+  },
+  "response_headers": {
+    "content-type": "text/event-stream; charset=utf-8",
+    "anthropic-ratelimit-input-tokens-limit": "10000000",
+    "anthropic-ratelimit-input-tokens-remaining": "10000000",
+    "anthropic-ratelimit-input-tokens-reset": "2026-10-13T01:08:41Z",
+    "anthropic-ratelimit-output-tokens-limit": "2000000",
+    "anthropic-ratelimit-output-tokens-remaining": "2000000",
+    "anthropic-ratelimit-output-tokens-reset": "2026-10-13T01:08:41Z",
+    "anthropic-ratelimit-requests-limit": "10000",
+    "anthropic-ratelimit-requests-remaining": "9999",
+    "anthropic-ratelimit-requests-reset": "2026-10-13T01:08:41Z",
+    "anthropic-ratelimit-tokens-limit": "12000000",
+    "anthropic-ratelimit-tokens-remaining": "12000000",
+    "anthropic-ratelimit-tokens-reset": "2026-10-13T01:08:41Z"
+  },
+  "model": "claude-haiku-5-5",
+  "captured": "2026-10-13T01:08:42+00:00"
+}

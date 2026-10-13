@@ -1,0 +1,66 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "What is the weather in Paris right now? Use the get_weather tool."
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "functionCall": {
+            "name": "get_weather",
+            "args": {
+              "city": "Paris"
+            },
+            "id": "call_30065"
+          },
+          "thoughtSignature": "EoYCCoMCAWkUfRPjFdRDvxOggb5JoOKNZzQEUjKgawYJdFttynbRnFt2Hgfv1/0Of7ux0xYZqfW2mOCMa00oYgvlaDU4bSXN/fsjeQCNqJfDNzF86LeV8QQMGy4lwn/qYNWILQ6TmssZm/USZvJboQCA2W4VKSJhd/VPBuDmcrSZwqCP2vCBTs/hNXEvcFIpMs8h42UukOy7pvq9hwxNwt0LtzunyExjVCpDra7IFMUVuM6p0ZLuCyJ8f399a0R1BKMS4VuNfnoxcg6tqVKl+2y9cDTOCY7XhNbmDHsWv6zNGCX40pXjVD/TQfDw5bn7CK1UNtHqeuOaTmhikyLet6IvCI9wPZFOKg=="
+        }
+      ],
+      "role": "model"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "functionResponse": {
+            "name": "get_weather",
+            "response": {
+              "result": "18 degrees Celsius, cloudy"
+            },
+            "id": "call_30065"
+          }
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "parameters": {
+            "type": "OBJECT",
+            "properties": {
+              "city": {
+                "type": "STRING",
+                "description": "City name"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 400
+  }
+}

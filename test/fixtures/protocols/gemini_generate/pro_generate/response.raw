@@ -1,0 +1,39 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "get_weather",
+              "args": {
+                "city": "Paris"
+              },
+              "id": "call_3555"
+            },
+            "thoughtSignature": "EoUECoIEAWkUfROacDHVioovyjjAjOJ4f5nFPilBhtcTyX027k5aAj/ZlCYisDfGD1z94pKULdDxyczbi4rMpuESej1R4cRctdbrunaevnprkh1h8eV8y9sN02crZ3BDqFvglI4RCBlXCa+B3ARj5g7z3C3HSe4HcZyd+V3FTG2Z44r9n9ovF6f/LEHHvNsVU9d9M0HICsFyk549RmmdTPBEsTsbKKLhPPpy51h8oDtDPWTRpItyeMm27YFTR1aeSVJxXGwZUt4qjgXe0hQS1Z92ktY0hXei+ltLFOcx5xvuTtDN/O642pmTAm1Mcno809e92LfU9fYiu/iMCdW090hVmDdi10GKz9jhPEtR/ADG6ew8r3cZE01hXIOsh92mFOidkVm1beQr6P+wTeCi/1IsJh9IstDZqgZKm1zjv9kFb610rtm5d89KN7fTVd7W6kL8QETuLmpyvhWqDg/VNd7F8/k8Yq8wRoDeB+p5FR61OCXnYCWg/pkqD6xAZPBTQ7Z57Dhk8sU0Mc0w4A6lIMTGfMLVg+VPwBLhzX7ps9VHM7tSZsWcOuaQoIUHcpTS42htksDt6FwdBXncRQXrRy1K78UchIlEhuDgsTWoR6qzxKoXF4Bmuo0qWBslKuc4SToaVYA6kxyMuX3JStgI9LDqZ3+RhzAMIRTaGgOY3nasM6l1ty4uhQ=="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 69,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 194,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 69
+      }
+    ],
+    "thoughtsTokenCount": 109,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-pro-preview",
+  "responseId": "ooTNavybH-HjkdUPxrn0IQ"
+}

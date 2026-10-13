@@ -1,0 +1,54 @@
+{
+  "model": "claude-haiku-5-5",
+  "max_tokens": 300,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the get_weather tool."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01ReCiyPQ49xxQfSYauscpbK",
+          "name": "get_weather",
+          "input": {
+            "city": "Paris"
+          },
+          "caller": {
+            "type": "direct"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01ReCiyPQ49xxQfSYauscpbK",
+          "content": "18 degrees Celsius, cloudy"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    }
+  ]
+}

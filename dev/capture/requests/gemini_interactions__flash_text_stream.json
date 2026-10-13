@@ -1,0 +1,8 @@
+{
+  "model": "gemini-3.8-flash",
+  "input": "Say hello in five words.",
+  "stream": true,
+  "generation_config": {
+    "max_output_tokens": 400
+  }
+}

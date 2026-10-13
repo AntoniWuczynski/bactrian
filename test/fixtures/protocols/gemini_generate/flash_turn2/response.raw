@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "The current weather in Paris is 18°C and cloudy.",
+            "thoughtSignature": "EsQBCsEBAWkUfRMF+VpvlajWDsW6eHfpoEmSHGgaJg6kvEioQMX068Xo9U7IGbGMRsJwBiychGhIWstUi5ITlVraRYhvzE8UPolvDuXqcUqfW013ZyLa1BubYbENPwKA49alhvBzfqQvZHGrRkgufvK/CiWPdXFeYwxeKzCut3l2MJezCrptTdUn58AT696nZS9NfgfXPvpK84Tamiad4vm2/7rHf4OHkwHKfhoX2cdCb3K76JDxEWw6i7Xj4huLgQJjEJAsKA=="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 144,
+    "candidatesTokenCount": 14,
+    "totalTokenCount": 178,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 144
+      }
+    ],
+    "thoughtsTokenCount": 20,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.8-flash",
+  "responseId": "poTNatvVDc6DkdUP-umRkQw"
+}

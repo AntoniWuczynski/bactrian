@@ -1,0 +1,22 @@
+{
+  "protocol": "openai_chat",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json"
+  },
+  "response_headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit-requests": "5000",
+    "x-ratelimit-limit-tokens": "2000000",
+    "x-ratelimit-remaining-requests": "4999",
+    "x-ratelimit-remaining-tokens": "1999981",
+    "x-ratelimit-reset-requests": "12ms",
+    "x-ratelimit-reset-tokens": "0s",
+    "x-request-id": "req_5016c3f0a2094cdb93cd3de1a42d2e4c"
+  },
+  "model": "gpt-6-luna",
+  "captured": "2026-10-13T01:08:09+00:00"
+}

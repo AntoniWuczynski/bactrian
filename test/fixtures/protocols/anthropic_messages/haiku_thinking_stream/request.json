@@ -1,0 +1,35 @@
+{
+  "model": "claude-haiku-5-5",
+  "max_tokens": 1500,
+  "messages": [
+    {
+      "role": "user",
+      "content": "A bat and a ball cost 1.10 in total. The bat costs 1.00 more than the ball. How much does the ball cost? Think it through, answer in one line."
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    }
+  ],
+  "stream": true,
+  "thinking": {
+    "type": "adaptive"
+  },
+  "output_config": {
+    "effort": "high"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "protocol": "openai_chat",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json",
+    "accept": "text/event-stream"
+  },
+  "response_headers": {
+    "content-type": "text/event-stream; charset=utf-8",
+    "x-ratelimit-limit-requests": "5000",
+    "x-ratelimit-limit-tokens": "2000000",
+    "x-ratelimit-remaining-requests": "4999",
+    "x-ratelimit-remaining-tokens": "1999981",
+    "x-ratelimit-reset-requests": "12ms",
+    "x-ratelimit-reset-tokens": "0s",
+    "x-request-id": "req_021958ed903546c3822f2f8967f4f6ae"
+  },
+  "model": "gpt-5-nano",
+  "captured": "2026-10-13T01:08:01+00:00"
+}

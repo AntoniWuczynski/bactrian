@@ -1,0 +1,45 @@
+{
+  "model": "gpt-6-luna",
+  "input": [
+    {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the get_weather tool."
+    },
+    {
+      "id": "fc_059fe00ca2779f6f006acd848180c487d28a85c62b0983bf75",
+      "type": "function_call",
+      "status": "completed",
+      "arguments": "{\"city\":\"Paris\"}",
+      "call_id": "call_mXpgkYFrcbPPkMAnOhXUvPoW",
+      "name": "get_weather"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_mXpgkYFrcbPPkMAnOhXUvPoW",
+      "output": "18 degrees Celsius, cloudy"
+    }
+  ],
+  "max_output_tokens": 400,
+  "reasoning": {
+    "effort": "low"
+  },
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    }
+  ]
+}

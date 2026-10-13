@@ -1,0 +1,15 @@
+{
+  "protocol": "gemini_generate",
+  "method": "POST",
+  "path": "/v1beta/models/gemini-3.1-pro-preview:generateContent",
+  "query": "",
+  "status": 200,
+  "request_headers": {
+    "content-type": "application/json"
+  },
+  "response_headers": {
+    "content-type": "application/json; charset=UTF-8"
+  },
+  "model": "gemini-3.1-pro-preview",
+  "captured": "2026-10-13T01:08:53+00:00"
+}
