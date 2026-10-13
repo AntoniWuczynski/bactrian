@@ -16,8 +16,8 @@ let ignored_fields =
 let malformed path reason = Protocol.Malformed { path; reason }
 let canon_error path e = malformed path (Format.asprintf "%a" Canon.pp_error e)
 let obj path fields = Result.map_error (canon_error path) (Canon.obj fields)
-let string_field = Protocol.str_member
-let int_field = Protocol.int_member
+let string_field = Canon.str_member
+let int_field = Canon.int_member
 let type_is t v = Option.equal String.equal (string_field "type" v) (Some t)
 
 let rec traverse f = function
@@ -86,7 +86,23 @@ let canonical_request ~path:_ req =
         | None -> kept)
 
 let streaming ~path:_ ~query:_ req =
-  Option.equal Bool.equal (Protocol.bool_member "stream" req) (Some true)
+  Option.equal Bool.equal (Canon.bool_member "stream" req) (Some true)
+
+(* A result is a string or a list of content parts: the text parts joined, or
+   the JSON text when there are none. *)
+let result_text v =
+  match Canon.to_string_opt v with
+  | Some s -> s
+  | None -> (
+      let texts =
+        List.filter_map
+          (fun part ->
+            if type_is "text" part then string_field "text" part else None)
+          (Option.value (Canon.to_list_opt v) ~default:[])
+      in
+      match texts with
+      | [] -> Canon.to_string v
+      | _ :: _ -> String.concat "" texts)
 
 let tool_results req =
   let input = Option.value (Canon.member "input" req) ~default:Canon.null in
@@ -101,14 +117,11 @@ let tool_results req =
       in
       let content =
         match Canon.member "result" r with
-        | Some v -> (
-            match Canon.to_string_opt v with
-            | Some s -> s
-            | None -> Canon.to_string v)
+        | Some v -> result_text v
         | None -> ""
       in
       let is_error =
-        Option.value (Protocol.bool_member "is_error" r) ~default:false
+        Option.value (Canon.bool_member "is_error" r) ~default:false
       in
       { Protocol.call_index; content; is_error })
     results
@@ -315,7 +328,7 @@ let summarise_json v =
         | Some _ -> { acc with error = Some (error_message v "error") }
         | None -> acc
       in
-      let steps = Option.value (Protocol.list_member "steps" v) ~default:[] in
+      let steps = Option.value (Canon.list_member "steps" v) ~default:[] in
       let acc =
         List.fold_left
           (fun acc step ->

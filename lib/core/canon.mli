@@ -7,11 +7,11 @@ type t = private
   | Bool of bool
   | Int of int
   | Big_int of string
-      (** An integer literal outside the native [int] range, digits as written.
-      *)
-  | Float of float
-      (** Finite and not integral. Integral floats that fit an [int] become
-          [Int]. *)
+      (** An integral number outside the native [int] range, as exact decimal
+          digits with an optional leading ['-']. An integral float outside the
+          range is converted to its exact digits, so [1e20] and
+          [100000000000000000000] are the same value. *)
+  | Float of float  (** Finite and not integral. *)
   | String of string
   | List of t list
   | Object of (string * t) list
@@ -20,7 +20,9 @@ type t = private
 type error =
   | Syntax of string  (** The text is not JSON. Carries the parser's message. *)
   | Duplicate_key of string
-  | Non_finite_float  (** NaN or an infinity, which JSON does not allow. *)
+  | Non_finite_float
+      (** NaN or an infinity, or a number that overflows a double such as
+          [1e400]. *)
 
 val null : t
 val bool : bool -> t
@@ -35,6 +37,11 @@ val obj : (string * t) list -> (t, error) result
 (** Sorts the fields. [Error (Duplicate_key k)] if [k] appears twice. *)
 
 val of_string : string -> (t, error) result
+(** Parses with Yojson, so its extensions are accepted: [/* */] and [//]
+    comments are skipped and not part of the value. NaN, [Infinity] and numbers
+    that overflow a double (legal JSON such as [1e400]) are
+    [Error Non_finite_float]. *)
+
 val of_yojson : Yojson.Safe.t -> (t, error) result
 val to_yojson : t -> Yojson.Safe.t
 
@@ -63,6 +70,19 @@ val to_fields_opt : t -> (string * t) list option
 
 val member : string -> t -> t option
 (** [member k v] is the value of field [k] when [v] is an object that has it. *)
+
+val str_member : string -> t -> string option
+(** [str_member k v] is the string value of field [k], or [None] when [v] is not
+    an object, lacks the field, or holds another shape there. *)
+
+val int_member : string -> t -> int option
+(** Like {!str_member}, for an [Int] value. *)
+
+val bool_member : string -> t -> bool option
+(** Like {!str_member}, for a [Bool] value. *)
+
+val list_member : string -> t -> t list option
+(** Like {!str_member}, for a [List] value. *)
 
 (** {1 Editing}
 

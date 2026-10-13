@@ -40,7 +40,7 @@ let is_null v = Canon.equal v Canon.null
 let is_object v = Option.is_some (Canon.to_fields_opt v)
 
 let has_type ty item =
-  Option.equal String.equal (str_member "type" item) (Some ty)
+  Option.equal String.equal (Canon.str_member "type" item) (Some ty)
 
 (* A Canon.member that is absent or null is [None]. Otherwise [conv] must accept it. *)
 let opt_with ~path ~expected conv key obj =
@@ -95,14 +95,14 @@ let normalise_item table item =
     if has_type "item_reference" item then item
     else Canon.remove_member "id" item
   in
-  match str_member "call_id" item with
+  match Canon.str_member "call_id" item with
   | Some id ->
       let n, table = ordinal table id in
       (table, Canon.set_member "call_id" (Canon.int n) item)
   | None -> (table, item)
 
 let normalise_input req =
-  match list_member "input" req with
+  match Canon.list_member "input" req with
   | Some items ->
       let _, items' = List.fold_left_map normalise_item [] items in
       Canon.set_member "input" (Canon.list items') req
@@ -118,14 +118,15 @@ let canonical_request ~path:_ req =
   else malformed "$" "request is not a JSON object"
 
 let streaming ~path:_ ~query:_ req =
-  Option.value (bool_member "stream" req) ~default:false
+  Option.value (Canon.bool_member "stream" req) ~default:false
 
 let tool_results req =
-  let items = Option.value (list_member "input" req) ~default:[] in
+  let items = Option.value (Canon.list_member "input" req) ~default:[] in
   let calls =
     List.filter_map
       (fun it ->
-        if has_type "function_call" it then str_member "call_id" it else None)
+        if has_type "function_call" it then Canon.str_member "call_id" it
+        else None)
       items
     |> List.mapi (fun i id -> (id, i))
   in
@@ -138,7 +139,7 @@ let tool_results req =
           | Some o ->
               Option.value (Canon.to_string_opt o) ~default:(Canon.to_string o)
         in
-        Option.bind (str_member "call_id" it) (fun id ->
+        Option.bind (Canon.str_member "call_id" it) (fun id ->
             Option.map
               (fun call_index -> { call_index; content; is_error = false })
               (List.assoc_opt id calls))
@@ -208,7 +209,7 @@ let error_message r =
   | None -> None
   | Some e when is_null e -> None
   | Some e -> (
-      match str_member "message" e with
+      match Canon.str_member "message" e with
       | Some m -> Some m
       | None -> Some (Canon.to_string e))
 
@@ -263,7 +264,7 @@ let stream_step st (i, item) =
         | Some r when is_object r -> Ok r
         | Some _ | None -> malformed (path ^ ".response") "expected an object"
       in
-      match str_member "type" payload with
+      match Canon.str_member "type" payload with
       | Some ("response.completed" | "response.incomplete" | "response.failed")
         ->
           let* r = response () in

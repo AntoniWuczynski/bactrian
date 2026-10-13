@@ -18,8 +18,8 @@ let ignored_fields =
       "opaque thinking signature, differs per run for the same thinking" );
   ]
 
-let items k v = Option.value ~default:[] (list_member k v)
-let type_is t v = Option.equal String.equal (str_member "type" v) (Some t)
+let items k v = Option.value ~default:[] (Canon.list_member k v)
+let type_is t v = Option.equal String.equal (Canon.str_member "type" v) (Some t)
 let malformed path reason = Error (Malformed { path; reason })
 
 let canon_error path (e : Canon.error) =
@@ -48,7 +48,7 @@ let history_blocks req =
 
 let call_ids req =
   List.filter_map
-    (fun b -> if is_call b then str_member "id" b else None)
+    (fun b -> if is_call b then Canon.str_member "id" b else None)
     (history_blocks req)
 
 let index_of ids id = List.find_index (String.equal id) ids
@@ -59,7 +59,8 @@ let result_text c =
   | None, Some blocks ->
       String.concat ""
         (List.filter_map
-           (fun b -> if type_is "text" b then str_member "text" b else None)
+           (fun b ->
+             if type_is "text" b then Canon.str_member "text" b else None)
            blocks)
   | None, None -> ""
 
@@ -69,14 +70,15 @@ let tool_results req =
     (fun b ->
       if not (type_is "tool_result" b) then None
       else
-        Option.bind (str_member "tool_use_id" b) (index_of ids)
+        Option.bind (Canon.str_member "tool_use_id" b) (index_of ids)
         |> Option.map (fun call_index ->
             {
               call_index;
               content =
                 result_text
                   (Option.value ~default:Canon.null (Canon.member "content" b));
-              is_error = Option.value ~default:false (bool_member "is_error" b);
+              is_error =
+                Option.value ~default:false (Canon.bool_member "is_error" b);
             }))
     (history_blocks req)
 
@@ -123,7 +125,7 @@ let canonical_request ~path:_ req =
       Ok (Canon.map_fields (fun _ v -> clean ~ids ~verbatim:false v) kept)
 
 let streaming ~path:_ ~query:_ req =
-  Option.equal Bool.equal (bool_member "stream" req) (Some true)
+  Option.equal Bool.equal (Canon.bool_member "stream" req) (Some true)
 
 (* Responses *)
 
@@ -135,12 +137,12 @@ type block =
 let block_of_start b =
   if type_is "text" b then (
     let buf = Buffer.create 64 in
-    Option.iter (Buffer.add_string buf) (str_member "text" b);
+    Option.iter (Buffer.add_string buf) (Canon.str_member "text" b);
     Text buf)
   else if type_is "tool_use" b then
     Tool
       {
-        name = Option.value ~default:"" (str_member "name" b);
+        name = Option.value ~default:"" (Canon.str_member "name" b);
         start_input =
           Option.value ~default:empty_object (Canon.member "input" b);
         json = Buffer.create 64;
@@ -200,7 +202,7 @@ let usage_fields v =
 
 let error_text v =
   let e = Option.value ~default:Canon.null (Canon.member "error" v) in
-  match (str_member "type" e, str_member "message" e) with
+  match (Canon.str_member "type" e, Canon.str_member "message" e) with
   | Some t, Some m -> t ^ ": " ^ m
   | Some t, None -> t
   | None, Some m -> m
@@ -225,8 +227,10 @@ let summarise_json v =
       ~error:(Some (error_text v))
       []
   else
-    make_summary ~model:(str_member "model" v) ~usage_fields:(usage_fields v)
-      ~stop_reason:(str_member "stop_reason" v)
+    make_summary
+      ~model:(Canon.str_member "model" v)
+      ~usage_fields:(usage_fields v)
+      ~stop_reason:(Canon.str_member "stop_reason" v)
       ~error:None
       (List.map block_of_start (items "content" v))
 
@@ -242,30 +246,32 @@ let acc0 =
   { a_model = None; a_usage = []; a_stop = None; a_error = None; a_blocks = [] }
 
 let block_at acc v =
-  Option.bind (int_member "index" v) (fun i -> List.assoc_opt i acc.a_blocks)
+  Option.bind (Canon.int_member "index" v) (fun i ->
+      List.assoc_opt i acc.a_blocks)
 
 let apply_delta acc v =
   let delta = Option.value ~default:Canon.null (Canon.member "delta" v) in
   (match block_at acc v with
   | Some (Text buf) when type_is "text_delta" delta ->
-      Option.iter (Buffer.add_string buf) (str_member "text" delta)
+      Option.iter (Buffer.add_string buf) (Canon.str_member "text" delta)
   | Some (Tool { json; _ }) when type_is "input_json_delta" delta ->
-      Option.iter (Buffer.add_string json) (str_member "partial_json" delta)
+      Option.iter (Buffer.add_string json)
+        (Canon.str_member "partial_json" delta)
   | Some (Text _ | Tool _ | Other) | None ->
       () (* thinking, signature and citation deltas carry no summary data *));
   acc
 
 let step acc v =
-  match str_member "type" v with
+  match Canon.str_member "type" v with
   | Some "message_start" ->
       let m = Option.value ~default:Canon.null (Canon.member "message" v) in
       {
         acc with
-        a_model = str_member "model" m;
+        a_model = Canon.str_member "model" m;
         a_usage = merge_usage acc.a_usage (usage_fields m);
       }
   | Some "content_block_start" -> (
-      match int_member "index" v with
+      match Canon.int_member "index" v with
       | Some i ->
           let b =
             Option.value ~default:Canon.null (Canon.member "content_block" v)
@@ -278,7 +284,7 @@ let step acc v =
       {
         acc with
         a_stop =
-          (match str_member "stop_reason" delta with
+          (match Canon.str_member "stop_reason" delta with
           | Some _ as s -> s
           | None -> acc.a_stop);
         a_usage = merge_usage acc.a_usage (usage_fields v);

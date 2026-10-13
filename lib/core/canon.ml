@@ -18,10 +18,10 @@ let list l = List l
 
 let float f =
   if not (Float.is_finite f) then Error Non_finite_float
-  else if
-    Float.is_integer f && f >= Float.of_int min_int && f < Float.of_int max_int
-  then Ok (Int (Float.to_int f))
-  else Ok (Float f)
+  else if not (Float.is_integer f) then Ok (Float f)
+  else if f >= Float.of_int min_int && f < Float.of_int max_int then
+    Ok (Int (Float.to_int f))
+  else Ok (Big_int (Printf.sprintf "%.0f" f))
 
 let obj fields =
   let sorted =
@@ -164,6 +164,10 @@ let to_fields_opt = function
   | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | List _ -> None
 
 let member k v = Option.bind (to_fields_opt v) (List.assoc_opt k)
+let str_member k v = Option.bind (member k v) to_string_opt
+let int_member k v = Option.bind (member k v) to_int_opt
+let bool_member k v = Option.bind (member k v) to_bool_opt
+let list_member k v = Option.bind (member k v) to_list_opt
 
 let set_member k x v =
   match v with

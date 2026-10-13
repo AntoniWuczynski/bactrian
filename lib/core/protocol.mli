@@ -61,12 +61,3 @@ module type S = sig
 end
 
 val pp_error : Format.formatter -> error -> unit
-
-(** {1 Field readers}
-
-    [None] when the field is absent or has another shape. *)
-
-val str_member : string -> Canon.t -> string option
-val int_member : string -> Canon.t -> int option
-val bool_member : string -> Canon.t -> bool option
-val list_member : string -> Canon.t -> Canon.t list option

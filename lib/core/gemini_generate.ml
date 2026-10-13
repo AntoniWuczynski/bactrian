@@ -67,7 +67,7 @@ type role =
   | Other
 
 let start = { n_calls = 0; ids = []; n_responses = 0 }
-let id_of v = str_member "id" v
+let id_of v = Canon.str_member "id" v
 
 (* Classify one part. A response is linked to its call by id, or by order when
    Gemini sent no ids. *)
@@ -94,14 +94,18 @@ let step h part =
       ({ h with n_responses = h.n_responses + 1 }, Response { index; response })
   | None, None -> (h, Other)
 
-let contents req = Option.value ~default:[] (list_member "contents" req)
-let parts_of content = Option.value ~default:[] (list_member "parts" content)
+let contents req = Option.value ~default:[] (Canon.list_member "contents" req)
+
+let parts_of content =
+  Option.value ~default:[] (Canon.list_member "parts" content)
 
 let result_content response =
   match Canon.member "response" response with
   | None -> ""
   | Some r -> (
-      match str_member "result" r with Some s -> s | None -> Canon.to_string r)
+      match Canon.str_member "result" r with
+      | Some s -> s
+      | None -> Canon.to_string r)
 
 let result_is_error response =
   match Canon.member "response" response with
@@ -159,14 +163,14 @@ let rewrite_part h part =
       (h, replace_id "functionResponse" replacement part)
 
 let rewrite_content h content =
-  match list_member "parts" content with
+  match Canon.list_member "parts" content with
   | Some parts ->
       let h, parts = List.fold_left_map rewrite_part h parts in
       (h, Canon.set_member "parts" (Canon.list parts) content)
   | None -> (h, content)
 
 let rewrite_ids body =
-  match list_member "contents" body with
+  match Canon.list_member "contents" body with
   | None -> body
   | Some cs ->
       let _, cs = List.fold_left_map rewrite_content start cs in
@@ -213,7 +217,7 @@ let empty =
   }
 
 let usage_of um =
-  let int k = int_member k um in
+  let int k = Canon.int_member k um in
   let count k = Option.value ~default:0 (int k) in
   let thoughts = int "thoughtsTokenCount" in
   {
@@ -225,16 +229,18 @@ let usage_of um =
   }
 
 let error_text e =
-  match str_member "message" e with
+  match Canon.str_member "message" e with
   | None -> Canon.to_string e
   | Some m -> (
-      match str_member "status" e with Some s -> s ^ ": " ^ m | None -> m)
+      match Canon.str_member "status" e with
+      | Some s -> s ^ ": " ^ m
+      | None -> m)
 
 let add_part acc part =
   match Canon.member "functionCall" part with
   | Some fc ->
       let* name =
-        match str_member "name" fc with
+        match Canon.str_member "name" fc with
         | Some n -> Ok n
         | None -> malformed "functionCall.name" "missing or not a string"
       in
@@ -245,15 +251,17 @@ let add_part acc part =
       in
       Ok { acc with calls = { name; arguments } :: acc.calls }
   | None -> (
-      let thought = Option.value (bool_member "thought" part) ~default:false in
-      match str_member "text" part with
+      let thought =
+        Option.value (Canon.bool_member "thought" part) ~default:false
+      in
+      match Canon.str_member "text" part with
       | Some t when not thought -> Ok { acc with texts = t :: acc.texts }
       | Some _ | None -> Ok acc)
 
 let add_candidate acc cand =
   let parts =
     Option.value ~default:[]
-      (Option.bind (Canon.member "content" cand) (list_member "parts"))
+      (Option.bind (Canon.member "content" cand) (Canon.list_member "parts"))
   in
   let* acc =
     List.fold_left
@@ -263,7 +271,7 @@ let add_candidate acc cand =
       (Ok acc) parts
   in
   let stop =
-    match str_member "finishReason" cand with
+    match Canon.str_member "finishReason" cand with
     | Some _ as s -> s
     | None -> acc.stop
   in
@@ -276,7 +284,7 @@ let add_chunk acc chunk =
       let block =
         Option.bind
           (Canon.member "promptFeedback" chunk)
-          (str_member "blockReason")
+          (Canon.str_member "blockReason")
         |> Option.map (fun r -> "prompt blocked: " ^ r)
       in
       let err =
@@ -292,7 +300,7 @@ let add_chunk acc chunk =
           acc with
           err;
           model =
-            (match str_member "modelVersion" chunk with
+            (match Canon.str_member "modelVersion" chunk with
             | Some _ as m -> m
             | None -> acc.model);
           usage =
@@ -302,7 +310,9 @@ let add_chunk acc chunk =
         }
       in
       (* Only the first candidate: n > 1 is not used by agents. *)
-      let cands = Option.value ~default:[] (list_member "candidates" chunk) in
+      let cands =
+        Option.value ~default:[] (Canon.list_member "candidates" chunk)
+      in
       match cands with [] -> Ok acc | first :: _ -> add_candidate acc first)
 
 let chunks_of_body = function

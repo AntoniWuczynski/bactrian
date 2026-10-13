@@ -43,20 +43,20 @@ let rec map_result f = function
 (* Replace provider call IDs by the call's position in the history. State is
    threaded as (ids seen so far, next call position). *)
 let rewrite_call (ids, next) call =
-  match str_member "id" call with
+  match Canon.str_member "id" call with
   | None -> ((ids, next + 1), call)
   | Some id ->
       ( ((id, next) :: ids, next + 1),
         Canon.set_member "id" (Canon.int next) call )
 
 let rewrite_message ((ids, _) as state) msg =
-  match (str_member "role" msg, list_member "tool_calls" msg) with
+  match (Canon.str_member "role" msg, Canon.list_member "tool_calls" msg) with
   | Some "assistant", Some calls ->
       let state', calls' = List.fold_left_map rewrite_call state calls in
       (state', Canon.set_member "tool_calls" (Canon.list calls') msg)
   | Some "tool", _ -> (
       match
-        Option.bind (str_member "tool_call_id" msg) (fun id ->
+        Option.bind (Canon.str_member "tool_call_id" msg) (fun id ->
             List.assoc_opt id ids)
       with
       | None -> (state, msg)
@@ -64,7 +64,7 @@ let rewrite_message ((ids, _) as state) msg =
   | _ -> (state, msg)
 
 let rewrite_ids root =
-  match list_member "messages" root with
+  match Canon.list_member "messages" root with
   | None -> root
   | Some msgs ->
       let _, msgs' = List.fold_left_map rewrite_message ([], 0) msgs in
@@ -81,21 +81,21 @@ let canonical_request ~path:_ req =
               req ignored_fields))
 
 let streaming ~path:_ ~query:_ req =
-  Option.value (bool_member "stream" req) ~default:false
+  Option.value (Canon.bool_member "stream" req) ~default:false
 
 let content_text c =
   match Canon.to_string_opt c with
   | Some s -> s
   | None ->
       Canon.to_list_opt c |> Option.value ~default:[]
-      |> List.filter_map (str_member "text")
+      |> List.filter_map (Canon.str_member "text")
       |> String.concat ""
 
 let tool_results req =
-  list_member "messages" (rewrite_ids req)
+  Canon.list_member "messages" (rewrite_ids req)
   |> Option.value ~default:[]
   |> List.filter_map (fun m ->
-      match (str_member "role" m, int_member "tool_call_id" m) with
+      match (Canon.str_member "role" m, Canon.int_member "tool_call_id" m) with
       | Some "tool", Some call_index ->
           Some
             {
@@ -136,19 +136,19 @@ let error_message e =
   match Canon.to_string_opt e with
   | Some s -> s
   | None -> (
-      match str_member "message" e with
+      match Canon.str_member "message" e with
       | Some m -> m
       | None -> Canon.to_string e)
 
 let parse_usage u =
   let req k =
-    match int_member k u with
+    match Canon.int_member k u with
     | Some n -> Ok n
     | None -> malformed ("usage." ^ k) "missing or not an integer"
   in
   let* input_tokens = req "prompt_tokens" in
   let* output_tokens = req "completion_tokens" in
-  let detail d k = Option.bind (Canon.member d u) (int_member k) in
+  let detail d k = Option.bind (Canon.member d u) (Canon.int_member k) in
   Ok
     {
       Trace.input_tokens;
@@ -159,23 +159,23 @@ let parse_usage u =
     }
 
 let add_call acc pos call =
-  let idx = Option.value (int_member "index" call) ~default:pos in
+  let idx = Option.value (Canon.int_member "index" call) ~default:pos in
   let fn = Option.value (Canon.member "function" call) ~default:Canon.null in
   let prev =
     Option.value
       (IM.find_opt idx acc.calls)
       ~default:{ cname = ""; cargs_rev = [] }
   in
-  let cname = Option.value (str_member "name" fn) ~default:prev.cname in
+  let cname = Option.value (Canon.str_member "name" fn) ~default:prev.cname in
   let cargs_rev =
-    match str_member "arguments" fn with
+    match Canon.str_member "arguments" fn with
     | Some a -> a :: prev.cargs_rev
     | None -> prev.cargs_rev
   in
   { acc with calls = IM.add idx { cname; cargs_rev } acc.calls }
 
 let apply_choice acc choice =
-  if Option.value (int_member "index" choice) ~default:0 <> 0 then acc
+  if Option.value (Canon.int_member "index" choice) ~default:0 <> 0 then acc
   else
     let body =
       match Canon.member "delta" choice with
@@ -188,12 +188,12 @@ let apply_choice acc choice =
       | None -> acc
     in
     let acc =
-      list_member "tool_calls" body
+      Canon.list_member "tool_calls" body
       |> Option.value ~default:[]
       |> List.mapi (fun i c -> (i, c))
       |> List.fold_left (fun a (i, c) -> add_call a i c) acc
     in
-    let finish = str_member "finish_reason" choice in
+    let finish = Canon.str_member "finish_reason" choice in
     let acc =
       match finish with
       | Some _ -> { acc with stop_reason = finish }
@@ -211,7 +211,7 @@ let apply_choice acc choice =
 
 let apply acc chunk =
   let acc =
-    match (acc.model, str_member "model" chunk) with
+    match (acc.model, Canon.str_member "model" chunk) with
     | None, (Some _ as m) -> { acc with model = m }
     | _ -> acc
   in
@@ -222,7 +222,7 @@ let apply acc chunk =
     | _ -> acc
   in
   let acc =
-    match list_member "choices" chunk with
+    match Canon.list_member "choices" chunk with
     | Some cs -> List.fold_left apply_choice { acc with seen_choices = true } cs
     | None -> acc
   in

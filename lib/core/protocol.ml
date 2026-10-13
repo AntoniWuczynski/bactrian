@@ -29,8 +29,3 @@ end
 
 let pp_error ppf (Malformed { path; reason }) =
   Format.fprintf ppf "malformed %s: %s" path reason
-
-let str_member k v = Option.bind (Canon.member k v) Canon.to_string_opt
-let int_member k v = Option.bind (Canon.member k v) Canon.to_int_opt
-let bool_member k v = Option.bind (Canon.member k v) Canon.to_bool_opt
-let list_member k v = Option.bind (Canon.member k v) Canon.to_list_opt

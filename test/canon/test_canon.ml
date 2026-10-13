@@ -75,6 +75,48 @@ let test_big_int () =
   Alcotest.check parsed "round trip" (Ok v)
     (Canon.of_string (Canon.to_string v))
 
+let test_integral_floats_outside_int () =
+  let big = Canon.of_string "100000000000000000000" in
+  Alcotest.check parsed "1e20 = 100000000000000000000" big
+    (Canon.of_string "1e20");
+  Alcotest.check parsed "-1e20"
+    (Canon.of_string "-100000000000000000000")
+    (Canon.of_string "-1e20");
+  Alcotest.check parsed "2^62 as float"
+    (Canon.of_string "4611686018427387904")
+    (Canon.of_string "4.611686018427387904e18");
+  Alcotest.check parsed "Canon.float" big (Canon.float 1e20);
+  Alcotest.(check string)
+    "digits" "100000000000000000000"
+    (Canon.to_string (get (Canon.float 1e20)));
+  Alcotest.check parsed "in range stays Int"
+    (Ok (Canon.int 1_000_000))
+    (Canon.of_string "1e6")
+
+let test_extensions_pinned () =
+  Alcotest.check parsed "block comment"
+    (Ok (Canon.int 1))
+    (Canon.of_string "/*c*/ 1");
+  Alcotest.check parsed "line comment"
+    (Ok (Canon.int 1))
+    (Canon.of_string "1 // x\n");
+  Alcotest.check parsed "1e400 overflows a double"
+    (Error Canon.Non_finite_float) (Canon.of_string "1e400")
+
+let test_member_readers () =
+  let v = get (Canon.of_string {|{"s":"x","i":3,"b":true,"l":[1],"n":null}|}) in
+  Alcotest.(check (option string)) "str" (Some "x") (Canon.str_member "s" v);
+  Alcotest.(check (option int)) "int" (Some 3) (Canon.int_member "i" v);
+  Alcotest.(check (option bool)) "bool" (Some true) (Canon.bool_member "b" v);
+  Alcotest.(check int)
+    "list" 1
+    (List.length (Option.value (Canon.list_member "l" v) ~default:[]));
+  Alcotest.(check (option string)) "wrong shape" None (Canon.str_member "i" v);
+  Alcotest.(check (option int)) "absent" None (Canon.int_member "zz" v);
+  Alcotest.(check bool)
+    "non-object" true
+    (Option.is_none (Canon.list_member "l" (get (Canon.of_string "[1]"))))
+
 let is_lower_hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 
 let test_digest () =
@@ -203,7 +245,28 @@ let finite_float =
         map float_of_int (int_range (-1000) 1000);
       ])
 
-let key = QCheck.Gen.(string_size ~gen:printable (int_range 0 4))
+(* Unicode scalar values from every UTF-8 length, including controls. *)
+let uchar =
+  QCheck.Gen.(
+    oneof
+      [
+        map Uchar.of_int (int_range 0 0x7f);
+        map Uchar.of_int (int_range 0x80 0x7ff);
+        map Uchar.of_int (int_range 0x800 0xd7ff);
+        map Uchar.of_int (int_range 0xe000 0xffff);
+        map Uchar.of_int (int_range 0x10000 0x10ffff);
+      ])
+
+let utf8_string n =
+  QCheck.Gen.(
+    map
+      (fun us ->
+        let b = Buffer.create 16 in
+        List.iter (Buffer.add_utf_8_uchar b) us;
+        Buffer.contents b)
+      (list_size n uchar))
+
+let key = utf8_string (QCheck.Gen.int_range 0 4)
 
 let leaf =
   QCheck.Gen.(
@@ -213,8 +276,9 @@ let leaf =
         map (fun b -> `Bool b) bool;
         map (fun i -> `Int i) int;
         map (fun f -> `Float f) finite_float;
-        map (fun s -> `String s) (string_size ~gen:printable (int_range 0 8));
+        map (fun s -> `String s) (utf8_string (int_range 0 8));
         map (fun s -> `Intlit ("1" ^ s)) (string_size ~gen:numeral (return 25));
+        map (fun s -> `Intlit ("-1" ^ s)) (string_size ~gen:numeral (return 25));
       ])
 
 let rec tree depth : Yojson.Safe.t QCheck.Gen.t =
@@ -373,6 +437,38 @@ let prop_remove_at_noop =
                (Canon.remove_at [ Canon.Key "\000absent"; Each; Key "x" ] v))
         y)
 
+(* A document with a duplicated key buried under random lists and objects. *)
+let arb_nested_dup =
+  let open QCheck.Gen in
+  let rec wrap depth inner =
+    if depth <= 0 then return inner
+    else
+      let* sibling = tree 1 in
+      let* k = key in
+      let* wrapped =
+        oneof
+          [
+            return (`List [ sibling; inner; sibling ]);
+            (if String.equal k "dup" then return (`List [ inner ])
+             else return (`Assoc [ (k, inner); ("dup-sibling", sibling) ]));
+          ]
+      in
+      wrap (depth - 1) wrapped
+  in
+  QCheck.make
+    ~print:(fun (k, y) -> Printf.sprintf "%S in %s" k (Yojson.Safe.to_string y))
+    (let* k = key in
+     let* depth = int_range 0 4 in
+     let* doc = wrap depth (`Assoc [ (k, `Int 1); (k, `Int 2) ]) in
+     return (k, doc))
+
+let prop_nested_duplicate =
+  QCheck.Test.make ~name:"a nested duplicate key is rejected" ~count:500
+    arb_nested_dup (fun (k, y) ->
+      match Canon.of_string (Yojson.Safe.to_string y) with
+      | Error (Canon.Duplicate_key k') -> String.equal k k'
+      | Error (Syntax _ | Non_finite_float) | Ok _ -> false)
+
 let () =
   Alcotest.run "canon"
     [
@@ -383,6 +479,11 @@ let () =
           Alcotest.test_case "duplicate keys" `Quick test_duplicates;
           Alcotest.test_case "non-finite and syntax" `Quick test_non_finite;
           Alcotest.test_case "big int" `Quick test_big_int;
+          Alcotest.test_case "integral floats outside int" `Quick
+            test_integral_floats_outside_int;
+          Alcotest.test_case "comments and 1e400 pinned" `Quick
+            test_extensions_pinned;
+          Alcotest.test_case "member readers" `Quick test_member_readers;
           Alcotest.test_case "digest" `Quick test_digest;
           Alcotest.test_case "float printing" `Quick test_to_string_floats;
           Alcotest.test_case "readers" `Quick test_readers;
@@ -403,5 +504,6 @@ let () =
             prop_remove_existing;
             prop_remove_at_valid;
             prop_remove_at_noop;
+            prop_nested_duplicate;
           ] );
     ]

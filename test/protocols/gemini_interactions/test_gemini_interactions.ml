@@ -102,8 +102,8 @@ let test_not_object () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected Malformed"
 
-(* A second turn, shaped after the Interactions input history. No such
-   fixture was captured, so this shape is an assumption. *)
+(* Hand-written second turn with two calls, for matching by call id. The
+   captured single-call turn 2 is the [flash_turn2] fixture below. *)
 let turn2 ~id1 ~id2 ~sig1 ~sig2 ~swap =
   let r1, r2 = if swap then (id2, id1) else (id1, id2) in
   Printf.sprintf
@@ -171,6 +171,71 @@ let prop_ids =
            (json
               (turn2 ~id1:("call_" ^ a) ~id2:("call_" ^ b) ~sig1:s1 ~sig2:s2
                  ~swap:false))))
+
+(* Captured fixtures: a turn-2 request and a text-only stream *)
+
+let turn2_request =
+  json (fixture ~protocol:"gemini_interactions" "flash_turn2" "request.json")
+
+let test_captured_tool_results () =
+  match G.tool_results turn2_request with
+  | [ r ] ->
+      Alcotest.(check int) "call index" 0 r.call_index;
+      Alcotest.(check string) "content" "18 degrees Celsius, cloudy" r.content;
+      Alcotest.(check bool) "not error" false r.is_error
+  | [] | _ :: _ :: _ -> Alcotest.fail "expected one result"
+
+let test_text_parts_concatenated () =
+  let req =
+    json
+      {|{"input":[
+          {"type":"function_call","id":"c","name":"f","arguments":{}},
+          {"type":"function_result","call_id":"c","name":"f","result":[
+            {"type":"text","text":"a, "},{"type":"image","data":"x"},{"type":"text","text":"b"}]}]}|}
+  in
+  match G.tool_results req with
+  | [ r ] -> Alcotest.(check string) "content" "a, b" r.content
+  | [] | _ :: _ :: _ -> Alcotest.fail "expected one result"
+
+let text_stream_raw =
+  fixture ~protocol:"gemini_interactions" "flash_text_stream" "response.raw"
+
+let test_text_stream_summary () =
+  let s = sse_summary text_stream_raw in
+  Alcotest.(check bool) "text non-empty" true (String.length s.text > 0);
+  Alcotest.(check (option string)) "stop" (Some "completed") s.stop_reason;
+  Alcotest.(check (option string)) "error" None s.error;
+  Alcotest.(check int) "no calls" 0 (List.length s.tool_calls);
+  let by_bytes =
+    ok_exn
+      (G.summarise (Protocol.Sse (sse_items (single_bytes text_stream_raw))))
+  in
+  Alcotest.check summary_t "split invariance" s by_bytes
+
+(* Rename the call id and both signatures of the captured turn 2. *)
+let prop_captured_ids =
+  let raw =
+    fixture ~protocol:"gemini_interactions" "flash_turn2" "request.json"
+  in
+  let thought_sig =
+    str "signature" (List.nth (list_exn (get "input" turn2_request)) 1)
+  in
+  let call_sig =
+    str "signature" (List.nth (list_exn (get "input" turn2_request)) 2)
+  in
+  let replace_all a b text =
+    Re.replace_string (Re.compile (Re.str a)) ~by:b text
+  in
+  QCheck.Test.make ~name:"captured turn 2: renaming ids keeps the key"
+    ~count:100
+    QCheck.(triple id_gen id_gen id_gen)
+    (fun (a, s1, s2) ->
+      let renamed =
+        raw
+        |> replace_all "call_343217" ("call_" ^ a)
+        |> replace_all thought_sig s1 |> replace_all call_sig s2
+      in
+      Canon.equal (canonical turn2_request) (canonical (json renamed)))
 
 (* Hand-written streams *)
 
@@ -320,15 +385,21 @@ let () =
           Alcotest.test_case "result matching kept" `Quick
             test_matching_survives_in_key;
           QCheck_alcotest.to_alcotest prop_ids;
+          QCheck_alcotest.to_alcotest prop_captured_ids;
         ] );
       ( "tool_results",
         [
           Alcotest.test_case "turn 2" `Quick test_tool_results;
           Alcotest.test_case "swapped" `Quick test_tool_results_swapped;
           Alcotest.test_case "none" `Quick test_tool_results_none;
+          Alcotest.test_case "captured turn 2" `Quick test_captured_tool_results;
+          Alcotest.test_case "text parts concatenated" `Quick
+            test_text_parts_concatenated;
         ] );
       ( "streams",
         [
+          Alcotest.test_case "captured text stream" `Quick
+            test_text_stream_summary;
           Alcotest.test_case "text" `Quick test_text;
           Alcotest.test_case "keep-alive comments" `Quick test_keepalive_comment;
           Alcotest.test_case "error frame" `Quick test_error_frame;
