@@ -319,7 +319,10 @@ let unknown_version ~connected () =
       (C.raw_request c "tools/list" (meta_of "1999-01-01"))
   in
   Alcotest.(check int) "UnsupportedProtocolVersionError" (-32022) e.code;
-  Alcotest.(check (list string)) "supported" [ "2026-07-28" ] (supported e);
+  Alcotest.(check (list string))
+    "every revision supported"
+    [ "2026-07-28"; "2025-11-25"; "2025-06-18"; "2025-03-26" ]
+    (supported e);
   Alcotest.(check (option string))
     "requested" (Some "1999-01-01")
     (Option.bind e.data (Canon.str_member "requested"))
