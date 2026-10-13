@@ -91,9 +91,13 @@ One binary, one process. Pure logic and input and output live in separate librar
 | `Ledger` | Spend per provider against caps. Shared, guarded by an Eio mutex. |
 | `Executor` | Expands experiments, schedules runs with a concurrency limit, one Eio switch per run so a failing run is torn down alone. |
 
+### `bactrian.app`
+
+One module per command (`Record_command`, `Replay_command`, `Run_command`, `Check_command`, `Compare_command`, `Plan_command`, `Report_command`, `Doctor_command`). Each takes a typed `request` record and returns a typed result or a `Command_error.t` that carries its exit status, and the commands that have a `--json` output also have the `to_json` that prints it. A command that reports while it works takes an `~on_progress` callback (`Progress.t`: a warning, or the ID of the experiment that has started) and prints nothing itself. `Single_run` is what `record` and `replay` share, and `Comparison` what `compare` and `report` share.
+
 ### `bin/`
 
-`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check`, `doctor` and `mcp-shim`. `ca` and `serve-mcp` are planned. The MCP server maps one-to-one onto the command line.
+`Cli` (cmdliner) with `record`, `replay`, `run`, `compare`, `plan`, `report`, `check`, `doctor` and `mcp-shim`. It parses arguments into the requests of `bactrian.app`, renders text and colour, prints progress and maps results to exit statuses. `ca` and `serve-mcp` are planned. The MCP server maps one-to-one onto the command line.
 
 Every library module has an interface file (`.mli`). No source file is over 1000 lines.
 
