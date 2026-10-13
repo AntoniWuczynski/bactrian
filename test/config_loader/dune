@@ -1,0 +1,6 @@
+(test
+ (name test_config_loader)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime eio_main alcotest)
+ (flags
+  (:standard -w -70)))
