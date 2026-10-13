@@ -1,5 +1,14 @@
-"""Toy bactrian agent (design §5.1, command mode): one JSON object per line on
-stdin and stdout, model calls through OPENAI_BASE_URL with a get_weather tool.
+"""Toy bactrian agent (design §5.1): model calls through OPENAI_BASE_URL with a
+get_weather tool.
+
+Command mode (the default): one JSON object per line on stdin and stdout, the
+configuration in the process environment.
+
+HTTP mode (--http PORT, 0 for any free port): a server that prints its port as
+the first line of stdout. Each POST carries one message, the run in the
+X-Bactrian-Run header, and is answered with a JSON array of messages. The
+configuration of a run is the env of its start message, never the process
+environment, so runs in flight at once stay apart.
 
 When AGENT_MCP_COMMAND holds a JSON array (for example
 ["bactrian", "mcp-shim", "weather"]), get_weather runs on that stdio MCP server
@@ -10,6 +19,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Annotated, Literal
 
 from openai import OpenAI
@@ -19,16 +31,11 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 
-MODEL = os.environ.get("AGENT_MODEL", "gpt-6-luna")
 WEATHER_RESULT = "18 degrees Celsius, cloudy"
 MAX_MODEL_CALLS = 5
-SYSTEM_PROMPT = os.environ.get(
-    "AGENT_SYSTEM_PROMPT",
-    "You are a concise assistant. Use the get_weather tool for weather questions.",
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a concise assistant. Use the get_weather tool for weather questions."
 )
-
-MCP_COMMAND = os.environ.get("AGENT_MCP_COMMAND")
-MCP_PROTOCOL = os.environ.get("AGENT_MCP_PROTOCOL", "2026-07-28")
 
 TOOLS: list[ChatCompletionToolParam] = [
     {
@@ -49,6 +56,7 @@ TOOLS: list[ChatCompletionToolParam] = [
 
 class Start(BaseModel):
     type: Literal["start"]
+    env: dict[str, str] | None = None
 
 
 class Turn(BaseModel):
@@ -65,7 +73,10 @@ ToAgent = Annotated[Start | Turn | End, Field(discriminator="type")]
 TO_AGENT: TypeAdapter[Start | Turn | End] = TypeAdapter(ToAgent)
 
 
-def send(message: dict[str, str | int]) -> None:
+Message = dict[str, str | int]
+
+
+def send(message: Message) -> None:
     sys.stdout.write(json.dumps({"v": 1, **message}) + "\n")
     sys.stdout.flush()
 
@@ -97,16 +108,17 @@ class McpClient:
     """A minimal MCP client for a stdio server: one JSON-RPC message per line,
     one request in flight at a time."""
 
-    def __init__(self, argv: list[str]) -> None:
+    def __init__(self, argv: list[str], env: Mapping[str, str], protocol: str) -> None:
+        self.protocol = protocol
         self.process = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=dict(env)
         )
         self.next_id = 0
-        if MCP_PROTOCOL == "2025-11-25":
+        if protocol == "2025-11-25":
             self.request(
                 "initialize",
                 {
-                    "protocolVersion": MCP_PROTOCOL,
+                    "protocolVersion": protocol,
                     "capabilities": {},
                     "clientInfo": {"name": "toy-agent", "version": "0"},
                 },
@@ -121,10 +133,10 @@ class McpClient:
 
     def request(self, method: str, params: dict[str, JsonValue]) -> JsonValue:
         self.next_id += 1
-        if MCP_PROTOCOL != "2025-11-25":
+        if self.protocol != "2025-11-25":
             params = {
                 **params,
-                "_meta": {"io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL},
+                "_meta": {"io.modelcontextprotocol/protocolVersion": self.protocol},
             }
         self.write({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
         if self.process.stdout is None:
@@ -149,72 +161,97 @@ class McpClient:
         self.process.wait(timeout=10)
 
 
-mcp: McpClient | None = None
+class Session:
+    """One conversation. [env] is the whole configuration: the process
+    environment in command mode, the start message's env in HTTP mode."""
 
-
-def weather(name: str, arguments_json: str) -> str:
-    global mcp
-    if MCP_COMMAND is None:
-        return WEATHER_RESULT
-    if mcp is None:
-        mcp = McpClient(TypeAdapter(list[str]).validate_json(MCP_COMMAND))
-    return mcp.call_tool(name, Arguments.validate_json(arguments_json))
-
-
-client = OpenAI(max_retries=0)
-history: list[ChatCompletionMessageParam] = [
-    {
-        "role": "system",
-        "content": SYSTEM_PROMPT,
-    }
-]
-
-
-def answer(content: str) -> str:
-    history.append({"role": "user", "content": content})
-    for _ in range(MAX_MODEL_CALLS):
-        completion = client.chat.completions.create(
-            model=MODEL,
-            messages=history,
-            tools=TOOLS,
-            reasoning_effort="none",
+    def __init__(self, env: Mapping[str, str]) -> None:
+        self.env = env
+        self.model = env.get("AGENT_MODEL", "gpt-6-luna")
+        self.mcp_command = env.get("AGENT_MCP_COMMAND")
+        self.mcp_protocol = env.get("AGENT_MCP_PROTOCOL", "2026-07-28")
+        self.mcp: McpClient | None = None
+        self.client = OpenAI(
+            max_retries=0,
+            api_key=env.get("OPENAI_API_KEY"),
+            base_url=env.get("OPENAI_BASE_URL"),
         )
-        if not completion.choices:
-            raise RuntimeError("model returned no choices")
-        message = completion.choices[0].message
-        tool_calls = message.tool_calls or []
-        if not tool_calls:
-            history.append({"role": "assistant", "content": message.content or ""})
-            return message.content or ""
-        history.append(
+        self.history: list[ChatCompletionMessageParam] = [
             {
-                "role": "assistant",
-                "content": message.content,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments,
-                        },
-                    }
-                    for call in tool_calls
-                    if call.type == "function"
-                ],
+                "role": "system",
+                "content": env.get("AGENT_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
             }
-        )
-        for call in tool_calls:
-            result = (
-                weather(call.function.name, call.function.arguments)
-                if call.type == "function" and call.function.name == "get_weather"
-                else "unknown tool"
+        ]
+
+    def weather(self, name: str, arguments_json: str) -> str:
+        if self.mcp_command is None:
+            return WEATHER_RESULT
+        if self.mcp is None:
+            # The shim finds bactrian through BACTRIAN_MCP_URL, which is in the
+            # run's env and not necessarily in this process's.
+            self.mcp = McpClient(
+                TypeAdapter(list[str]).validate_json(self.mcp_command),
+                {**os.environ, **self.env},
+                self.mcp_protocol,
             )
-            history.append({"role": "tool", "tool_call_id": call.id, "content": result})
-    raise RuntimeError(f"no final answer after {MAX_MODEL_CALLS} model calls")
+        return self.mcp.call_tool(name, Arguments.validate_json(arguments_json))
+
+    def answer(self, content: str) -> str:
+        self.history.append({"role": "user", "content": content})
+        for _ in range(MAX_MODEL_CALLS):
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=self.history,
+                tools=TOOLS,
+                reasoning_effort="none",
+            )
+            if not completion.choices:
+                raise RuntimeError("model returned no choices")
+            message = completion.choices[0].message
+            tool_calls = message.tool_calls or []
+            if not tool_calls:
+                self.history.append({"role": "assistant", "content": message.content or ""})
+                return message.content or ""
+            self.history.append(
+                {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for call in tool_calls
+                        if call.type == "function"
+                    ],
+                }
+            )
+            for call in tool_calls:
+                result = (
+                    self.weather(call.function.name, call.function.arguments)
+                    if call.type == "function" and call.function.name == "get_weather"
+                    else "unknown tool"
+                )
+                self.history.append({"role": "tool", "tool_call_id": call.id, "content": result})
+        raise RuntimeError(f"no final answer after {MAX_MODEL_CALLS} model calls")
+
+    def reply_to(self, turn: Turn) -> Message:
+        try:
+            return {"type": "reply", "turn": turn.turn, "content": self.answer(turn.content)}
+        except Exception as error:  # report any model failure to bactrian as a turn error
+            return {"type": "error", "turn": turn.turn, "message": str(error)}
+
+    def close(self) -> None:
+        if self.mcp is not None:
+            self.mcp.close()
 
 
 def main() -> int:
+    session = Session(os.environ)
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -224,17 +261,62 @@ def main() -> int:
             sys.stderr.write(f"unparseable message: {line}")
             return 1
         if isinstance(message, End):
-            if mcp is not None:
-                mcp.close()
+            session.close()
             return 0
         if isinstance(message, Start):
             continue
-        try:
-            send({"type": "reply", "turn": message.turn, "content": answer(message.content)})
-        except Exception as error:  # report any model failure to bactrian as a turn error
-            send({"type": "error", "turn": message.turn, "message": str(error)})
+        send(session.reply_to(message))
+    return 0
+
+
+sessions: dict[str, Session] = {}
+sessions_lock = threading.Lock()
+
+
+def handle_http(run_id: str, body: bytes) -> tuple[int, list[Message]]:
+    """The status and the messages for one POST."""
+    try:
+        message = TO_AGENT.validate_json(body)
+    except ValidationError:
+        return 400, []
+    with sessions_lock:
+        if isinstance(message, Start):
+            sessions[run_id] = Session(message.env or {})
+            return 200, []
+        session = sessions.get(run_id)
+        if session is None:
+            return 404, []
+        if isinstance(message, End):
+            del sessions[run_id]
+    if isinstance(message, End):
+        session.close()
+        return 200, []
+    return 200, [session.reply_to(message)]
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        status, messages = handle_http(self.headers.get("X-Bactrian-Run", ""), body)
+        payload = json.dumps([{"v": 1, **m} for m in messages]).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        sys.stderr.write(f"{self.address_string()} {format % args}\n")
+
+
+def serve(port: int) -> int:
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(server.server_address[1], flush=True)
+    server.serve_forever()
     return 0
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--http":
+        sys.exit(serve(int(sys.argv[2])))
     sys.exit(main())
