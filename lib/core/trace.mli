@@ -18,6 +18,14 @@ type usage = {
       (** ["gen_ai.usage.cache_write.input_tokens"] *)
   reasoning_tokens : int option;  (** ["gen_ai.usage.reasoning.output_tokens"] *)
 }
+(** Token counts of one model call, with the same meaning for every provider.
+    [input_tokens] is all prompt tokens, including cache reads and cache writes.
+    [cached_input_tokens] and [cache_write_tokens] are subsets of it, so
+    [cached + cache_write <= input_tokens]. [output_tokens] includes reasoning
+    tokens, and [reasoning_tokens] is a subset of it. Cost is therefore
+    [(input - cached - cache_write)] at the input rate, plus [cached] at the
+    cached rate, [cache_write] at the write rate and [output] at the output
+    rate. *)
 
 type join =
   | Joined

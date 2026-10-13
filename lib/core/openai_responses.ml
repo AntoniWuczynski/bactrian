@@ -7,35 +7,18 @@ let matches ~meth ~path =
 
 let ignored_fields =
   [
-    ("store", "server-side retention flag, does not change the completion");
     ("metadata", "free-form labels attached to the stored response");
     ("user", "deprecated end-user identifier, differs per run");
     ("safety_identifier", "end-user identifier for abuse detection");
     ("prompt_cache_key", "cache routing hint, affects cost only");
     ("prompt_cache_options", "cache routing hint, affects cost only");
     ("service_tier", "processing tier, affects latency and price only");
-    ("background", "delivery mode, does not change the completion");
-    ("include", "extra output fields, does not change the model input");
     ("truncation", "overflow handling, does not change a fitting request");
     ( "stream_options.include_obfuscation",
       "random padding on stream deltas, noise" );
   ]
 
 let ( let* ) = Result.bind
-let malformed path reason = Error (Malformed { path; reason })
-
-let canon_error path e =
-  Malformed { path; reason = Format.asprintf "%a" Canon.pp_error e }
-
-let traverse f l =
-  let rec go acc = function
-    | [] -> Ok (List.rev acc)
-    | x :: rest ->
-        let* y = f x in
-        go (y :: acc) rest
-  in
-  go [] l
-
 let is_null v = Canon.equal v Canon.null
 let is_object v = Option.is_some (Canon.to_fields_opt v)
 
@@ -79,72 +62,75 @@ let nested_int ~path obj key sub =
 
 (* Request side *)
 
-let ordinal table id =
-  match List.assoc_opt id table with
-  | Some n -> (n, table)
-  | None ->
-      let n = List.length table in
-      (n, (id, n) :: table)
+(* Every call type the Responses API has ([function_call], [custom_tool_call],
+   [computer_call], [shell_call], …) pairs with a [<type>_output] item through
+   [call_id], so items are classified by suffix rather than by a fixed list. *)
+let step_of_item item =
+  let call_id () = Option.value (Canon.str_member "call_id" item) ~default:"" in
+  match Canon.str_member "type" item with
+  | Some t when String.ends_with ~suffix:"_call_output" t ->
+      Some (Answered (call_id ()))
+  | Some t
+    when String.ends_with ~suffix:"_call" t
+         && Option.is_some (Canon.member "call_id" item) ->
+      Some (Called (call_id ()))
+  | Some _ | None -> None
 
-(* Drops the server-generated item [id] and replaces [call_id] by the order in
-   which call IDs first appear, so renaming IDs keeps the pairing of calls and
-   outputs but not the names. An [item_reference] is only its [id], so that
-   stays. *)
-let normalise_item table item =
+let items req = Option.value (Canon.list_member "input" req) ~default:[]
+
+(* Drops the server-generated item [id] and replaces [call_id] by the position
+   of the call it names, so renaming IDs keeps the pairing of calls and outputs
+   but not the names. An [item_reference] is only its [id], so that stays. The
+   encrypted_content of a reasoning item is an opaque blob that differs per run
+   for the same reasoning, so it goes too. *)
+let normalise_item links item =
   let item =
     if has_type "item_reference" item then item
     else Canon.remove_member "id" item
   in
-  match Canon.str_member "call_id" item with
-  | Some id ->
-      let n, table = ordinal table id in
-      (table, Canon.set_member "call_id" (Canon.int n) item)
-  | None -> (table, item)
+  let item =
+    if has_type "reasoning" item then
+      Canon.remove_member "encrypted_content" item
+    else item
+  in
+  match step_of_item item with
+  | None -> (links, item)
+  | Some _ -> (
+      let links, link = pop_link links in
+      match Canon.member "call_id" item with
+      | None -> (links, item)
+      | Some _ ->
+          let id = Option.fold link ~none:Canon.null ~some:Canon.int in
+          (links, Canon.set_member "call_id" id item))
 
 let normalise_input req =
   match Canon.list_member "input" req with
   | Some items ->
-      let _, items' = List.fold_left_map normalise_item [] items in
+      let links = link_history (List.filter_map step_of_item items) in
+      let _, items' = List.fold_left_map normalise_item links items in
       Canon.set_member "input" (Canon.list items') req
   | None -> req
 
 let canonical_request ~path:_ req =
-  if is_object req then
-    Ok
-      (normalise_input
-         (List.fold_left
-            (fun v (p, _) -> Canon.remove_at (Canon.path_of_string p) v)
-            req ignored_fields))
+  if is_object req then Ok (normalise_input (remove_ignored ignored_fields req))
   else malformed "$" "request is not a JSON object"
 
 let streaming ~path:_ ~query:_ req =
   Option.value (Canon.bool_member "stream" req) ~default:false
 
 let tool_results req =
-  let items = Option.value (Canon.list_member "input" req) ~default:[] in
-  let calls =
-    List.filter_map
-      (fun it ->
-        if has_type "function_call" it then Canon.str_member "call_id" it
-        else None)
-      items
-    |> List.mapi (fun i id -> (id, i))
-  in
-  List.filter_map
-    (fun it ->
-      if has_type "function_call_output" it then
-        let content =
-          match Canon.member "output" it with
-          | None -> ""
-          | Some o ->
-              Option.value (Canon.to_string_opt o) ~default:(Canon.to_string o)
-        in
-        Option.bind (Canon.str_member "call_id" it) (fun id ->
-            Option.map
-              (fun call_index -> { call_index; content; is_error = false })
-              (List.assoc_opt id calls))
-      else None)
-    items
+  items req
+  |> List.filter_map (fun it ->
+      Option.map (fun step -> (step, it)) (step_of_item it))
+  |> linked_results
+  |> List.map (fun (it, call_index) ->
+      let content =
+        match Canon.member "output" it with
+        | None -> ""
+        | Some o ->
+            Option.value (Canon.to_string_opt o) ~default:(Canon.to_string o)
+      in
+      { call_index; content; is_error = false })
 
 (* Response side *)
 

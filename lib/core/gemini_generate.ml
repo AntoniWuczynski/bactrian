@@ -26,8 +26,7 @@ let parse_path path =
   | _ -> None
 
 let matches ~meth ~path =
-  String.equal (String.uppercase_ascii meth) "POST"
-  && Option.is_some (parse_path path)
+  String.equal meth "POST" && Option.is_some (parse_path path)
 
 let streaming ~path ~query:_ _ =
   match parse_path path with
@@ -36,63 +35,19 @@ let streaming ~path ~query:_ _ =
 
 (* Errors and JSON access *)
 
-let malformed path reason = Error (Malformed { path; reason })
-
-let canon path r =
-  Result.map_error
-    (fun e ->
-      Malformed { path; reason = Format.asprintf "%a" Canon.pp_error e })
-    r
-
+let canon path r = Result.map_error (canon_error path) r
 let mk_obj path fields = canon path (Canon.obj fields)
-
-let map_r f xs =
-  let* rev =
-    List.fold_left
-      (fun acc x ->
-        let* ys = acc in
-        let* y = f x in
-        Ok (y :: ys))
-      (Ok []) xs
-  in
-  Ok (List.rev rev)
 
 (* Tool calls and results in the request history *)
 
-type history = { n_calls : int; ids : (string * int) list; n_responses : int }
-
-type role =
-  | Call of int
-  | Response of { index : int option; response : Canon.t }
-  | Other
-
-let start = { n_calls = 0; ids = []; n_responses = 0 }
-let id_of v = Canon.str_member "id" v
-
-(* Classify one part. A response is linked to its call by id, or by order when
-   Gemini sent no ids. *)
-let step h part =
+let step_of_part part =
+  let id v = Option.value (Canon.str_member "id" v) ~default:"" in
   match
     (Canon.member "functionCall" part, Canon.member "functionResponse" part)
   with
-  | Some fc, _ ->
-      let ids =
-        match id_of fc with
-        | Some id -> (id, h.n_calls) :: h.ids
-        | None -> h.ids
-      in
-      ({ h with n_calls = h.n_calls + 1; ids }, Call h.n_calls)
-  | None, Some response ->
-      let index =
-        match id_of response with
-        | Some id ->
-            List.find_map
-              (fun (k, i) -> if String.equal k id then Some i else None)
-              h.ids
-        | None -> Some h.n_responses
-      in
-      ({ h with n_responses = h.n_responses + 1 }, Response { index; response })
-  | None, None -> (h, Other)
+  | Some fc, _ -> Some (Called (id fc))
+  | None, Some response -> Some (Answered (id response))
+  | None, None -> None
 
 let contents req = Option.value ~default:[] (Canon.list_member "contents" req)
 
@@ -113,31 +68,25 @@ let result_is_error response =
   | Some r -> Option.is_some (Canon.member "error" r)
 
 let tool_results req =
-  let _, rev =
-    List.fold_left
-      (fun (h, acc) part ->
-        let h, role = step h part in
-        match role with
-        | Response { index = Some call_index; response } ->
-            ( h,
-              {
-                call_index;
-                content = result_content response;
-                is_error = result_is_error response;
-              }
-              :: acc )
-        | Response { index = None; response = _ } | Call _ | Other -> (h, acc))
-      (start, [])
-      (List.concat_map parts_of (contents req))
-  in
-  List.rev rev
+  List.concat_map parts_of (contents req)
+  |> List.filter_map (fun part ->
+      Option.map (fun step -> (step, part)) (step_of_part part))
+  |> linked_results
+  |> List.filter_map (fun (part, call_index) ->
+      Option.map
+        (fun response ->
+          {
+            call_index;
+            content = result_content response;
+            is_error = result_is_error response;
+          })
+        (Canon.member "functionResponse" part))
 
 (* Canonical request *)
 
 let ignored_fields =
   [
     ("labels", "billing metadata, no effect on output");
-    ("store", "server-side logging flag, no effect on output");
     ("serviceTier", "capacity routing, no effect on output");
     ("continuationToken", "server-side continuation state, volatile");
     ( "contents[].parts[].thoughtSignature",
@@ -151,29 +100,40 @@ let replace_id key replacement part =
       Canon.set_member key (Canon.set_member "id" replacement inner) part
   | Some _ | None -> part
 
-let rewrite_part h part =
-  let h, role = step h part in
-  match role with
-  | Other -> (h, part)
-  | Call index -> (h, replace_id "functionCall" (Canon.int index) part)
-  | Response { index; response = _ } ->
-      let replacement =
-        match index with Some i -> Canon.int i | None -> Canon.null
-      in
-      (h, replace_id "functionResponse" replacement part)
+(* Call IDs become the call's position, result IDs the position of the call
+   they answer (null if none), by the shared linking rule. *)
+let rewrite_part links part =
+  match step_of_part part with
+  | None -> (links, part)
+  | Some (Called _) ->
+      let links, link = pop_link links in
+      ( links,
+        replace_id "functionCall"
+          (Option.fold link ~none:Canon.null ~some:Canon.int)
+          part )
+  | Some (Answered _) ->
+      let links, link = pop_link links in
+      ( links,
+        replace_id "functionResponse"
+          (Option.fold link ~none:Canon.null ~some:Canon.int)
+          part )
 
-let rewrite_content h content =
+let rewrite_content links content =
   match Canon.list_member "parts" content with
   | Some parts ->
-      let h, parts = List.fold_left_map rewrite_part h parts in
-      (h, Canon.set_member "parts" (Canon.list parts) content)
-  | None -> (h, content)
+      let links, parts = List.fold_left_map rewrite_part links parts in
+      (links, Canon.set_member "parts" (Canon.list parts) content)
+  | None -> (links, content)
 
 let rewrite_ids body =
   match Canon.list_member "contents" body with
   | None -> body
   | Some cs ->
-      let _, cs = List.fold_left_map rewrite_content start cs in
+      let links =
+        link_history
+          (List.filter_map step_of_part (List.concat_map parts_of cs))
+      in
+      let _, cs = List.fold_left_map rewrite_content links cs in
       Canon.set_member "contents" (Canon.list cs) body
 
 let canonical_request ~path body =
@@ -182,11 +142,7 @@ let canonical_request ~path body =
     | Some mv -> Ok mv
     | None -> malformed path "not a Gemini generateContent path"
   in
-  let body =
-    List.fold_left
-      (fun v (p, _) -> Canon.remove_at (Canon.path_of_string p) v)
-      body ignored_fields
-  in
+  let body = remove_ignored ignored_fields body in
   if Option.is_none (Canon.to_fields_opt body) then
     malformed "$" "request body is not an object"
   else
@@ -221,7 +177,8 @@ let usage_of um =
   let count k = Option.value ~default:0 (int k) in
   let thoughts = int "thoughtsTokenCount" in
   {
-    Trace.input_tokens = count "promptTokenCount";
+    Trace.input_tokens =
+      count "promptTokenCount" + count "toolUsePromptTokenCount";
     output_tokens = count "candidatesTokenCount" + count "thoughtsTokenCount";
     cached_input_tokens = int "cachedContentTokenCount";
     cache_write_tokens = None;
@@ -324,7 +281,7 @@ let chunks_of_body = function
           (function Sse.Event e -> Some e | Sse.Comment _ -> None)
           items
       in
-      map_r
+      traverse
         (fun (e : Sse.event) -> canon "sse.data" (Canon.of_string e.data))
         events
 
@@ -337,6 +294,14 @@ let summarise body =
         add_chunk a c)
       (Ok empty) chunks
   in
+  let streamed =
+    match body with Json _ -> false | Sse _ | Json_stream _ -> true
+  in
+  let err =
+    match (acc.err, acc.stop) with
+    | None, None when streamed -> Some "stream ended before a finishReason"
+    | _ -> acc.err
+  in
   Ok
     {
       model = acc.model;
@@ -344,5 +309,5 @@ let summarise body =
       tool_calls = List.rev acc.calls;
       usage = acc.usage;
       stop_reason = acc.stop;
-      error = acc.err;
+      error = err;
     }

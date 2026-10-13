@@ -79,17 +79,7 @@ let test_stream_matches_nonstream () =
 
 (* canonical_request *)
 
-let obj fs = Result.get_ok (Canon.obj fs)
-
-let rec set segs value v =
-  match segs with
-  | [] -> v
-  | [ k ] -> Canon.set_member k value v
-  | k :: rest ->
-      let child = Option.value (Canon.member k v) ~default:(obj []) in
-      Canon.set_member k (set rest value child) v
-
-let with_path p value req = set (String.split_on_char '.' p) value req
+let with_path = set_path
 
 let test_ignored_removed () =
   let req = request "luna_stream" in
@@ -115,24 +105,19 @@ let test_kept_fields () =
       "conversation";
       "stream_options.include_usage";
       "model";
+      "store";
+      "background";
+      "include";
     ];
+  List.iter
+    (fun k ->
+      Alcotest.(check bool)
+        (k ^ " not ignored") false
+        (List.mem_assoc k A.ignored_fields))
+    [ "store"; "background"; "include" ];
   Alcotest.(check bool)
     "model present" true
     (Option.is_some (Canon.member "model" (canonical req)))
-
-let replace_all ~sub ~by s =
-  let n = String.length sub in
-  let b = Buffer.create (String.length s) in
-  let i = ref 0 in
-  while !i < String.length s do
-    if !i + n <= String.length s && String.equal (String.sub s !i n) sub then (
-      Buffer.add_string b by;
-      i := !i + n)
-    else (
-      Buffer.add_char b s.[!i];
-      incr i)
-  done;
-  Buffer.contents b
 
 let id_gen =
   QCheck.Gen.(
@@ -220,6 +205,67 @@ let test_tool_results_none () =
   Alcotest.(check int)
     "none" 0
     (List.length (A.tool_results (request "luna_stream")))
+
+let call id =
+  Printf.sprintf
+    {|{"type":"function_call","call_id":%S,"name":"f","arguments":"{}"}|} id
+
+let output id text =
+  Printf.sprintf {|{"type":"function_call_output","call_id":%S,"output":%S}|} id
+    text
+
+let input_of items =
+  json (Printf.sprintf {|{"model":"m","input":[%s]}|} (String.concat "," items))
+
+let indices req =
+  List.map (fun (r : Protocol.tool_result) -> r.call_index) (A.tool_results req)
+
+let canonical_output_ids req =
+  list_exn (get "input" (canonical req))
+  |> List.filter_map (fun it ->
+      if String.equal (str "type" it) "function_call_output" then
+        Some (get "call_id" it)
+      else None)
+
+let test_linking () =
+  let reuse =
+    input_of [ call "x"; output "x" "r1"; call "x"; output "x" "r2" ]
+  in
+  Alcotest.(check (list int)) "reuse across turns" [ 0; 1 ] (indices reuse);
+  Alcotest.(check (list canon_t))
+    "canonical agrees"
+    [ Canon.int 0; Canon.int 1 ]
+    (canonical_output_ids reuse);
+  let parallel = input_of [ call ""; call ""; output "" "a"; output "" "b" ] in
+  Alcotest.(check (list int)) "equal ids in order" [ 0; 1 ] (indices parallel);
+  let ghost = input_of [ output "ghost" "r" ] in
+  Alcotest.(check (list int)) "unlinked left out" [] (indices ghost);
+  Alcotest.(check (list canon_t))
+    "unlinked is null in the key" [ Canon.null ]
+    (canonical_output_ids ghost)
+
+let test_encrypted_content () =
+  let req blob =
+    json
+      (Printf.sprintf
+         {|{"model":"m","input":[
+            {"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":%S},
+            {"type":"message","role":"user","content":"hi","encrypted_content":"keep"}]}|}
+         blob)
+  in
+  Alcotest.check canon_t "blob of a reasoning item does not matter"
+    (canonical (req "A"))
+    (canonical (req "B"));
+  Alcotest.(check bool)
+    "other items keep the field" true
+    (contains ~sub:{|"encrypted_content":"keep"|}
+       (Canon.to_string (canonical (req "A"))))
+
+let test_usage_and_truncation () =
+  List.iter
+    (fun n -> check_usage_relations n (summarise_ok (body_of n)))
+    fixtures;
+  check_truncation "luna_stream" A.summarise (body_of "luna_stream")
 
 (* Hand-written stream edge cases *)
 
@@ -347,8 +393,26 @@ let test_matches () =
     "get" false
     (A.matches ~meth:"GET" ~path:"/v1/responses");
   Alcotest.(check bool)
+    "lower-case method" false
+    (A.matches ~meth:"post" ~path:"/v1/responses");
+  Alcotest.(check bool)
     "other" false
     (A.matches ~meth:"POST" ~path:"/v1/chat/completions")
+
+let test_custom_call_ids () =
+  let req id =
+    json
+      (Printf.sprintf
+         {|{"model":"m","input":[{"type":"custom_tool_call","call_id":"%s","name":"t","input":"x"},{"type":"custom_tool_call_output","call_id":"%s","output":"ok"}]}|}
+         id id)
+  in
+  let canon r = ok_exn (A.canonical_request ~path:"/v1/responses" r) in
+  Alcotest.(check bool)
+    "renaming a custom tool call id keeps the key" true
+    (Canon.equal (canon (req "call_aaa")) (canon (req "call_bbb")));
+  Alcotest.(check int)
+    "its output links to the call" 1
+    (List.length (A.tool_results (req "call_aaa")))
 
 let () =
   let c n f = Alcotest.test_case n `Quick f in
@@ -367,15 +431,19 @@ let () =
           c "kept fields" test_kept_fields;
           QCheck_alcotest.to_alcotest prop_ids;
           c "pairing" test_pairing;
+          c "custom tool call ids" test_custom_call_ids;
           c "item_reference kept" test_item_reference_kept;
           c "stream_options pruned" test_stream_options_pruned;
           c "non-object" test_non_object;
+          c "encrypted_content" test_encrypted_content;
         ] );
       ( "tool_results",
         [
           c "turn2" test_tool_results;
           c "order" test_tool_results_order;
           c "none" test_tool_results_none;
+          c "linking" test_linking;
+          c "usage and truncation" test_usage_and_truncation;
         ] );
       ( "edge cases",
         [

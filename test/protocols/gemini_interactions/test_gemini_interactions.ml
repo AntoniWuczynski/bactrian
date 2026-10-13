@@ -51,7 +51,7 @@ let test_fixture_summary () =
   match s.usage with
   | Some u ->
       Alcotest.(check int) "input" 69 u.input_tokens;
-      Alcotest.(check int) "output" 16 u.output_tokens;
+      Alcotest.(check int) "output includes thoughts" 58 u.output_tokens;
       Alcotest.(check (option int)) "cached" (Some 0) u.cached_input_tokens;
       Alcotest.(check (option int)) "reasoning" (Some 42) u.reasoning_tokens
   | None -> Alcotest.fail "no usage"
@@ -147,15 +147,8 @@ let test_matching_survives_in_key () =
 
 let test_ids_absent_from_key () =
   let s = Canon.to_string (canonical (t2 ())) in
-  let has sub =
-    let n = String.length sub and m = String.length s in
-    let rec go i =
-      i + n <= m && (String.equal (String.sub s i n) sub || go (i + 1))
-    in
-    go 0
-  in
-  Alcotest.(check bool) "call id" false (has "call_1");
-  Alcotest.(check bool) "signature" false (has "AAA")
+  Alcotest.(check bool) "call id" false (contains ~sub:"call_1" s);
+  Alcotest.(check bool) "signature" false (contains ~sub:"AAA" s)
 
 let id_gen =
   QCheck.(string_size_of (Gen.int_range 1 12) Gen.(char_range 'a' 'z'))
@@ -203,6 +196,11 @@ let text_stream_raw =
 let test_text_stream_summary () =
   let s = sse_summary text_stream_raw in
   Alcotest.(check bool) "text non-empty" true (String.length s.text > 0);
+  (match s.usage with
+  | Some u ->
+      Alcotest.(check int) "output 7 + thoughts 266" 273 u.output_tokens;
+      Alcotest.(check (option int)) "reasoning" (Some 266) u.reasoning_tokens
+  | None -> Alcotest.fail "no usage");
   Alcotest.(check (option string)) "stop" (Some "completed") s.stop_reason;
   Alcotest.(check (option string)) "error" None s.error;
   Alcotest.(check int) "no calls" 0 (List.length s.tool_calls);
@@ -223,17 +221,15 @@ let prop_captured_ids =
   let call_sig =
     str "signature" (List.nth (list_exn (get "input" turn2_request)) 2)
   in
-  let replace_all a b text =
-    Re.replace_string (Re.compile (Re.str a)) ~by:b text
-  in
   QCheck.Test.make ~name:"captured turn 2: renaming ids keeps the key"
     ~count:100
     QCheck.(triple id_gen id_gen id_gen)
     (fun (a, s1, s2) ->
       let renamed =
         raw
-        |> replace_all "call_343217" ("call_" ^ a)
-        |> replace_all thought_sig s1 |> replace_all call_sig s2
+        |> replace_all ~sub:"call_343217" ~by:("call_" ^ a)
+        |> replace_all ~sub:thought_sig ~by:s1
+        |> replace_all ~sub:call_sig ~by:s2
       in
       Canon.equal (canonical turn2_request) (canonical (json renamed)))
 
@@ -250,6 +246,89 @@ let text_delta t =
     (Printf.sprintf
        {|{"index":0,"delta":{"type":"text","text":%S},"event_type":"step.delta"}|}
        t)
+
+let test_usage_definition () =
+  let s =
+    sse_summary
+      (ev "interaction.completed"
+         {|{"interaction":{"id":"x","status":"completed","model":"m","usage":{"total_input_tokens":10,"total_tool_use_tokens":5,"total_cached_tokens":4,"total_output_tokens":2,"total_thought_tokens":3}},"event_type":"interaction.completed"}|})
+  in
+  match s.usage with
+  | Some u ->
+      Alcotest.(check (list int))
+        "input includes tool use, output includes thoughts" [ 15; 5 ]
+        [ u.input_tokens; u.output_tokens ];
+      check_usage_relations "hand" s
+  | None -> Alcotest.fail "no usage"
+
+let test_fixture_relations_and_truncation () =
+  List.iter
+    (fun (n, r) ->
+      let body = Protocol.Sse (sse_items [ r ]) in
+      check_usage_relations n (ok_exn (G.summarise body));
+      check_truncation n G.summarise body)
+    [ ("flash_stream", raw); ("flash_text_stream", text_stream_raw) ]
+
+let test_hand_truncation () =
+  let s = sse_summary (text_delta "Hi") in
+  Alcotest.(check bool) "no terminal event" true (Option.is_some s.error);
+  Alcotest.(check (option string))
+    "done event completes it" None
+    (sse_summary (text_delta "Hi" ^ ev "done" "[DONE]")).error
+
+let call_item id =
+  Printf.sprintf {|{"type":"function_call","id":%S,"name":"f","arguments":{}}|}
+    id
+
+let result_item id text =
+  Printf.sprintf
+    {|{"type":"function_result","call_id":%S,"name":"f","result":%S}|} id text
+
+let input_of items =
+  json (Printf.sprintf {|{"model":"m","input":[%s]}|} (String.concat "," items))
+
+let indices req =
+  List.map (fun (r : Protocol.tool_result) -> r.call_index) (G.tool_results req)
+
+let canonical_result_ids req =
+  list_exn (get "input" (canonical req))
+  |> List.filter_map (fun it ->
+      if String.equal (str "type" it) "function_result" then
+        Some (get "call_id" it)
+      else None)
+
+let test_linking () =
+  let reuse =
+    input_of
+      [
+        call_item "x"; result_item "x" "r1"; call_item "x"; result_item "x" "r2";
+      ]
+  in
+  Alcotest.(check (list int)) "reuse across turns" [ 0; 1 ] (indices reuse);
+  Alcotest.(check (list canon_t))
+    "canonical agrees"
+    [ Canon.int 0; Canon.int 1 ]
+    (canonical_result_ids reuse);
+  let parallel =
+    input_of
+      [ call_item ""; call_item ""; result_item "" "a"; result_item "" "b" ]
+  in
+  Alcotest.(check (list int)) "equal ids in order" [ 0; 1 ] (indices parallel);
+  let ghost = input_of [ result_item "ghost" "r" ] in
+  Alcotest.(check (list int)) "unlinked left out" [] (indices ghost);
+  Alcotest.(check (list canon_t))
+    "unlinked is null in the key" [ Canon.null ]
+    (canonical_result_ids ghost)
+
+let test_store_kept () =
+  Alcotest.(check bool)
+    "not ignored" false
+    (List.mem_assoc "store" G.ignored_fields);
+  Alcotest.(check bool)
+    "differs" false
+    (Canon.equal
+       (canonical fixture_request)
+       (canonical (with_field "store" (Canon.bool true) fixture_request)))
 
 let test_text () =
   let s =
@@ -381,6 +460,7 @@ let () =
           Alcotest.test_case "model and stream kept" `Quick
             test_model_and_stream_kept;
           Alcotest.test_case "not an object" `Quick test_not_object;
+          Alcotest.test_case "store kept" `Quick test_store_kept;
           Alcotest.test_case "ids absent" `Quick test_ids_absent_from_key;
           Alcotest.test_case "result matching kept" `Quick
             test_matching_survives_in_key;
@@ -392,6 +472,7 @@ let () =
           Alcotest.test_case "turn 2" `Quick test_tool_results;
           Alcotest.test_case "swapped" `Quick test_tool_results_swapped;
           Alcotest.test_case "none" `Quick test_tool_results_none;
+          Alcotest.test_case "linking" `Quick test_linking;
           Alcotest.test_case "captured turn 2" `Quick test_captured_tool_results;
           Alcotest.test_case "text parts concatenated" `Quick
             test_text_parts_concatenated;
@@ -401,6 +482,10 @@ let () =
           Alcotest.test_case "captured text stream" `Quick
             test_text_stream_summary;
           Alcotest.test_case "text" `Quick test_text;
+          Alcotest.test_case "usage definition" `Quick test_usage_definition;
+          Alcotest.test_case "fixture relations and truncation" `Quick
+            test_fixture_relations_and_truncation;
+          Alcotest.test_case "hand truncation" `Quick test_hand_truncation;
           Alcotest.test_case "keep-alive comments" `Quick test_keepalive_comment;
           Alcotest.test_case "error frame" `Quick test_error_frame;
           Alcotest.test_case "failed status" `Quick test_failed_status;

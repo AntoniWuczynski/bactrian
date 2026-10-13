@@ -4,32 +4,6 @@ module P = Bactrian_core.Protocol
 module S = Bactrian_core.Sse
 open Protocol_test_support
 
-module Str_replace = struct
-  let find_from s sub i =
-    let n = String.length sub in
-    let rec go i =
-      if i + n > String.length s then None
-      else if String.equal (String.sub s i n) sub then Some i
-      else go (i + 1)
-    in
-    go i
-
-  let contains ~sub s = Option.is_some (find_from s sub 0)
-
-  let all ~sub ~by s =
-    let b = Buffer.create (String.length s) in
-    let rec go i =
-      match find_from s sub i with
-      | None -> Buffer.add_string b (String.sub s i (String.length s - i))
-      | Some j ->
-          Buffer.add_string b (String.sub s i (j - i));
-          Buffer.add_string b by;
-          go (j + String.length sub)
-    in
-    go 0;
-    Buffer.contents b
-end
-
 let read name file = fixture ~protocol:"anthropic_messages" name file
 
 let fixtures =
@@ -80,6 +54,9 @@ let test_matches () =
         (A.matches ~meth:(str "method" m) ~path:(str "path" m)))
     fixtures;
   Alcotest.(check bool) "get" false (A.matches ~meth:"GET" ~path:"/v1/messages");
+  Alcotest.(check bool)
+    "lower-case method" false
+    (A.matches ~meth:"post" ~path:"/v1/messages");
   Alcotest.(check bool)
     "other" false
     (A.matches ~meth:"POST" ~path:"/v1/chat/completions")
@@ -134,6 +111,29 @@ let test_summaries () =
     "usage" (464, 22)
     ((Option.get t2.usage).input_tokens, (Option.get t2.usage).output_tokens)
 
+let test_usage_definition () =
+  let u =
+    Option.get
+      (ok_exn
+         (A.summarise
+            (P.Json
+               (json
+                  {|{"model":"m","content":[],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":5,"output_tokens":7}}|}))))
+        .usage
+  in
+  Alcotest.(check (list int))
+    "input is the total prompt" [ 18; 7 ]
+    [ u.input_tokens; u.output_tokens ];
+  Alcotest.(check (list (option int)))
+    "subsets" [ Some 3; Some 5 ]
+    [ u.cached_input_tokens; u.cache_write_tokens ]
+
+let test_usage_relations () =
+  List.iter (fun n -> check_usage_relations n (summary n)) fixtures
+
+let test_truncation () =
+  List.iter (fun n -> check_truncation n A.summarise (body n)) streamed
+
 let test_split_invariance () =
   List.iter
     (fun n ->
@@ -167,7 +167,7 @@ let test_cumulative_usage () =
   let s = ok_exn (A.summarise (P.Sse items)) in
   let u = Option.get s.usage in
   Alcotest.(check (list int))
-    "last wins, absent kept" [ 10; 25; 3 ]
+    "input includes cache reads; last output wins" [ 13; 25; 3 ]
     [ u.input_tokens; u.output_tokens; Option.get u.cached_input_tokens ];
   Alcotest.(check (option string)) "stop kept" (Some "end_turn") s.stop_reason
 
@@ -259,39 +259,93 @@ let mutations =
     ("container", {|{"container":"c1",|});
   ]
 
+(* Every block kind that can carry the removed fields. *)
+let rich =
+  json
+    {|{"model":"m","max_tokens":10,
+       "system":[{"type":"text","text":"s"}],
+       "tools":[{"name":"a","input_schema":{"type":"object"}}],
+       "messages":[
+         {"role":"user","content":"hi"},
+         {"role":"assistant","content":[
+           {"type":"thinking","thinking":"t","signature":"SIGA"},
+           {"type":"redacted_thinking","data":"OPAQUE1"},
+           {"type":"text","text":"x"},
+           {"type":"tool_use","id":"t1","name":"a","input":{}}]},
+         {"role":"user","content":[
+           {"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"r"}]}]}]}|}
+
+let typed_paths =
+  [ "messages[].content[].signature"; "messages[].content[].data" ]
+
+let canonical_json v =
+  C.to_string (ok_exn (A.canonical_request ~path:"/v1/messages" v))
+
 let test_ignored () =
   let with_prefix p = p ^ String.sub base 1 (String.length base - 1) in
   List.iter
     (fun (k, p) -> check_str k (canonical base) (canonical (with_prefix p)))
     mutations;
-  let cache =
-    Str_replace.all ~sub:{|"name":"a",|}
-      ~by:{|"name":"a","cache_control":{"type":"ephemeral"},|} base
-  in
-  check_str "cache_control" (canonical base) (canonical cache);
-  let sg = Str_replace.all ~sub:"SIGA" ~by:"SIGB" base in
-  check_str "signature" (canonical base) (canonical sg);
   Alcotest.(check (list string))
-    "table in sync"
-    (List.sort String.compare (List.map fst A.ignored_fields))
+    "table lists exactly what the code removes"
     (List.sort String.compare
-       ("cache_control" :: "messages[].content[].signature"
-      :: List.map fst mutations));
+       ([
+          "cache_control";
+          "system[].cache_control";
+          "tools[].cache_control";
+          "messages[].content[].cache_control";
+          "messages[].content[].content[].cache_control";
+        ]
+       @ typed_paths @ List.map fst mutations))
+    (List.sort String.compare (List.map fst A.ignored_fields));
+  List.iter
+    (fun (p, _) ->
+      if not (List.mem p typed_paths) then
+        check_str ("removed " ^ p) (canonical_json rich)
+          (canonical_json (set_path p (C.string "volatile") rich)))
+    (List.filter
+       (fun (p, _) -> not (List.mem_assoc p mutations))
+       A.ignored_fields);
+  let sg = replace_all ~sub:"SIGA" ~by:"SIGB" base in
+  check_str "signature" (canonical base) (canonical sg);
   let kept =
     canonical
-      (Str_replace.all ~sub:{|"model":"m"|} ~by:{|"model":"m","brand_new":1|}
-         base)
+      (replace_all ~sub:{|"model":"m"|} ~by:{|"model":"m","brand_new":1|} base)
   in
   Alcotest.(check bool)
     "unknown kept" true
-    (Str_replace.contains ~sub:{|"brand_new":1|} kept);
+    (contains ~sub:{|"brand_new":1|} kept);
   let verbatim =
     {|{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"n","input":{"cache_control":1,"id":"keep"}}]}]}|}
   in
   Alcotest.(check bool)
     "tool input untouched" true
-    (Str_replace.contains ~sub:{|"input":{"cache_control":1,"id":"keep"}|}
+    (contains ~sub:{|"input":{"cache_control":1,"id":"keep"}|}
        (canonical verbatim))
+
+let test_opaque_blobs () =
+  (* Opaque per-run blobs of earlier thinking turns, in history only. *)
+  let req data signature =
+    json
+      (Printf.sprintf
+         {|{"messages":[{"role":"assistant","content":[
+            {"type":"thinking","thinking":"t","signature":%S},
+            {"type":"redacted_thinking","data":%S},
+            {"type":"text","text":"x","data":"keep","signature":"keep"},
+            {"type":"tool_use","id":"t","name":"n","input":{"data":"keep","signature":"keep"}}]}]}|}
+         signature data)
+  in
+  check_str "blobs do not matter"
+    (canonical_json (req "A" "S1"))
+    (canonical_json (req "B" "S2"));
+  let c = canonical_json (req "A" "S1") in
+  Alcotest.(check bool) "redacted data gone" false (contains ~sub:"OPAQUE" c);
+  Alcotest.(check bool)
+    "other blocks keep data and signature" true
+    (contains ~sub:{|"data":"keep","signature":"keep","text":"x"|} c);
+  Alcotest.(check bool)
+    "tool input untouched" true
+    (contains ~sub:{|"input":{"data":"keep","signature":"keep"}|} c)
 
 let test_fixture_ignored () =
   let r = read "haiku_stream" "request.json" in
@@ -327,17 +381,81 @@ let test_tool_result_matching () =
   | _ -> Alcotest.fail "two results expected");
   Alcotest.(check bool)
     "ids replaced by positions" true
-    (Str_replace.contains ~sub:{|"tool_use_id":1|}
-       (canonical (two_calls "id_a" "id_b")));
+    (contains ~sub:{|"tool_use_id":1|} (canonical (two_calls "id_a" "id_b")));
   Alcotest.(check bool)
     "swapped pairing differs" false
     (String.equal
        (canonical (two_calls "id_a" "id_b"))
        (canonical
-          (Str_replace.all ~sub:{|"tool_use_id":"id_b"|}
+          (replace_all ~sub:{|"tool_use_id":"id_b"|}
              ~by:{|"tool_use_id":"id_a"|}
-             (Str_replace.all ~sub:{|"tool_use_id":"id_a"|}
+             (replace_all ~sub:{|"tool_use_id":"id_a"|}
                 ~by:{|"tool_use_id":"id_c"|} (two_calls "id_a" "id_b")))))
+
+let tool_use id n =
+  Printf.sprintf {|{"type":"tool_use","id":%S,"name":"f","input":{"n":%d}}|} id
+    n
+
+let tool_result id text =
+  Printf.sprintf {|{"type":"tool_result","tool_use_id":%S,"content":%S}|} id
+    text
+
+let turns blocks =
+  json
+    (Printf.sprintf {|{"messages":[%s]}|}
+       (String.concat ","
+          (List.map
+             (fun (role, bs) ->
+               Printf.sprintf {|{"role":%S,"content":[%s]}|} role
+                 (String.concat "," bs))
+             blocks)))
+
+let indices req =
+  List.map (fun (r : P.tool_result) -> r.call_index) (A.tool_results req)
+
+let canonical_result_ids req =
+  let c = ok_exn (A.canonical_request ~path:"/v1/messages" req) in
+  List.concat_map
+    (fun m ->
+      List.filter_map
+        (fun b ->
+          if
+            String.equal
+              (Option.value ~default:"" (C.str_member "type" b))
+              "tool_result"
+          then C.member "tool_use_id" b
+          else None)
+        (Option.value ~default:[] (C.list_member "content" m)))
+    (list_exn (get "messages" c))
+
+let test_linking () =
+  let reuse =
+    turns
+      [
+        ("assistant", [ tool_use "x" 1 ]);
+        ("user", [ tool_result "x" "r1" ]);
+        ("assistant", [ tool_use "x" 2 ]);
+        ("user", [ tool_result "x" "r2" ]);
+      ]
+  in
+  Alcotest.(check (list int)) "reuse across turns" [ 0; 1 ] (indices reuse);
+  Alcotest.(check (list canon_t))
+    "canonical agrees"
+    [ C.int 0; C.int 1 ]
+    (canonical_result_ids reuse);
+  let parallel =
+    turns
+      [
+        ("assistant", [ tool_use "" 1; tool_use "" 2 ]);
+        ("user", [ tool_result "" "a"; tool_result "" "b" ]);
+      ]
+  in
+  Alcotest.(check (list int)) "equal ids in order" [ 0; 1 ] (indices parallel);
+  let ghost = turns [ ("user", [ tool_result "ghost" "r" ]) ] in
+  Alcotest.(check (list int)) "unlinked is left out" [] (indices ghost);
+  Alcotest.(check (list canon_t))
+    "unlinked is null in the key" [ C.null ]
+    (canonical_result_ids ghost)
 
 let id_gen =
   QCheck.Gen.(
@@ -353,7 +471,7 @@ let prop_id_rename =
     (QCheck.make QCheck.Gen.(pair id_gen id_gen))
     (fun (a, _) ->
       let r =
-        Str_replace.all ~sub:"toolu_01ReCiyPQ49xxQfSYauscpbK" ~by:("toolu_" ^ a)
+        replace_all ~sub:"toolu_01ReCiyPQ49xxQfSYauscpbK" ~by:("toolu_" ^ a)
           original
       in
       String.equal expected (canonical r)
@@ -372,6 +490,10 @@ let () =
           Alcotest.test_case "split invariance" `Quick test_split_invariance;
           Alcotest.test_case "comments and pings" `Quick test_comments_and_pings;
           Alcotest.test_case "tool results" `Quick test_tool_results;
+          Alcotest.test_case "usage definition" `Quick test_usage_definition;
+          Alcotest.test_case "usage relations" `Quick test_usage_relations;
+          Alcotest.test_case "truncated streams" `Quick test_truncation;
+          Alcotest.test_case "tool result linking" `Quick test_linking;
         ] );
       ( "edge cases",
         [
@@ -384,6 +506,7 @@ let () =
       ( "canonical",
         [
           Alcotest.test_case "ignored fields" `Quick test_ignored;
+          Alcotest.test_case "opaque blobs" `Quick test_opaque_blobs;
           Alcotest.test_case "fixture ignored" `Quick test_fixture_ignored;
           Alcotest.test_case "tool result matching" `Quick
             test_tool_result_matching;

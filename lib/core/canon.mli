@@ -30,6 +30,9 @@ val int : int -> t
 val string : string -> t
 val list : t list -> t
 
+val empty_object : t
+(** [{}]. *)
+
 val float : float -> (t, error) result
 (** [Error Non_finite_float] for NaN and infinities. *)
 
@@ -101,6 +104,10 @@ val map_fields : (string -> t -> t) -> t -> t
 
 val map_items : (t -> t) -> t -> t
 (** Rewrite every element of a list. Identity on other shapes. *)
+
+val fold_map_children : ('a -> t -> 'a * t) -> 'a -> t -> 'a * t
+(** Thread a state through the direct children of an object (fields in key
+    order) or a list (in order), rewriting each. Identity on other shapes. *)
 
 (** {1 Paths}
 

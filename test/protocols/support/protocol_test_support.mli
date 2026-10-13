@@ -32,3 +32,27 @@ val recorded_pieces : raw:string -> chunks:string -> string list
 val single_bytes : string -> string list
 val canon_t : Canon.t Alcotest.testable
 val summary_t : Protocol.summary Alcotest.testable
+val usage_equal : Trace.usage -> Trace.usage -> bool
+val obj : (string * Canon.t) list -> Canon.t
+
+val set_path : string -> Canon.t -> Canon.t -> Canon.t
+(** [set_path path value v] sets the field named by the dotted [path] (with [[]]
+    for every list element, as in [Canon.path_of_string]), creating missing
+    objects on the way. *)
+
+val contains : sub:string -> string -> bool
+val replace_all : sub:string -> by:string -> string -> string
+
+val first_half_body : Protocol.body -> Protocol.body
+(** The first half of a stream's items. A whole [Json] body is unchanged. *)
+
+val check_usage_relations : string -> Protocol.summary -> unit
+(** [cached + cache_write <= input] and [reasoning <= output]. *)
+
+val check_truncation :
+  string ->
+  (Protocol.body -> (Protocol.summary, Protocol.error) result) ->
+  Protocol.body ->
+  unit
+(** The full stream summarises without an error, and its first half either fails
+    to summarise (a cut-off tool call) or carries [summary.error]. *)

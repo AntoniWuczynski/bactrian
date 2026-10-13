@@ -199,6 +199,24 @@ let map_items f v =
   | List xs -> List (List.map f xs)
   | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ | Object _ -> v
 
+let empty_object = Object []
+
+let fold_map_children f acc v =
+  match v with
+  | Object fs ->
+      let acc, fs' =
+        List.fold_left_map
+          (fun acc (k, x) ->
+            let acc, x' = f acc x in
+            (acc, (k, x')))
+          acc fs
+      in
+      (acc, Object fs')
+  | List xs ->
+      let acc, xs' = List.fold_left_map f acc xs in
+      (acc, List xs')
+  | Null | Bool _ | Int _ | Big_int _ | Float _ | String _ -> (acc, v)
+
 type segment = Key of string | Each
 
 let path_of_string p =

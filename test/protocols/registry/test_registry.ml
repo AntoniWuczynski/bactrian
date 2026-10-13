@@ -45,6 +45,35 @@ let test_unknown_path () =
     "unknown path" true
     (Option.is_none (Protocols.find ~meth:"POST" ~path:"/v1/embeddings"))
 
+let links steps = Protocol.link_history steps
+let link_t = Alcotest.(list (option int))
+
+let test_link_history () =
+  let c id = Protocol.Called id and a id = Protocol.Answered id in
+  Alcotest.check link_t "answers in any order"
+    [ Some 0; Some 1; Some 1; Some 0 ]
+    (links [ c "x"; c "y"; a "y"; a "x" ]);
+  Alcotest.check link_t "equal ids link in order"
+    [ Some 0; Some 1; Some 0; Some 1 ]
+    (links [ c "x"; c "x"; a "x"; a "x" ]);
+  Alcotest.check link_t "empty ids link in order"
+    [ Some 0; Some 1; Some 0; Some 1 ]
+    (links [ c ""; c ""; a ""; a "" ]);
+  Alcotest.check link_t "id reused across turns"
+    [ Some 0; Some 0; Some 1; Some 1 ]
+    (links [ c "x"; a "x"; c "x"; a "x" ]);
+  Alcotest.check link_t "result with nothing to answer is unlinked"
+    [ None; Some 0; Some 0; None ]
+    (links [ a "x"; c "x"; a "x"; a "x" ]);
+  Alcotest.check link_t "result before its call is unlinked" [ None; Some 0 ]
+    (links [ a "x"; c "x" ])
+
+let test_remove_ignored () =
+  let v = Result.get_ok (Canon.of_string {|{"a":1,"b":{"c":2,"d":3}}|}) in
+  Alcotest.(check string)
+    "removed" {|{"b":{"d":3}}|}
+    (Canon.to_string (Protocol.remove_ignored [ ("a", ""); ("b.c", "") ] v))
+
 let () =
   Alcotest.run "protocols"
     [
@@ -53,5 +82,10 @@ let () =
           Alcotest.test_case "each fixture has one adapter" `Quick
             test_each_fixture_has_one_adapter;
           Alcotest.test_case "unknown path" `Quick test_unknown_path;
+        ] );
+      ( "protocol",
+        [
+          Alcotest.test_case "link_history" `Quick test_link_history;
+          Alcotest.test_case "remove_ignored" `Quick test_remove_ignored;
         ] );
     ]

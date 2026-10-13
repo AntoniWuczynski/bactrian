@@ -205,7 +205,18 @@ let test_edit () =
   check_json "map_items" "[0,0]"
     (Canon.map_items (fun _ -> Canon.int 0) (json "[1,2]"));
   check_json "map_items non-list" "{}"
-    (Canon.map_items (fun _ -> Canon.null) (json "{}"))
+    (Canon.map_items (fun _ -> Canon.null) (json "{}"));
+  check_json "empty_object" "{}" Canon.empty_object;
+  let number n _ = (n + 1, Canon.int n) in
+  let n, v = Canon.fold_map_children number 0 (json "{\"b\":9,\"a\":[7]}") in
+  Alcotest.(check int) "fold count" 2 n;
+  check_json "fold_map_children object, key order" "{\"a\":0,\"b\":1}" v;
+  let n, v = Canon.fold_map_children number 5 (json "[\"x\",\"y\"]") in
+  Alcotest.(check int) "fold list count" 7 n;
+  check_json "fold_map_children list" "[5,6]" v;
+  let n, v = Canon.fold_map_children number 5 (json "3") in
+  Alcotest.(check int) "fold scalar count" 5 n;
+  check_json "fold_map_children scalar" "3" v
 
 let test_paths () =
   Alcotest.(check (list segment))

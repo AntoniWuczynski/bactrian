@@ -2,8 +2,6 @@ open Bactrian_core
 open Protocol_test_support
 module P = Openai_chat
 
-let obj fs = Result.get_ok (Canon.obj fs)
-
 let fixtures =
   [
     "luna_stream";
@@ -83,6 +81,7 @@ let test_fixture name () =
         "usage" true
         (u.input_tokens > 0 && u.output_tokens > 0)
   | None -> Alcotest.fail "no usage");
+  check_usage_relations name s;
   if not (String.equal name "luna_turn2") then
     match s.tool_calls with
     | [ c ] ->
@@ -123,22 +122,12 @@ let test_split_invariance name () =
 
 (* canonical_request *)
 
-let rec set_path segs value v =
-  match segs with
-  | [] -> value
-  | k :: rest ->
-      let v = if Option.is_some (Canon.to_fields_opt v) then v else obj [] in
-      let child = Option.value (Canon.member k v) ~default:Canon.null in
-      Canon.set_member k (set_path rest value child) v
-
 let test_ignored_removed () =
   let base = request "luna_stream" in
   let expected = canon_exn base in
   List.iter
     (fun (p, _) ->
-      let with_field =
-        set_path (String.split_on_char '.' p) (Canon.string "x") base
-      in
+      let with_field = set_path p (Canon.string "x") base in
       Alcotest.check canon_t ("ignored " ^ p) expected (canon_exn with_field))
     P.ignored_fields
 
@@ -146,51 +135,48 @@ let test_ignored_all_at_once () =
   let base = request "luna_stream" in
   let all =
     List.fold_left
-      (fun v (p, _) -> set_path (String.split_on_char '.' p) (Canon.int 1) v)
+      (fun v (p, _) -> set_path p (Canon.int 1) v)
       base P.ignored_fields
   in
   Alcotest.check canon_t "all ignored" (canon_exn base) (canon_exn all)
 
 let test_unknown_kept () =
   let base = request "luna_stream" in
-  let with_unknown = set_path [ "frobnicate" ] (Canon.int 1) base in
+  let with_unknown = set_path "frobnicate" (Canon.int 1) base in
   Alcotest.(check bool)
     "differs" false
     (Canon.equal (canon_exn base) (canon_exn with_unknown));
-  let nested =
-    set_path [ "stream_options"; "future_flag" ] (Canon.bool true) base
-  in
+  let nested = set_path "stream_options.future_flag" (Canon.bool true) base in
   Alcotest.(check bool)
     "nested unknown differs" false
     (Canon.equal (canon_exn base) (canon_exn nested));
-  let model = set_path [ "model" ] (Canon.string "other") base in
+  let model = set_path "model" (Canon.string "other") base in
   Alcotest.(check bool)
     "model in key" false
     (Canon.equal (canon_exn base) (canon_exn model))
 
-let test_fixture_requests_ignored_field_only () =
-  (* Same body but for an ignored field gives an equal key; the real stream
-     request versus itself with OpenRouter routing added. *)
-  let a = request "openrouter_nemotron_stream" in
-  let b =
-    set_path [ "provider"; "order" ] (Canon.list [ Canon.string "x" ]) a
-  in
-  Alcotest.check canon_t "provider" (canon_exn a) (canon_exn b)
+let test_routing_and_store_kept () =
+  (* These change which model answers, what it sees or how it is billed, so
+     they stay in the key. *)
+  let base = request "openrouter_nemotron_stream" in
+  List.iter
+    (fun p ->
+      Alcotest.(check bool)
+        (p ^ " kept") false
+        (Canon.equal (canon_exn base)
+           (canon_exn (set_path p (Canon.string "x") base)));
+      Alcotest.(check bool)
+        (p ^ " not ignored") false
+        (List.mem_assoc p P.ignored_fields))
+    [ "provider"; "models"; "route"; "plugins"; "debug"; "store" ]
 
 let test_ids_replaced () =
   let c = canon_exn (request "luna_turn2") in
   let s = Canon.to_string c in
-  let contains sub =
-    let n = String.length sub in
-    let rec go i =
-      i + n <= String.length s && (String.sub s i n = sub || go (i + 1))
-    in
-    go 0
-  in
-  Alcotest.(check bool) "no call id" false (contains "call_akD6");
+  Alcotest.(check bool) "no call id" false (contains ~sub:"call_akD6" s);
   Alcotest.(check bool)
     "positions" true
-    (contains "\"tool_call_id\":0" && contains "\"id\":0")
+    (contains ~sub:"\"tool_call_id\":0" s && contains ~sub:"\"id\":0" s)
 
 let two_call_request a b =
   json
@@ -268,6 +254,81 @@ let test_tool_results () =
     (List.map
        (fun (r : Protocol.tool_result) -> r.content)
        (P.tool_results parts))
+
+let history calls_and_results =
+  let call id =
+    Printf.sprintf
+      {|{"role":"assistant","content":null,"tool_calls":[{"id":%S,"type":"function","function":{"name":"f","arguments":"{}"}}]}|}
+      id
+  in
+  let result id text =
+    Printf.sprintf {|{"role":"tool","tool_call_id":%S,"content":%S}|} id text
+  in
+  json
+    (Printf.sprintf
+       {|{"model":"m","messages":[{"role":"user","content":"q"},%s]}|}
+       (String.concat ","
+          (List.map
+             (function `Call id -> call id | `Result (id, t) -> result id t)
+             calls_and_results)))
+
+let result_indices req =
+  List.map (fun (r : Protocol.tool_result) -> r.call_index) (P.tool_results req)
+
+(* The canonical form of every tool message points at the call that
+   [tool_results] reports. *)
+let canonical_result_ids req =
+  list_exn (get "messages" (canon_exn req))
+  |> List.filter_map (fun m ->
+      if String.equal (str "role" m) "tool" then Some (get "tool_call_id" m)
+      else None)
+
+let test_equal_ids_link_in_order () =
+  let two_in_one =
+    json
+      {|{"model":"m","messages":[{"role":"user","content":"q"},
+         {"role":"assistant","content":null,"tool_calls":[
+           {"id":"x","type":"function","function":{"name":"f","arguments":"{}"}},
+           {"id":"x","type":"function","function":{"name":"g","arguments":"{}"}}]},
+         {"role":"tool","tool_call_id":"x","content":"ra"},
+         {"role":"tool","tool_call_id":"x","content":"rb"}]}|}
+  in
+  Alcotest.(check (list int))
+    "same id, one message" [ 0; 1 ]
+    (result_indices two_in_one);
+  Alcotest.(check (list canon_t))
+    "canonical agrees"
+    [ Canon.int 0; Canon.int 1 ]
+    (canonical_result_ids two_in_one);
+  let empty_ids =
+    json
+      {|{"model":"m","messages":[
+         {"role":"assistant","content":null,"tool_calls":[
+           {"id":"","type":"function","function":{"name":"f","arguments":"{}"}},
+           {"id":"","type":"function","function":{"name":"g","arguments":"{}"}}]},
+         {"role":"tool","tool_call_id":"","content":"ra"},
+         {"role":"tool","tool_call_id":"","content":"rb"}]}|}
+  in
+  Alcotest.(check (list int)) "empty ids" [ 0; 1 ] (result_indices empty_ids)
+
+let test_reused_ids_across_turns () =
+  let req =
+    history [ `Call "x"; `Result ("x", "r1"); `Call "x"; `Result ("x", "r2") ]
+  in
+  Alcotest.(check (list int))
+    "latest unanswered call" [ 0; 1 ] (result_indices req);
+  Alcotest.(check (list canon_t))
+    "canonical agrees"
+    [ Canon.int 0; Canon.int 1 ]
+    (canonical_result_ids req)
+
+let test_unlinked_result () =
+  let req = history [ `Result ("ghost", "r"); `Call "x"; `Result ("x", "r") ] in
+  Alcotest.(check (list int)) "left out" [ 0 ] (result_indices req);
+  Alcotest.(check (list canon_t))
+    "null in the key, raw id not leaked"
+    [ Canon.null; Canon.int 0 ]
+    (canonical_result_ids req)
 
 let test_matches () =
   Alcotest.(check bool)
@@ -352,8 +413,35 @@ let test_done_stops () =
 
 let test_truncated_stream () =
   let s = summary_exn (Protocol.Sse [ chunk_text "a" ]) in
-  Alcotest.(check (option string)) "no stop" None s.stop_reason;
-  Alcotest.(check bool) "no usage" true (Option.is_none s.usage)
+  Alcotest.(check bool) "flagged" true (Option.is_some s.error);
+  Alcotest.(check string) "partial text kept" "a" s.text;
+  Alcotest.(check bool)
+    "empty stream flagged" true
+    (Option.is_some (summary_exn (Protocol.Sse [])).error);
+  let finished =
+    summary_exn
+      (Protocol.Sse
+         [
+           chunk_text "a";
+           ev {|{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}|};
+         ])
+  in
+  Alcotest.(check (option string))
+    "a finish_reason completes it without [DONE]" None finished.error
+
+let test_fixture_truncation name () =
+  check_truncation name P.summarise (body_of name)
+
+let test_extra_choices_ignored () =
+  let s =
+    summary_exn
+      (Protocol.Json
+         (json
+            {|{"model":"m","choices":[
+               {"index":0,"message":{"content":"zero"},"finish_reason":"stop"},
+               {"index":1,"message":{"content":"one"},"finish_reason":"stop"}]}|}))
+  in
+  Alcotest.(check string) "only choice 0 is summarised" "zero" s.text
 
 let test_malformed () =
   (match P.summarise (Protocol.Sse [ ev "not json" ]) with
@@ -429,6 +517,10 @@ let () =
         List.map
           (fun n -> Alcotest.test_case n `Quick (test_split_invariance n))
           [ "luna_stream"; "nano_stream"; "openrouter_nemotron_stream" ] );
+      ( "truncation",
+        List.map
+          (fun n -> Alcotest.test_case n `Quick (test_fixture_truncation n))
+          [ "luna_stream"; "nano_stream"; "openrouter_nemotron_stream" ] );
       ( "canonical_request",
         [
           Alcotest.test_case "matches" `Quick test_matches;
@@ -437,21 +529,31 @@ let () =
           Alcotest.test_case "all ignored at once" `Quick
             test_ignored_all_at_once;
           Alcotest.test_case "unknown fields kept" `Quick test_unknown_kept;
-          Alcotest.test_case "openrouter provider ignored" `Quick
-            test_fixture_requests_ignored_field_only;
+          Alcotest.test_case "routing fields and store kept" `Quick
+            test_routing_and_store_kept;
           Alcotest.test_case "ids replaced by positions" `Quick
             test_ids_replaced;
           Alcotest.test_case "results stay matched to calls" `Quick
             test_ids_distinct_calls;
           QCheck_alcotest.to_alcotest prop_ids;
         ] );
-      ("tool_results", [ Alcotest.test_case "history" `Quick test_tool_results ]);
+      ( "tool_results",
+        [
+          Alcotest.test_case "history" `Quick test_tool_results;
+          Alcotest.test_case "equal ids link in order" `Quick
+            test_equal_ids_link_in_order;
+          Alcotest.test_case "ids reused across turns" `Quick
+            test_reused_ids_across_turns;
+          Alcotest.test_case "unlinked result" `Quick test_unlinked_result;
+        ] );
       ( "edge cases",
         [
           Alcotest.test_case "keep-alive comments" `Quick test_comments_ignored;
           Alcotest.test_case "error frames" `Quick test_error_frames;
           Alcotest.test_case "[DONE] stops" `Quick test_done_stops;
           Alcotest.test_case "truncated stream" `Quick test_truncated_stream;
+          Alcotest.test_case "choices after 0 are ignored" `Quick
+            test_extra_choices_ignored;
           Alcotest.test_case "malformed input" `Quick test_malformed;
           Alcotest.test_case "parallel tool calls" `Quick test_parallel_calls;
           Alcotest.test_case "obfuscation irrelevant" `Quick

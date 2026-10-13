@@ -3,15 +3,6 @@ open Protocol_test_support
 module G = Gemini_generate
 
 let fixture_file = fixture ~protocol:"gemini_generate"
-let obj fs = Result.get_ok (Canon.obj fs)
-
-let contains sub s =
-  let n = String.length sub in
-  let rec go i =
-    i + n <= String.length s
-    && (String.equal (String.sub s i n) sub || go (i + 1))
-  in
-  go 0
 
 let fixtures =
   [
@@ -65,24 +56,6 @@ let canonical ~path req =
 
 let gen_path = "/v1beta/models/gemini-3.8-flash:generateContent"
 let stream_path = "/v1beta/models/gemini-3.8-flash:streamGenerateContent"
-
-let summary_testable =
-  Alcotest.testable
-    (fun fmt (s : Protocol.summary) ->
-      Format.fprintf fmt "{model=%s text=%S calls=%d err=%s}"
-        (Option.value ~default:"-" s.model)
-        s.text (List.length s.tool_calls)
-        (Option.value ~default:"-" s.error))
-    (fun (a : Protocol.summary) (b : Protocol.summary) ->
-      Option.equal String.equal a.model b.model
-      && String.equal a.text b.text
-      && List.equal
-           (fun (x : Protocol.tool_call) (y : Protocol.tool_call) ->
-             String.equal x.name y.name && Canon.equal x.arguments y.arguments)
-           a.tool_calls b.tool_calls
-      && Option.equal ( = ) a.usage b.usage
-      && Option.equal String.equal a.stop_reason b.stop_reason
-      && Option.equal String.equal a.error b.error)
 
 (* Fixture tests *)
 
@@ -147,6 +120,35 @@ let usage_tests =
         | None -> Alcotest.fail "no usage");
   ]
 
+(* Usage definition and truncated streams *)
+
+let completeness_tests =
+  [
+    Alcotest.test_case "input includes tool-use prompt tokens, cache a subset"
+      `Quick (fun () ->
+        let s =
+          summary_of
+            (Protocol.Json
+               (json
+                  {|{"candidates":[],"usageMetadata":{"promptTokenCount":10,"toolUsePromptTokenCount":5,"cachedContentTokenCount":4,"candidatesTokenCount":2,"thoughtsTokenCount":3}}|}))
+        in
+        match s.usage with
+        | Some u ->
+            Alcotest.(check (list int))
+              "input and output" [ 15; 5 ]
+              [ u.input_tokens; u.output_tokens ];
+            check_usage_relations "hand" s
+        | None -> Alcotest.fail "usage");
+    Alcotest.test_case "usage relations hold on every fixture" `Quick (fun () ->
+        List.iter
+          (fun n -> check_usage_relations n (summary_of (body_of (load n))))
+          fixtures);
+    Alcotest.test_case "truncated streams are errors" `Quick (fun () ->
+        List.iter
+          (fun n -> check_truncation n G.summarise (body_of (load n)))
+          [ "flash_stream_sse"; "flash_stream_json" ]);
+  ]
+
 (* Split invariance and the three streaming shapes *)
 
 let split_tests =
@@ -159,8 +161,8 @@ let split_tests =
           summary_of (Protocol.Sse (sse_items (single_bytes f.raw)))
         in
         let whole = summary_of (Protocol.Sse (sse_items [ f.raw ])) in
-        Alcotest.check summary_testable "bytes" recorded bytes;
-        Alcotest.check summary_testable "whole" recorded whole);
+        Alcotest.check summary_t "bytes" recorded bytes;
+        Alcotest.check summary_t "whole" recorded whole);
     Alcotest.test_case "json array stream is read as Json_stream" `Quick
       (fun () ->
         let f = load "flash_stream_json" in
@@ -236,8 +238,7 @@ let edge_tests =
                 :: List.concat_map (fun i -> [ i; Sse.Comment "" ]) its)
           | Protocol.Json _ | Protocol.Json_stream _ -> plain
         in
-        Alcotest.check summary_testable "same" (summary_of plain)
-          (summary_of noisy));
+        Alcotest.check summary_t "same" (summary_of plain) (summary_of noisy));
     Alcotest.test_case "error frame after 200 sets error" `Quick (fun () ->
         let s =
           summary_of
@@ -258,7 +259,9 @@ let edge_tests =
         in
         match s.error with
         | Some e ->
-            Alcotest.(check bool) "mentions message" true (contains "bad key" e)
+            Alcotest.(check bool)
+              "mentions message" true
+              (contains ~sub:"bad key" e)
         | None -> Alcotest.fail "no error");
     Alcotest.test_case "blocked prompt sets error" `Quick (fun () ->
         let s =
@@ -318,6 +321,7 @@ let routing_tests =
         Alcotest.(check bool) "generate" true (m "POST" gen_path);
         Alcotest.(check bool) "stream" true (m "POST" stream_path);
         Alcotest.(check bool) "get" false (m "GET" gen_path);
+        Alcotest.(check bool) "lower-case method" false (m "post" gen_path);
         Alcotest.(check bool)
           "count" false
           (m "POST" "/v1beta/models/gemini-3.8-flash:countTokens");
@@ -351,25 +355,6 @@ let rec map_strings f v =
 let rename_ids pairs =
   map_strings (fun s ->
       match List.assoc_opt s pairs with Some n -> n | None -> s)
-
-(* Insert [value] at a dotted path with [] segments, creating the leaf. *)
-let rec insert_at segs value v =
-  match segs with
-  | [] -> v
-  | seg :: rest ->
-      let v = if Option.is_some (Canon.to_fields_opt v) then v else obj [] in
-      let each = String.ends_with ~suffix:"[]" seg in
-      let key =
-        if each then String.sub seg 0 (String.length seg - 2) else seg
-      in
-      let child =
-        match (Canon.member key v, rest) with
-        | _, [] -> value
-        | Some c, _ when each -> Canon.map_items (insert_at rest value) c
-        | Some c, _ -> insert_at rest value c
-        | None, _ -> Canon.null
-      in
-      Canon.set_member key child v
 
 let two_call_request a b =
   json
@@ -453,8 +438,10 @@ let canonical_tests =
     Alcotest.test_case "thoughtSignature is gone from the key" `Quick (fun () ->
         let f = Lazy.force turn2 in
         let c = Canon.to_string (canonical ~path:f.path f.request) in
-        Alcotest.(check bool) "absent" false (contains "thoughtSignature" c);
-        Alcotest.(check bool) "id absent" false (contains "call_30065" c));
+        Alcotest.(check bool)
+          "absent" false
+          (contains ~sub:"thoughtSignature" c);
+        Alcotest.(check bool) "id absent" false (contains ~sub:"call_30065" c));
     Alcotest.test_case "model from the path is in the key" `Quick (fun () ->
         let f = Lazy.force turn2 in
         let c = canonical ~path:f.path f.request in
@@ -479,11 +466,7 @@ let canonical_tests =
         List.iter
           (fun (p, reason) ->
             Alcotest.(check bool) ("has reason: " ^ p) true (reason <> "");
-            let modified =
-              insert_at
-                (String.split_on_char '.' p)
-                (Canon.string "volatile") f.request
-            in
+            let modified = set_path p (Canon.string "volatile") f.request in
             Alcotest.(check bool)
               ("request changed: " ^ p) false
               (Canon.equal modified f.request);
@@ -496,14 +479,25 @@ let canonical_tests =
             Alcotest.(check bool)
               n true
               (List.exists (fun (p, _) -> String.equal p n) G.ignored_fields))
-          [ "labels"; "store"; "serviceTier"; "continuationToken" ]);
+          [ "labels"; "serviceTier"; "continuationToken" ]);
+    Alcotest.test_case "store stays in the key" `Quick (fun () ->
+        let f = Lazy.force turn2 in
+        Alcotest.(check bool)
+          "not ignored" false
+          (List.mem_assoc "store" G.ignored_fields);
+        Alcotest.(check bool)
+          "differs" false
+          (Canon.equal
+             (canonical ~path:f.path f.request)
+             (canonical ~path:f.path
+                (set_path "store" (Canon.bool true) f.request))));
     Alcotest.test_case "an unknown top-level field stays in the key" `Quick
       (fun () ->
         let f = Lazy.force turn2 in
         let base = canonical ~path:f.path f.request in
         let extra =
           canonical ~path:f.path
-            (insert_at [ "futureField" ] (Canon.int 1) f.request)
+            (set_path "futureField" (Canon.int 1) f.request)
         in
         Alcotest.(check bool) "differs" false (Canon.equal base extra);
         Alcotest.check canon_t "kept" (Canon.int 1) (get "futureField" extra));
@@ -512,9 +506,7 @@ let canonical_tests =
         let base = canonical ~path:f.path f.request in
         let other =
           canonical ~path:f.path
-            (insert_at
-               [ "generationConfig"; "temperature" ]
-               (Canon.int 1) f.request)
+            (set_path "generationConfig.temperature" (Canon.int 1) f.request)
         in
         Alcotest.(check bool) "differs" false (Canon.equal base other));
     Alcotest.test_case "id-less calls and responses are left id-less" `Quick
@@ -528,7 +520,7 @@ let canonical_tests =
         let c = canonical ~path:gen_path req in
         Alcotest.(check bool)
           "no id" false
-          (contains {|"id"|} (Canon.to_string c)));
+          (contains ~sub:{|"id"|} (Canon.to_string c)));
     Alcotest.test_case "pro request differs from flash only by model and config"
       `Quick (fun () ->
         let a = load "flash_generate" and b = load "pro_generate" in
@@ -537,12 +529,16 @@ let canonical_tests =
         Alcotest.(check bool) "differ" false (Canon.equal ca cb);
         Alcotest.check canon_t "contents" (get "contents" ca)
           (get "contents" cb));
-    Alcotest.test_case "same prompt, same key whether captured as sse or json"
+    Alcotest.test_case "alt=sse changes the key through the query, not the body"
       `Quick (fun () ->
         let a = load "flash_stream_sse" and b = load "flash_stream_json" in
-        Alcotest.check canon_t "equal"
-          (canonical ~path:a.path a.request)
-          (canonical ~path:b.path b.request));
+        let ca = canonical ~path:a.path a.request in
+        Alcotest.check canon_t "same canonical body" ca
+          (canonical ~path:b.path b.request);
+        let key query = Matcher.key ~meth:"POST" ~path:a.path ~query ca in
+        Alcotest.(check bool)
+          "keys differ" false
+          (String.equal (key [ ("alt", "sse") ]) (key [])));
     Alcotest.test_case "bad path and bad body are malformed" `Quick (fun () ->
         (match G.canonical_request ~path:"/v1/chat/completions" (obj []) with
         | Error (Protocol.Malformed _) -> ()
@@ -553,6 +549,69 @@ let canonical_tests =
   ]
 
 (* tool_results *)
+
+let call id =
+  Printf.sprintf {|{"functionCall":{"name":"f","args":{},"id":%S}}|} id
+
+let response id text =
+  Printf.sprintf
+    {|{"functionResponse":{"name":"f","response":{"result":%S},"id":%S}}|} text
+    id
+
+let history turns =
+  json
+    (Printf.sprintf {|{"contents":[%s]}|}
+       (String.concat ","
+          (List.map
+             (fun (role, parts) ->
+               Printf.sprintf {|{"role":%S,"parts":[%s]}|} role
+                 (String.concat "," parts))
+             turns)))
+
+let indices req =
+  List.map (fun (r : Protocol.tool_result) -> r.call_index) (G.tool_results req)
+
+let canonical_response_ids req =
+  list_exn (get "contents" (canonical ~path:gen_path req))
+  |> List.concat_map (fun c ->
+      list_exn (get "parts" c)
+      |> List.filter_map (fun p ->
+          Option.map (get "id") (Canon.member "functionResponse" p)))
+
+let linking_tests =
+  [
+    Alcotest.test_case "ids reused across turns and equal ids link in order"
+      `Quick (fun () ->
+        let reuse =
+          history
+            [
+              ("model", [ call "x" ]);
+              ("user", [ response "x" "r1" ]);
+              ("model", [ call "x" ]);
+              ("user", [ response "x" "r2" ]);
+            ]
+        in
+        Alcotest.(check (list int)) "reuse" [ 0; 1 ] (indices reuse);
+        Alcotest.(check (list canon_t))
+          "canonical agrees"
+          [ Canon.int 0; Canon.int 1 ]
+          (canonical_response_ids reuse);
+        let parallel =
+          history
+            [
+              ("model", [ call "x"; call "x" ]);
+              ("user", [ response "x" "a"; response "x" "b" ]);
+            ]
+        in
+        Alcotest.(check (list int)) "parallel" [ 0; 1 ] (indices parallel));
+    Alcotest.test_case "a result that answers no call is left out" `Quick
+      (fun () ->
+        let ghost = history [ ("user", [ response "ghost" "r" ]) ] in
+        Alcotest.(check (list int)) "left out" [] (indices ghost);
+        Alcotest.(check (list canon_t))
+          "null in the key" [ Canon.null ]
+          (canonical_response_ids ghost));
+  ]
 
 let tool_result_tests =
   [
@@ -606,4 +665,6 @@ let () =
       ("routing", routing_tests);
       ("canonical", canonical_tests);
       ("tool_results", tool_result_tests);
+      ("linking", linking_tests);
+      ("completeness", completeness_tests);
     ]

@@ -1,3 +1,5 @@
+open Protocol
+
 let name = "gemini_interactions"
 
 let matches ~meth ~path =
@@ -5,7 +7,6 @@ let matches ~meth ~path =
 
 let ignored_fields =
   [
-    ("store", "server-side retention flag, does not change the answer");
     ("labels", "billing metadata, does not change the answer");
     ("service_tier", "routing and billing tier, does not change the answer");
     ("continuation_token", "opaque pagination handle, differs per run");
@@ -13,76 +14,54 @@ let ignored_fields =
 
 (* Helpers over Canon.t *)
 
-let malformed path reason = Protocol.Malformed { path; reason }
-let canon_error path e = malformed path (Format.asprintf "%a" Canon.pp_error e)
 let obj path fields = Result.map_error (canon_error path) (Canon.obj fields)
 let string_field = Canon.str_member
 let int_field = Canon.int_member
 let type_is t v = Option.equal String.equal (string_field "type" v) (Some t)
 
-let rec traverse f = function
-  | [] -> Ok []
-  | x :: xs ->
-      let ( let* ) = Result.bind in
-      let* y = f x in
-      let* ys = traverse f xs in
-      Ok (y :: ys)
+let step_of v =
+  let id k = Option.value (string_field k v) ~default:"" in
+  match string_field "type" v with
+  | Some "function_call" -> Some (Called (id "id"))
+  | Some "function_result" -> Some (Answered (id "call_id"))
+  | Some _ | None -> None
 
-(* Matching values in document order, outermost first, reversed. *)
-let rec collect ~ty f acc v =
-  if type_is ty v then f v :: acc
-  else
-    let children =
-      match Canon.to_fields_opt v with
-      | Some fs -> List.map snd fs
-      | None -> Option.value (Canon.to_list_opt v) ~default:[]
-    in
-    List.fold_left (collect ~ty f) acc children
+let children v =
+  match Canon.to_fields_opt v with
+  | Some fs -> List.map snd fs
+  | None -> Option.value (Canon.to_list_opt v) ~default:[]
 
-(* Function calls in document order, each with its optional id. *)
-let calls_of v = List.rev (collect ~ty:"function_call" (string_field "id") [] v)
-
-let index_of calls id =
-  let rec go i = function
-    | [] -> None
-    | Some x :: _ when String.equal x id -> Some i
-    | (Some _ | None) :: rest -> go (i + 1) rest
-  in
-  go 0 calls
-
-(* Function results in document order. *)
-let results_of v = List.rev (collect ~ty:"function_result" Fun.id [] v)
+(* Calls and results in document order, outermost first, with the value. *)
+let rec steps_of v =
+  match step_of v with
+  | Some step -> [ (step, v) ]
+  | None -> List.concat_map steps_of (children v)
 
 (* Replace provider call ids by positions and drop thought signatures. *)
-let rec rewrite calls v =
+let rec rewrite links v =
   match string_field "type" v with
   | Some "function_call" ->
-      Canon.remove_member "id" (Canon.remove_member "signature" v)
-  | Some "thought" -> Canon.remove_member "signature" v
+      let links, _ = pop_link links in
+      (links, Canon.remove_member "id" (Canon.remove_member "signature" v))
+  | Some "thought" -> (links, Canon.remove_member "signature" v)
   | Some "function_result" ->
-      let call_id =
-        match Option.bind (string_field "call_id" v) (index_of calls) with
-        | Some i -> Canon.int i
-        | None -> Canon.null
-      in
-      Canon.set_member "call_id" call_id v
-  | Some _ | None ->
-      Canon.map_items (rewrite calls)
-        (Canon.map_fields (fun _ x -> rewrite calls x) v)
+      let links, link = pop_link links in
+      ( links,
+        Canon.set_member "call_id"
+          (Option.fold link ~none:Canon.null ~some:Canon.int)
+          v )
+  | Some _ | None -> Canon.fold_map_children rewrite links v
 
 let canonical_request ~path:_ req =
   match Canon.to_fields_opt req with
-  | None -> Error (malformed "" "request body is not a JSON object")
+  | None -> malformed "" "request body is not a JSON object"
   | Some _ ->
-      let calls = calls_of req in
-      let kept =
-        List.fold_left
-          (fun v (p, _) -> Canon.remove_at (Canon.path_of_string p) v)
-          req ignored_fields
-      in
+      let kept = remove_ignored ignored_fields req in
       Ok
         (match Canon.member "input" kept with
-        | Some x -> Canon.set_member "input" (rewrite calls x) kept
+        | Some x ->
+            let links = link_history (List.map fst (steps_of x)) in
+            Canon.set_member "input" (snd (rewrite links x)) kept
         | None -> kept)
 
 let streaming ~path:_ ~query:_ req =
@@ -106,15 +85,8 @@ let result_text v =
 
 let tool_results req =
   let input = Option.value (Canon.member "input" req) ~default:Canon.null in
-  let calls = calls_of input in
-  let results = results_of input in
-  List.mapi
-    (fun ordinal r ->
-      let call_index =
-        match Option.bind (string_field "call_id" r) (index_of calls) with
-        | Some i -> i
-        | None -> ordinal
-      in
+  linked_results (steps_of input)
+  |> List.map (fun (r, call_index) ->
       let content =
         match Canon.member "result" r with
         | Some v -> result_text v
@@ -123,8 +95,7 @@ let tool_results req =
       let is_error =
         Option.value (Canon.bool_member "is_error" r) ~default:false
       in
-      { Protocol.call_index; content; is_error })
-    results
+      { call_index; content; is_error })
 
 (* Summaries *)
 
@@ -142,6 +113,7 @@ type acc = {
   usage : Trace.usage option;
   stop_reason : string option;
   error : string option;
+  complete : bool;  (** [interaction.completed] or [done] arrived. *)
 }
 
 let empty =
@@ -152,6 +124,7 @@ let empty =
     usage = None;
     stop_reason = None;
     error = None;
+    complete = false;
   }
 
 let usage_of path interaction =
@@ -165,16 +138,21 @@ let usage_of path interaction =
           Ok
             (Some
                {
-                 Trace.input_tokens;
-                 output_tokens;
+                 Trace.input_tokens =
+                   input_tokens
+                   + Option.value ~default:0
+                       (int_field "total_tool_use_tokens" u);
+                 output_tokens =
+                   output_tokens
+                   + Option.value ~default:0
+                       (int_field "total_thought_tokens" u);
                  cached_input_tokens = int_field "total_cached_tokens" u;
                  cache_write_tokens = None;
                  reasoning_tokens = int_field "total_thought_tokens" u;
                })
       | None, _ | _, None ->
-          Error
-            (malformed path
-               "usage lacks total_input_tokens or total_output_tokens"))
+          malformed path "usage lacks total_input_tokens or total_output_tokens"
+      )
 
 let failed_status = function "failed" | "cancelled" -> true | _ -> false
 
@@ -205,7 +183,7 @@ let apply_interaction path acc interaction =
 let interaction_of path payload =
   match Canon.member "interaction" payload with
   | Some i -> Ok i
-  | None -> Error (malformed path "event has no interaction object")
+  | None -> malformed path "event has no interaction object"
 
 let error_message payload data =
   match Canon.member "error" payload with
@@ -219,7 +197,7 @@ let start_call path acc payload =
   match (int_field "index" payload, Canon.member "step" payload) with
   | Some index, Some step when type_is "function_call" step -> (
       match string_field "name" step with
-      | None -> Error (malformed path "function_call step has no name")
+      | None -> malformed path "function_call step has no name"
       | Some call_name ->
           let start_args =
             match Canon.member "arguments" step with
@@ -232,7 +210,7 @@ let start_call path acc payload =
               calls = { index; call_name; start_args; chunks = [] } :: acc.calls;
             })
   | Some _, Some _ -> Ok acc
-  | None, _ | _, None -> Error (malformed path "step.start lacks index or step")
+  | None, _ | _, None -> malformed path "step.start lacks index or step"
 
 let apply_delta path acc payload =
   match (int_field "index" payload, Canon.member "delta" payload) with
@@ -262,14 +240,16 @@ let apply_delta path acc payload =
                       else c)
                     acc.calls;
               }
-          else Error (malformed path "arguments_delta for an unknown step")
+          else malformed path "arguments_delta for an unknown step"
       | Some _ | None -> Ok acc)
-  | None, _ | _, None ->
-      Error (malformed path "step.delta lacks index or delta")
+  | None, _ | _, None -> malformed path "step.delta lacks index or delta"
 
 let apply_event acc (ev : Sse.event) =
   let ( let* ) = Result.bind in
-  if String.equal ev.data "[DONE]" then Ok acc
+  if
+    String.equal ev.data "[DONE]"
+    || Option.equal String.equal ev.event (Some "done")
+  then Ok { acc with complete = true }
   else
     let path = "data" in
     let* payload =
@@ -281,9 +261,13 @@ let apply_event acc (ev : Sse.event) =
       | None -> Option.value (string_field "event_type" payload) ~default:""
     in
     match kind with
-    | "interaction.created" | "interaction.completed" ->
+    | "interaction.created" ->
         let* i = interaction_of path payload in
         apply_interaction path acc i
+    | "interaction.completed" ->
+        let* i = interaction_of path payload in
+        let* acc = apply_interaction path acc i in
+        Ok { acc with complete = true }
     | "interaction.status_update" ->
         Ok (with_status acc (string_field "status" payload))
     | "step.start" -> start_call path acc payload
@@ -302,6 +286,14 @@ let finish_call c =
           (Canon.of_string (String.concat "" (List.rev chunks)))
   in
   Ok { Protocol.name = c.call_name; arguments }
+
+let truncated acc =
+  if acc.complete || Option.is_some acc.error then acc
+  else
+    {
+      acc with
+      error = Some "stream ended before interaction.completed or done";
+    }
 
 let finish acc =
   let ( let* ) = Result.bind in
@@ -353,12 +345,12 @@ let summarise_json v =
           acc steps
       in
       finish acc
-  | None -> Error (malformed path "response is not a JSON object")
+  | None -> malformed path "response is not a JSON object"
 
 let summarise = function
   | Protocol.Json v -> summarise_json v
   | Protocol.Json_stream _ ->
-      Error (malformed "" "Interactions never streams a JSON array")
+      malformed "" "Interactions never streams a JSON array"
   | Protocol.Sse items ->
       let ( let* ) = Result.bind in
       let* acc =
@@ -370,4 +362,4 @@ let summarise = function
             | Sse.Event ev -> apply_event acc ev)
           (Ok empty) items
       in
-      finish acc
+      finish (truncated acc)

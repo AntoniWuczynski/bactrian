@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Literal, TypedDict
+from typing import Callable, Literal, TypedDict, cast
 
 import httpx
 
@@ -44,14 +44,46 @@ KEY_VARS: dict[Provider, str] = {
     "gemini": "GEMINI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
 }
-# USD per million tokens (input, output), spec section 11.
-PRICES: dict[str, tuple[float, float]] = {
-    "gpt-6-luna": (0.10, 0.50),
-    "gpt-5-nano": (0.05, 0.40),
-    "claude-haiku-5-5": (0.10, 0.50),
-    "gemini-3.8-flash": (0.75, 3.75),
-    "gemini-3.1-pro-preview": (2.00, 12.00),
+
+
+@dataclass(frozen=True)
+class Price:
+    """USD per million tokens, spec section 11."""
+
+    input: float
+    cached: float
+    cache_write: float
+    output: float
+
+
+@dataclass(frozen=True)
+class Usage:
+    """Same meaning as Trace.usage: input is the total prompt, including the
+    cache reads and cache writes, which are subsets of it. Output includes
+    reasoning tokens."""
+
+    input: int
+    cached: int
+    cache_write: int
+    output: int
+
+
+# Cache writes are priced at the 5-minute rate for Anthropic. Models with no
+# cache-write price bill them at the input rate.
+PRICES: dict[str, Price] = {
+    "gpt-6-luna": Price(0.10, 0.01, 0.125, 0.50),
+    "gpt-5-nano": Price(0.05, 0.005, 0.05, 0.40),
+    "claude-haiku-5-5": Price(0.10, 0.01, 0.125, 0.50),
+    "gemini-3.8-flash": Price(0.75, 0.075, 0.75, 3.75),
+    "gemini-3.1-pro-preview": Price(2.00, 0.20, 2.00, 12.00),
 }
+
+
+def cost_usd(price: Price, u: Usage) -> float:
+    plain = u.input - u.cached - u.cache_write
+    total = (plain * price.input + u.cached * price.cached
+             + u.cache_write * price.cache_write + u.output * price.output)
+    return round(total / 1_000_000, 8)
 RESPONSE_HEADER_ALLOW = ("content-type", "retry-after", "x-request-id")
 RESPONSE_HEADER_PREFIXES = ("x-ratelimit-", "anthropic-ratelimit-")
 TOOL_RESULT = "18 degrees Celsius, cloudy"
@@ -88,9 +120,24 @@ def get(x: JSON, *path: str | int) -> JSON:
     return x
 
 
+def narrow(x: object) -> JSON:
+    """Check a json.loads result against JSON instead of casting it."""
+    if x is None or isinstance(x, (str, bool, int, float)):
+        return x
+    if isinstance(x, list):
+        return [narrow(item) for item in cast(list[object], x)]
+    if isinstance(x, dict):
+        out: dict[str, JSON] = {}
+        for key, value in cast(dict[object, object], x).items():
+            if not isinstance(key, str):
+                raise ValueError(f"non-string JSON key: {key!r}")
+            out[key] = narrow(value)
+        return out
+    raise ValueError(f"not JSON: {type(x).__name__}")
+
+
 def parse_json(raw: bytes) -> JSON:
-    parsed: JSON = json.loads(raw)
-    return parsed
+    return narrow(json.loads(raw))
 
 
 class Chunk(TypedDict):
@@ -276,10 +323,7 @@ def request_body(c: Case) -> dict[str, JSON]:
     if c.seed is None:
         return as_obj(parse_json((REQUESTS / f"{c.protocol}__{c.name}.json").read_bytes()))
     seed = next(s for s in CASES if case_id(s) == c.seed)
-    body = TURN2[c.protocol](load_seed_request(seed), load_seed_response(seed))
-    path = REQUESTS / f"{c.protocol}__{c.name}.json"
-    path.write_text(json.dumps(body, indent=2) + "\n")
-    return body
+    return TURN2[c.protocol](load_seed_request(seed), load_seed_response(seed))
 
 
 # ---------- usage extraction ----------
@@ -302,37 +346,43 @@ def events_of(raw: bytes, content_type: str) -> list[JSON]:
     return parsed if isinstance(parsed, list) else [parsed]
 
 
-def usage_tokens(protocol: str, events: list[JSON]) -> tuple[int, int]:
-    inp = out = 0
+def usage_of(protocol: str, events: list[JSON]) -> Usage:
+    inp = cached = write = out = 0
     for e in events:
-        if protocol in ("openai_chat",):
+        if protocol == "openai_chat":
             u = as_obj(get(e, "usage"))
             if u:
                 inp, out = as_int(u.get("prompt_tokens")), as_int(u.get("completion_tokens"))
+                cached = as_int(get(u, "prompt_tokens_details", "cached_tokens"))
+                write = as_int(get(u, "prompt_tokens_details", "cache_write_tokens"))
         elif protocol == "openai_responses":
             u = as_obj(get(e, "response", "usage")) or as_obj(get(e, "usage"))
             if u:
                 inp, out = as_int(u.get("input_tokens")), as_int(u.get("output_tokens"))
+                cached = as_int(get(u, "input_tokens_details", "cached_tokens"))
+                write = as_int(get(u, "input_tokens_details", "cache_write_tokens"))
         elif protocol == "anthropic_messages":
             u = as_obj(get(e, "message", "usage")) or as_obj(get(e, "usage"))
             if u:
                 if "input_tokens" in u:
-                    inp = (as_int(u.get("input_tokens"))
-                           + as_int(u.get("cache_creation_input_tokens"))
-                           + as_int(u.get("cache_read_input_tokens")))
+                    cached = as_int(u.get("cache_read_input_tokens"))
+                    write = as_int(u.get("cache_creation_input_tokens"))
+                    inp = as_int(u.get("input_tokens")) + cached + write
                 if get(e, "type") != "message_start":
                     out = as_int(u.get("output_tokens"))
         elif protocol == "gemini_generate":
             u = as_obj(get(e, "usageMetadata"))
             if u:
-                inp = as_int(u.get("promptTokenCount"))
+                inp = as_int(u.get("promptTokenCount")) + as_int(u.get("toolUsePromptTokenCount"))
+                cached = as_int(u.get("cachedContentTokenCount"))
                 out = as_int(u.get("candidatesTokenCount")) + as_int(u.get("thoughtsTokenCount"))
         elif protocol == "gemini_interactions":
             u = as_obj(get(e, "interaction", "usage"))
             if u:
-                inp = as_int(u.get("total_input_tokens"))
+                inp = as_int(u.get("total_input_tokens")) + as_int(u.get("total_tool_use_tokens"))
+                cached = as_int(u.get("total_cached_tokens"))
                 out = as_int(u.get("total_output_tokens")) + as_int(u.get("total_thought_tokens"))
-    return inp, out
+    return Usage(inp, cached, write, out)
 
 
 # ---------- HTTP ----------
@@ -417,16 +467,17 @@ def run_case(c: Case) -> int:
                   "status": status, "request_headers": stored_req,
                   "response_headers": resp_headers, "model": c.model, "captured": now}
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-    inp, out = usage_tokens(c.protocol, events_of(bytes(raw), ctype))
-    pin, pout = PRICES.get(c.model, (0.0, 0.0))
-    usd = round((inp * pin + out * pout) / 1_000_000, 8)
+    usage = usage_of(c.protocol, events_of(bytes(raw), ctype))
+    usd = cost_usd(PRICES.get(c.model, Price(0.0, 0.0, 0.0, 0.0)), usage)
     line = {"date": now, "provider": c.provider, "model": c.model,
-            "input_tokens": inp, "output_tokens": out, "usd": usd}
+            "input_tokens": usage.input, "cached_input_tokens": usage.cached,
+            "cache_write_tokens": usage.cache_write, "output_tokens": usage.output,
+            "usd": usd}
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     with LEDGER.open("a") as f:
         f.write(json.dumps(line) + "\n")
     print(f"OK {case_id(c)} HTTP {status} chunks={len(chunks)} bytes={len(raw)} "
-          f"in={inp} out={out} usd={usd}")
+          f"in={usage.input} out={usage.output} usd={usd}")
     return 0
 
 
