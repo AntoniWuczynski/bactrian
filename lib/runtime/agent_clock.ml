@@ -18,11 +18,21 @@ let regular_file path =
   | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> false
   | exception Unix.Unix_error _ -> false
 
+(* The sandbox binds the library at the path the preload names, so that path
+   is the resolved one. *)
+let resolved path =
+  match Unix.realpath path with
+  | real -> Some real
+  | exception Unix.Unix_error _ -> None
+
 let locate ?(candidates = candidates) ~override () =
-  match override with
-  | Some path when not (String.equal path "") ->
-      if regular_file path then Some path else None
-  | Some _ | None -> List.find_opt regular_file candidates
+  let found =
+    match override with
+    | Some path when not (String.equal path "") ->
+        if regular_file path then Some path else None
+    | Some _ | None -> List.find_opt regular_file candidates
+  in
+  Option.bind found resolved
 
 let linux () = Sys.file_exists "/proc/sys/kernel/ostype"
 
@@ -86,9 +96,10 @@ type t = { label : Clock_label.t; injection : injection option }
 
 let label t = t.label
 let http_mode = { label = Contract_only Http_mode; injection = None }
+let library t = Option.map (fun i -> i.library) t.injection
 
-let decide ?candidates ~linux ~faketime ~library_override ~env ~cwd ~agent
-    ~sim_now () =
+let decide ?candidates ?(hidden = fun (_ : string) -> false) ~linux ~faketime
+    ~library_override ~env ~cwd ~agent ~sim_now () =
   let ( let* ) = Result.bind in
   let checked =
     let* () = if linux then Ok () else Error Clock_label.Macos in
@@ -96,6 +107,9 @@ let decide ?candidates ~linux ~faketime ~library_override ~env ~cwd ~agent
     let* library =
       Option.to_result ~none:Clock_label.Library_not_found
         (locate ?candidates ~override:library_override ())
+    in
+    let* () =
+      if hidden library then Error Clock_label.Library_hidden else Ok ()
     in
     let* epoch =
       match Rfc3339.epoch sim_now with

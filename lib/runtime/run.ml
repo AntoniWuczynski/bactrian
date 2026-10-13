@@ -576,8 +576,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let agent_clock =
     match config.agent with
     | Command argv ->
-        Agent_clock.decide ~linux:(Agent_clock.linux ())
-          ~faketime:config.faketime
+        Agent_clock.decide
+          ~hidden:(Sandbox.preload_hidden config.sandbox)
+          ~linux:(Agent_clock.linux ()) ~faketime:config.faketime
           ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
           ~env:agent_process_env ~cwd:(absolute config.cwd) ~agent:argv ~sim_now
           ()
@@ -674,6 +675,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                    state_dir = state_dir_path;
                    temp_dir = temp_dir_path;
                    port = P.port proxy;
+                   preload = Agent_clock.library agent_clock;
                    listen_unix =
                      (fun path ->
                        P.listen_unix proxy ~sw ~net:(Eio.Stdenv.net env) ~token

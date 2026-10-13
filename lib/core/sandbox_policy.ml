@@ -13,6 +13,7 @@ type input = {
   listeners : listener list;
   agent : string list;
   bactrian_exe : string;
+  preload : string option;
   tag : string;
 }
 
@@ -103,7 +104,9 @@ let validate i =
   in
   let* () =
     match i.platform with
-    | Linux -> check_path "bactrian_exe" i.bactrian_exe
+    | Linux ->
+        let* () = check_path "bactrian_exe" i.bactrian_exe in
+        check_all check_path (labelled "preload" (Option.to_list i.preload))
     | Macos ->
         let* () = check_text "tag" i.tag in
         if String.equal i.tag "" then Error Empty_tag else Ok ()
@@ -311,8 +314,10 @@ let bwrap_of ~exists i =
   @ [ "--unshare-pid"; "--unshare-ipc"; "--ro-bind"; "/"; "/" ]
   @ [ "--dev"; "/dev"; "--proc"; "/proc"; "--tmpfs"; "/tmp" ]
   @ [ "--tmpfs"; "/dev/shm"; "--tmpfs"; "/run" ]
-  (* The executable may live under one of the fresh tmpfs mounts. *)
+  (* The executable and the preloaded library may live under one of the fresh
+     tmpfs mounts. *)
   @ mount_args (Ro i.bactrian_exe)
+  @ List.concat_map (fun p -> mount_args (Ro p)) (Option.to_list i.preload)
   @ List.concat_map mount_args binds
   @ List.concat_map mask (denies i)
   @ List.concat_map read_only (denies i)

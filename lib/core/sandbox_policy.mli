@@ -36,6 +36,11 @@ type input = {
   bactrian_exe : string;
       (** Absolute path of the bactrian executable, which Linux re-executes as
           [__sandbox-init] inside the sandbox. Unused on macOS. *)
+  preload : string option;
+      (** Absolute path, symbolic links resolved, of a library the agent's
+          [LD_PRELOAD] names. Linux binds it read-only like the executable, so
+          it is there even under a path the fresh tmpfs mounts hide. Unused on
+          macOS. *)
   tag : string;
       (** Text that Seatbelt appends to the system log line of every denial, so
           the caller can find the run's violations. Non-empty. Unused on Linux.
@@ -96,14 +101,14 @@ val generate : exists:(string -> kind) -> input -> (output, error) result
 
     Linux: [bwrap] with a new network, process and IPC namespace over a
     read-only copy of [/], fresh [/dev], [/proc], [/tmp], [/dev/shm] and [/run],
-    the bactrian executable read-only (it may live under one of those), then the
-    writable binds, the sockets read-only, and the {!deny_list} masks ([--tmpfs]
-    over a directory, [/dev/null] over a file), then each directory mask made
-    read-only with [--remount-ro] (a tmpfs is writable), then
-    [bactrian __sandbox-init PORT=SOCKET... -- AGENT...]. Mounts come in that
-    order because a later mount hides what an earlier one put at the same path.
-    The run's own directories are bound again after the [.bactrian/runs] mask
-    that hides the other runs. A deny-list path that [exists] reports [`Absent]
-    is left out, since there is nothing to hide, and so is an [allow_write] path
-    that is [`Absent], which leaves it read-only. [state_dir], [temp_dir] and
-    the sockets must exist when the command runs. *)
+    the bactrian executable and the [preload] library read-only (they may live
+    under one of those), then the writable binds, the sockets read-only, and the
+    {!deny_list} masks ([--tmpfs] over a directory, [/dev/null] over a file),
+    then each directory mask made read-only with [--remount-ro] (a tmpfs is
+    writable), then [bactrian __sandbox-init PORT=SOCKET... -- AGENT...]. Mounts
+    come in that order because a later mount hides what an earlier one put at
+    the same path. The run's own directories are bound again after the
+    [.bactrian/runs] mask that hides the other runs. A deny-list path that
+    [exists] reports [`Absent] is left out, since there is nothing to hide, and
+    so is an [allow_write] path that is [`Absent], which leaves it read-only.
+    [state_dir], [temp_dir] and the sockets must exist when the command runs. *)
