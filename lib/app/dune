@@ -1,0 +1,10 @@
+(library
+ (name bactrian_app)
+ (public_name bactrian.app)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  eio
+  eio.unix
+  mirage-crypto-rng.unix
+  yojson))
