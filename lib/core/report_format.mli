@@ -63,6 +63,15 @@ val undefined_text : Report_data.metric_row -> string option
 (** For an undefined metric, one sentence naming it, saying whether it counts as
     inconclusive in the gate, and why it is undefined. *)
 
+val zero_width_text : Report_data.metric_row -> string option
+(** For a cost, latency or tokens interval of zero width, one sentence saying
+    that every resample gave the same value, which is certain only if the values
+    are deterministic. *)
+
+val notes : Report_data.metric_row -> string list
+(** {!undefined_text}, {!zero_width_text} and {!extra_repeats_text}, those that
+    apply, in that order. *)
+
 val extra_repeats_text : Report_data.metric_row -> string option
 (** For an inconclusive gate metric, one sentence on the extra repeats that
     would resolve it, naming the metric. *)

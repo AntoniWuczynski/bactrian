@@ -225,6 +225,32 @@ let test_undefined () =
       Alcotest.(check string)
         "threshold kept" "20.0% dearer, 16.7% cheaper" threshold
 
+let test_zero_width () =
+  (* The fixture's token counts are tied within every scenario and arm, so
+     every resample gives the same ratio. *)
+  let settings =
+    {
+      (Fixture.settings ()) with
+      report_metrics = [ (Cost, 0.2); (Tokens, 0.2) ];
+    }
+  in
+  match Compare.run settings with
+  | Error m -> Alcotest.fail m
+  | Ok result ->
+      let t =
+        R.build ~experiment_id:"x" ~experiment:"x" ~settings ~result
+          Fixture.runs
+      in
+      let row name =
+        List.find (fun (m : R.metric_row) -> m.name = name) t.metrics
+      in
+      Alcotest.(check bool)
+        "tokens noted" true
+        (Option.is_some (Report_format.zero_width_text (row "tokens")));
+      Alcotest.(check bool)
+        "cost not" true
+        (Option.is_none (Report_format.zero_width_text (row "cost")))
+
 let test_arms () =
   Alcotest.(check (list (pair string string)))
     "every scenario, baseline then candidate"
@@ -422,6 +448,7 @@ let () =
           Alcotest.test_case "extra repeats" `Quick test_extra_repeats;
           Alcotest.test_case "per scenario and variant" `Quick test_arms;
           Alcotest.test_case "undefined metric" `Quick test_undefined;
+          Alcotest.test_case "zero-width interval" `Quick test_zero_width;
         ] );
       ( "json",
         [

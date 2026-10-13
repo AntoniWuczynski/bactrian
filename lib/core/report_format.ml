@@ -168,6 +168,25 @@ let extra_repeats_text (m : Report_data.metric_row) =
             name)
     m.extra_repeats
 
+let zero_width_text (m : Report_data.metric_row) =
+  let i = m.result.interval in
+  match m.result.metric with
+  | Pass_rate -> None
+  | Cost | Latency_p50 | Tokens ->
+      if Float.equal i.lower i.upper then
+        Some
+          (Printf.sprintf
+             "%s has an interval of zero width: every resample gave the same \
+              value, because the values are tied in every scenario. That is \
+              certain only if they are deterministic, as in a replay."
+             (metric m.result.metric))
+      else None
+
+let notes m =
+  List.filter_map
+    (fun f -> f m)
+    [ undefined_text; zero_width_text; extra_repeats_text ]
+
 let metric_texts (m : Report_data.metric_row) =
   let threshold = threshold_text m.result.metric m.delta in
   match (m.relative, Float.is_nan m.result.estimate) with

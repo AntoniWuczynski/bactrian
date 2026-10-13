@@ -86,12 +86,7 @@ let render_compare_text ~colour (d : D.t) =
                 verdict_text ~colour m.result.verdict;
               ])
             d.metrics));
-  List.iter
-    (fun m ->
-      List.iter
-        (fun f -> Option.iter (line "%s") (f m))
-        [ F.undefined_text; F.extra_repeats_text ])
-    d.metrics;
+  List.iter (fun m -> List.iter (line "%s") (F.notes m)) d.metrics;
   line "";
   Buffer.add_string b
     (table

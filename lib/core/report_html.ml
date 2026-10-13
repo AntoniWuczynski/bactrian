@@ -611,10 +611,7 @@ let page (d : D.t) =
              section "verdicts" "Verdicts"
                (verdict_table d
                 :: List.concat_map
-                     (fun m ->
-                       List.filter_map
-                         (fun f -> Option.map (para ~cls:[ "note" ]) (f m))
-                         [ F.undefined_text; F.extra_repeats_text ])
+                     (fun m -> List.map (para ~cls:[ "note" ]) (F.notes m))
                      d.metrics
                @ (missing_table d :: dropped_note d));
              forest_section d;
