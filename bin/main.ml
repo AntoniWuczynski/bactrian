@@ -126,6 +126,8 @@ let run_command ~json ~live ~sandbox
                   match
                     Interrupt.run (fun () ->
                         Result.bind (config store sandbox) (fun config ->
+                            Option.iter sandbox_warning
+                              (Sandbox.mcp_warning sandbox config.mcp);
                             Run.execute ~env ~proxy ~store ~ledger config))
                   with
                   | Error signal ->

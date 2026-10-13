@@ -94,6 +94,14 @@ val own_port : t -> bool
     network namespace reaches only its own forwarder, so the shared port's
     number serves. *)
 
+val mcp_warning : t -> Mcp_proxy.config list -> string option
+(** On macOS, where an agent can read the launch-time arguments and environment
+    of any process of the same user that is not an Apple platform binary
+    (decision 0010), the warning to print once when stdio servers that will be
+    started have arguments or [env]: they may hold credentials, and the agent
+    can read them. [None] elsewhere and for servers that only replay or block.
+*)
+
 type session = {
   argv : string list;  (** The agent's command, wrapped in the sandbox. *)
   env : (string * string) list;  (** Variables to add to the agent's. *)

@@ -314,6 +314,42 @@ let test_linked_credentials =
                "s3cret"))
         paths
 
+(* On macOS the agent can read a stdio server's command line and environment,
+   so a server that has either is named in a warning. *)
+let test_mcp_warning =
+  sandboxed "sandbox-mcp-warning" @@ fun ctx ->
+  let sandbox = strict ctx in
+  let server ?(env = []) ?(policy = Mcp_proxy.Record) name argv :
+      Mcp_proxy.config =
+    { name; server = Stdio { argv; env; cwd = None }; policy }
+  in
+  let warning servers = Sandbox.mcp_warning sandbox servers in
+  Alcotest.(check (option string))
+    "a bare command" None
+    (warning [ server "plain" [ "server" ] ]);
+  Alcotest.(check (option string))
+    "unsandboxed" None
+    (Sandbox.mcp_warning Sandbox.off
+       [ server ~env:[ ("TOKEN", "t") ] "gh" [ "server" ] ]);
+  Alcotest.(check (option string))
+    "a server that only replays" None
+    (warning
+       [ server ~policy:Replay ~env:[ ("TOKEN", "t") ] "gh" [ "server" ] ]);
+  let named =
+    warning
+      [
+        server ~env:[ ("GITHUB_TOKEN", "t") ] "github" [ "server" ];
+        server "files" [ "server"; "--root"; "/data" ];
+      ]
+  in
+  if macos then
+    Alcotest.(check bool)
+      "names both servers" true
+      (match named with
+      | Some m -> contains m "servers github, files"
+      | None -> false)
+  else Alcotest.(check (option string)) "Linux" None named
+
 (* The preload reaches the agent through bubblewrap and the forwarder, and
    faking the forwarder's clock harms nothing (design §5 step 2). *)
 let test_clock =
@@ -638,6 +674,8 @@ let () =
             test_escapes_fail;
           Alcotest.test_case "linked credential paths are denied" `Slow
             test_linked_credentials;
+          Alcotest.test_case "MCP servers readable by the agent" `Slow
+            test_mcp_warning;
           Alcotest.test_case "SIGINT ends a sandboxed replay" `Slow
             test_interrupt;
           Alcotest.test_case "the clock reaches the sandboxed agent" `Slow

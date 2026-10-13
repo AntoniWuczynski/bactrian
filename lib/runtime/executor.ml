@@ -464,6 +464,11 @@ let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
   in
   { name; server; policy = s.policy }
 
+let mcp_configs ~fs (l : loaded) =
+  if List.mem `Mcp l.experiment.intercept then
+    List.map (mcp_config ~fs l) l.experiment.mcp
+  else []
+
 let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
     (variant : Experiment.variant) : Run.config =
   {
@@ -493,10 +498,7 @@ let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
     unenforced = Experiment.unenforced l.experiment;
     turn_timeout = l.turn_timeout;
     total_timeout = l.total_timeout;
-    mcp =
-      (if List.mem `Mcp l.experiment.intercept then
-         List.map (mcp_config ~fs l) l.experiment.mcp
-       else []);
+    mcp = mcp_configs ~fs l;
     sandbox;
     faketime = l.experiment.faketime;
   }
@@ -623,6 +625,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
              })
   in
   on_sandbox (Sandbox.label sandbox);
+  Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
   let* jobs =
     List.mapi
       (fun i (p : planned) ->

@@ -487,6 +487,34 @@ let own_port = function
   | Sandboxed { host = { engine = Bubblewrap _; _ }; _ } | Unsandboxed _ ->
       false
 
+let mcp_warning t (servers : Mcp_proxy.config list) =
+  let exposed =
+    List.filter_map
+      (fun (c : Mcp_proxy.config) ->
+        match (c.server, c.policy) with
+        | Stdio { argv = _ :: _ :: _; _ }, (Record | Passthrough)
+        | Stdio { env = _ :: _; _ }, (Record | Passthrough) ->
+            Some c.name
+        | Stdio _, (Record | Passthrough | Replay | Block)
+        | Http _, (Record | Passthrough | Replay | Block) ->
+            None)
+      servers
+  in
+  match (t, exposed) with
+  | Sandboxed { host = { engine = Seatbelt; _ }; _ }, _ :: _ ->
+      Some
+        (Printf.sprintf
+           "the sandboxed agent can read the command line and environment \
+            of             the MCP stdio server%s %s, as it can any process of \
+            this user that             is not an Apple binary: give them no \
+            credential you would not give             the agent, or run \
+            bactrian as a separate user or in a virtual             machine"
+           (match exposed with [ _ ] -> "" | _ -> "s")
+           (String.concat ", " exposed))
+  | Sandboxed { host = { engine = Seatbelt | Bubblewrap _; _ }; _ }, _
+  | Unsandboxed _, _ ->
+      None
+
 (* A deny-list mask is applied after the library is bound, so a library under
    one is hidden again. Only bubblewrap binds the library at all. *)
 let preload_hidden t library =
