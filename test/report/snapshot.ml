@@ -114,7 +114,7 @@ let experiment_file dir =
      seed: 7\n\
      compare:\n\
     \  baseline: a\n\
-    \  thresholds: { pass_rate: 0 }\n"
+    \  thresholds: { pass_rate: 0.05 }\n"
 
 (* [b-fails]: every run of variant b fails. [clean]: nothing is missing. *)
 let transform mode (r : R.run) : R.run =

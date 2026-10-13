@@ -5,6 +5,7 @@ type assumption = {
   between_sd : float option;
   population : [ `Suite | `Scenarios ];
   confidence : float;
+  gate_metrics : int;
   power : float;
   max_repeats : int;
   seed : int;
@@ -32,7 +33,9 @@ type setup = {
   target : target;
   threshold : float;
   population : [ `Suite | `Scenarios ];
-  confidence : float;
+  level : float;
+      (* the level the pass-rate interval is computed at, Bonferroni-adjusted
+         for the gate family *)
   seed : int;
   simulations : int;
 }
@@ -117,7 +120,9 @@ let one_simulation setup ~stream ~n ~index =
       baseline = baseline_name;
       candidate = candidate_name;
       population = setup.population;
-      confidence = setup.confidence;
+      (* A gate family of one leaves the level as given, so the simulated
+         comparison runs the pass rate at the real gate's level. *)
+      confidence = setup.level;
       gate = [ (Pass_rate, setup.threshold) ];
       report_metrics = [];
       seed = Random.State.bits rng;
@@ -192,6 +197,9 @@ let setup_of_assumption (a : assumption) =
   | [] -> invalid_arg "Plan_sim: no baseline rates"
   | _ :: _ -> ());
   check_positive "simulations" a.simulations;
+  check_positive "gate_metrics" a.gate_metrics;
+  if not (a.threshold > 0. && a.threshold < 1.) then
+    invalid_arg "Plan_sim: threshold outside (0, 1)";
   {
     scenarios =
       List.map
@@ -204,10 +212,17 @@ let setup_of_assumption (a : assumption) =
     target = classify ~threshold:a.threshold a.true_effect;
     threshold = a.threshold;
     population = a.population;
-    confidence = a.confidence;
+    level =
+      Stats.bonferroni_level ~confidence:a.confidence ~family:a.gate_metrics;
     seed = a.seed;
     simulations = a.simulations;
   }
+
+let target (a : assumption) : Compare.verdict =
+  match classify ~threshold:a.threshold a.true_effect with
+  | Want_regression -> Regression
+  | Want_improvement -> Improvement
+  | Want_no_change -> No_change
 
 let plan (a : assumption) =
   check_positive "max_repeats" a.max_repeats;
@@ -247,7 +262,7 @@ let tally (input : Compare.input) variant =
 
 let ratio (s, t) = float_of_int s /. float_of_int t
 
-let observed_setup (input : Compare.input) ~threshold =
+let observed_setup (input : Compare.input) ~threshold ~level =
   let base = tally input input.baseline
   and cand = tally input input.candidate in
   let scenarios =
@@ -274,26 +289,36 @@ let observed_setup (input : Compare.input) ~threshold =
       target = classify ~threshold mean_drop;
       threshold;
       population = input.population;
-      confidence = input.confidence;
+      level;
       seed = input.seed;
       simulations = extra_simulations;
     } )
 
 let extra_runs_needed (input : Compare.input) ~metric =
-  let threshold =
+  let declared l =
     List.find_map
       (fun (m, t) -> if metric_equal m metric then Some t else None)
-      (input.gate @ input.report_metrics)
+      l
+  in
+  (* The level [Compare] judges the metric at: Bonferroni across the gate
+     family for a gate metric, the confidence itself otherwise. *)
+  let threshold, level =
+    match declared input.gate with
+    | Some t ->
+        ( Some t,
+          Stats.bonferroni_level ~confidence:input.confidence
+            ~family:(List.length input.gate) )
+    | None -> (declared input.report_metrics, input.confidence)
   in
   match (metric, threshold, Compare.run input) with
-  | (Cost | Latency_p50 | Tokens), _, _ | _, None, _ | _, _, Error _ ->
-      `Cannot_resolve
+  | (Cost | Latency_p50 | Tokens), _, _ -> `Not_simulated
+  | Pass_rate, None, _ | Pass_rate, _, Error _ -> `Cannot_resolve
   | Pass_rate, Some threshold, Ok result -> (
       match pass_rate_verdict result with
       | None -> `Cannot_resolve
       | Some (Regression | Improvement | No_change) -> `Repeats 0
       | Some (Inconclusive _) -> (
-          match observed_setup input ~threshold with
+          match observed_setup input ~threshold ~level with
           | [], _, _ -> `Cannot_resolve
           | _, current, setup -> (
               match

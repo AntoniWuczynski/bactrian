@@ -52,6 +52,22 @@ setting.
   [64]
   $ ../snapshot.exe experiment .
 
+Plan takes the scenarios and baseline rates from an experiment's finished runs,
+of compare.baseline unless --variant names another.
+
+  $ bactrian plan --from $ID --threshold 0.1 --simulations 50 --json | grep -o '"baseline_rates":[^]]*]'
+  "baseline_rates":[{"scenario":"book","rate":0.8},{"scenario":"refund","rate":1.0},{"scenario":"search","rate":1.0}]
+  $ bactrian plan --from $ID --variant b --threshold 0.1 --simulations 50 --json | grep -o '"baseline_rates":[^]]*]'
+  "baseline_rates":[{"scenario":"book","rate":1.0},{"scenario":"refund","rate":0.7},{"scenario":"search","rate":1.0}]
+  $ bactrian plan --from $ID --scenarios 3 --threshold 0.1
+  bactrian: --from gives the scenarios and their rates, so it takes no
+            --baseline-rate or --scenarios
+  [64]
+  $ bactrian plan --from $ID --variant zzz --threshold 0.1
+  bactrian: variant "zzz" has no finished runs in experiment
+            20261013T090000Z-0badc0de
+  [64]
+
 The terminal table. Without --gate the exit status is 0 whatever the verdict.
 
   $ bactrian compare $ID --baseline a --candidate b
@@ -61,7 +77,7 @@ The terminal table. Without --gate the exit status is 0 whatever the verdict.
   gate: pass_rate (level 0.9500 per interval)
   
   metric     gate  estimate  interval              level   threshold  verdict
-  Pass rate  yes   -3.3 pp   -20.4 pp to +12.8 pp  0.9500  ±0.0 pp   Inconclusive, leans worse
+  Pass rate  yes   -3.3 pp   -20.4 pp to +12.8 pp  0.9500  ±5.0 pp   Inconclusive, leans worse
   
   scenario  baseline  candidate  difference  interval              verdict
   book      8/10      8/8        +20.0 pp    -24.5 pp to +57.4 pp  Inconclusive, leans better

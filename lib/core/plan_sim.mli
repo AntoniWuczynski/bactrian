@@ -19,13 +19,18 @@ type assumption = {
       (** True drop in pass rate (positive means the candidate is worse). The
           candidate rate of a scenario is [baseline - true_effect], clamped to
           [0, 1]. *)
-  threshold : float;  (** The regression threshold δ, as given to {!Compare}. *)
+  threshold : float;
+      (** The regression threshold δ, as given to {!Compare}, in [(0, 1)]. *)
   between_sd : float option;
       (** Under [`Scenarios], the standard deviation of the per-scenario true
           effect around [true_effect], drawn afresh in every simulation. Ignored
           under [`Suite]. *)
   population : [ `Suite | `Scenarios ];
   confidence : float;
+  gate_metrics : int;
+      (** The number of metrics in the experiment's gate, at least 1. The pass
+          rate is simulated at the Bonferroni level
+          [1 - (1 - confidence) / gate_metrics], as {!Compare} judges it. *)
   power : float;  (** Required probability of the correct verdict. *)
   max_repeats : int;
       (** Largest repeat count per scenario and variant tried. *)
@@ -50,9 +55,14 @@ val plan : assumption -> answer
     [Improvement] when [true_effect <= -threshold] and [No_change] otherwise.
     The repeat count is searched by doubling, then bisection.
 
-    Raises [Invalid_argument] if [baseline_rates] is empty, [max_repeats] or
-    [simulations] is below 1, or {!Compare.val-run} rejects the simulated input
-    (for example [`Scenarios] with fewer than 10 scenarios). *)
+    Raises [Invalid_argument] if [baseline_rates] is empty, [max_repeats],
+    [simulations] or [gate_metrics] is below 1, [threshold] is outside [(0, 1)],
+    or {!Compare.val-run} rejects the simulated input (for example [`Scenarios]
+    with fewer than 10 scenarios). *)
+
+val target : assumption -> Compare.verdict
+(** The verdict {!plan} counts as correct: [Regression], [Improvement] or
+    [No_change], as described there. *)
 
 val power_at : assumption -> repeats:int -> float
 (** Simulated probability of the correct verdict at one repeat count ([power]
@@ -60,15 +70,19 @@ val power_at : assumption -> repeats:int -> float
     {!plan}'s [achieved_power]. Same exceptions as {!plan}. *)
 
 val extra_runs_needed :
-  Compare.input -> metric:Compare.metric -> [ `Repeats of int | `Cannot_resolve ]
+  Compare.input ->
+  metric:Compare.metric ->
+  [ `Repeats of int | `Cannot_resolve | `Not_simulated ]
 (** Extra repeats per scenario and variant that would resolve the metric's
     verdict, simulating with the observed per-scenario pass rates of both arms
-    as the truth (power 0.8, 200 simulations, at most 2,000 repeats in total).
-    [`Repeats 0] when the verdict is already conclusive. An expensive answer is
-    still an answer: [`Repeats] can be in the hundreds or thousands.
-    [`Cannot_resolve] only when even 2,000 repeats do not reach the power (for
-    example an estimate sitting on the threshold), when the comparison itself
-    fails, or for metrics other than [Pass_rate], which the simulator does not
-    model. Under [`Scenarios] each simulated experiment runs the hierarchical
-    bootstrap over every run, so a search that reaches thousands of repeats is
-    slow. *)
+    as the truth (power 0.8, 200 simulations, at most 2,000 repeats in total),
+    at the level {!Compare} judges the metric at: Bonferroni across the whole
+    gate family for a gate metric. [`Repeats 0] when the verdict is already
+    conclusive. An expensive answer is still an answer: [`Repeats] can be in the
+    hundreds or thousands. [`Cannot_resolve] only when even 2,000 repeats do not
+    reach the power (for example an estimate sitting on the threshold), when the
+    metric has no threshold, or when the comparison itself fails.
+    [`Not_simulated] for metrics other than [Pass_rate], which the simulator
+    does not model. Under [`Scenarios] each simulated experiment runs the
+    hierarchical bootstrap over every run, so a search that reaches thousands of
+    repeats is slow. *)

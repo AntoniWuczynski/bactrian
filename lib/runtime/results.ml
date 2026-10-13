@@ -19,7 +19,7 @@ let pp_error ppf = function
   | Bad_run { run_id; file; reason } ->
       Format.fprintf ppf "run %s: %s: %s" run_id file reason
   | Bad_experiment errors ->
-      Format.pp_print_list
+      Format.pp_print_list ~pp_sep:Format.pp_force_newline
         (fun ppf e -> Format.pp_print_string ppf (Config_loader.located_line e))
         ppf errors
 

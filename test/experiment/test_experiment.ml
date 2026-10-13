@@ -235,6 +235,17 @@ let test_reserved_env () =
        (doc ~variants:{|"variants": [{"name": "a", "env": {"SIM_NOW": "x"}}]|}
           ""))
 
+let test_thresholds_in_range () =
+  Alcotest.check strings "zero and too large"
+    [ "compare.thresholds.cost"; "compare.thresholds.pass_rate" ]
+    (paths
+       (doc
+          {|, "compare": {"baseline": "a", "thresholds": {"pass_rate": 1, "cost": 0}}|}));
+  Alcotest.check strings "zero pass rate"
+    [ "compare.thresholds.pass_rate" ]
+    (paths
+       (doc {|, "compare": {"baseline": "a", "thresholds": {"pass_rate": 0}}|}))
+
 (* A bad baseline is reported together with the other errors. *)
 let test_baseline_with_other_errors () =
   Alcotest.check strings "both reported"
@@ -271,6 +282,8 @@ let () =
             test_reserved_env;
           Alcotest.test_case "baseline with other errors" `Quick
             test_baseline_with_other_errors;
+          Alcotest.test_case "thresholds in range" `Quick
+            test_thresholds_in_range;
           case "unknown nested field" [ "agent.extra" ]
             (doc
                ~agent:
