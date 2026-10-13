@@ -273,6 +273,25 @@ let test_sandbox_forms () =
   | [ { path = "sandbox.network"; message = "unknown field" } ] -> ()
   | es -> Alcotest.failf "got %a" pp_errors es
 
+let http_agent =
+  {|"agent": {"protocol": "http", "url": "http://127.0.0.1:3000/chat", "namespace_header": "x-ns"}|}
+
+let test_unenforced_http () =
+  let names t =
+    List.map
+      (fun w -> List.hd (String.split_on_char ':' w))
+      (Experiment.unenforced t)
+  in
+  Alcotest.check strings "an http agent is not isolated"
+    [ "agent"; "egress"; "clock" ]
+    (names (decoded (doc ~agent:http_agent "")));
+  Alcotest.check strings "the warning stays when everything else is off"
+    [ "agent" ]
+    (names
+       (decoded
+          (doc ~agent:http_agent
+             {|, "sandbox": "off", "intercept": ["model"], "clock": {"faketime": "off"}|})))
+
 (* A variant cannot set a variable bactrian sets itself. *)
 let test_reserved_env () =
   let reserved = Experiment.reserved_env in
@@ -376,6 +395,8 @@ let () =
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
           Alcotest.test_case "sandbox forms" `Quick test_sandbox_forms;
+          Alcotest.test_case "unenforced settings, http agent" `Quick
+            test_unenforced_http;
         ] );
       ( "errors",
         [
@@ -490,6 +511,16 @@ let () =
           case "http agent missing fields"
             [ "agent.namespace_header"; "agent.url" ]
             (doc ~agent:{|"agent": {"protocol": "http"}|} "");
+          case "http agent url must be http" [ "agent.url" ]
+            (doc
+               ~agent:
+                 {|"agent": {"protocol": "http", "url": "ws://x", "namespace_header": "n"}|}
+               "");
+          case "sandbox strict cannot be met by an http agent" [ "sandbox" ]
+            (doc ~agent:http_agent {|, "sandbox": "strict"|});
+          case "sandbox strict, as a mapping, neither" [ "sandbox" ]
+            (doc ~agent:http_agent
+               {|, "sandbox": {"mode": "strict", "deny_read": ["k"]}|});
           case "invalid regex"
             [ "normalise[1]"; "redact[0]" ]
             (doc {|, "normalise": ["ok", "(unclosed"], "redact": ["[bad"]|});

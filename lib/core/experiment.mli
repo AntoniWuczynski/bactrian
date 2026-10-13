@@ -68,8 +68,10 @@ val decode : Canon.t -> (t, error list) result
     - [version: 1], [name], [scenarios] (non-empty list of globs)
     - [agent: {protocol: command | http, command, url, namespace_header,
        timeouts: {turn, total}, env_passthrough}]: [command] is required for
-      [command] and forbidden for [http], [url] and [namespace_header] the
-      reverse. Timeouts default to 120s per turn and 600s in total.
+      [command] and forbidden for [http], [url] (an [http://] or [https://] URL)
+      and [namespace_header] the reverse. Timeouts default to 120s per turn and
+      600s in total. [sandbox: strict] with [http] is an error at [sandbox]:
+      bactrian does not start the agent.
     - [variants]: a mapping [name: {env: {K: V}}], or a list of [{name, env}]
       (where duplicate names are possible and an error).
     - [repeats] (default 1), [concurrency] (default 1), [seed] (default 0)
@@ -132,6 +134,7 @@ val policy_of_name : string -> policy option
 
 val unenforced : t -> string list
 (** One line per setting this build accepts but does not enforce (egress and
-    faketime, and [mcp] servers when [intercept] leaves out [mcp]), each
-    starting with the setting's name and a colon. The sandbox is enforced, and a
-    run it could not cover is labelled instead (design §5.3). *)
+    faketime, [mcp] servers when [intercept] leaves out [mcp], and the isolation
+    of an [http] agent), each starting with the setting's name and a colon. The
+    sandbox is enforced, and a run it could not cover is labelled instead
+    (design §5.3). *)

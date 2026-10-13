@@ -11,6 +11,14 @@ type config = {
   kill_grace : float;
 }
 
+type http_config = {
+  url : Uri.t;
+  namespace_header : string;
+  run_id : string;
+  turn_timeout : float;
+  total_timeout : float;
+}
+
 type error =
   | Spawn_failed of string
   | Write_failed of string
@@ -19,8 +27,20 @@ type error =
   | Turn_timeout
   | Total_timeout
   | Agent_exited of Eio.Process.exit_status option
+  | Http_error of string
+  | Http_status of { status : int; body : string }
+  | No_message
 
-type t = {
+type http = {
+  net : [ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t;
+  http_clock : float Eio.Time.clock_ty Eio.Resource.t;
+  connector : Upstream.connector;
+  http_config : http_config;
+  http_deadline : float;
+  pending : Agent_protocol.from_agent Queue.t;
+}
+
+type process = {
   proc : [ `Generic | `Unix ] Eio.Process.ty Eio.Resource.t;
   stdin : [ Eio.Flow.sink_ty | Eio.Resource.close_ty ] Eio.Resource.t;
   stdout : Eio.Buf_read.t;
@@ -31,10 +51,19 @@ type t = {
       (** The run is being stopped, not finished: no exit grace. *)
 }
 
-let max_line = 1 lsl 20
-let pid t = Eio.Process.pid t.proc
+type t = Process of process | Http of http
 
-let send t msg =
+let max_line = 1 lsl 20
+let max_error_body = 2048
+
+(* How long one step may take, and the error when that runs out. *)
+let step_limit ~clock ~deadline ~turn_timeout =
+  let remaining = deadline -. Eio.Time.now clock in
+  if remaining <= 0. then Error Total_timeout
+  else if turn_timeout <= remaining then Ok (turn_timeout, Turn_timeout)
+  else Ok (remaining, Total_timeout)
+
+let send_process t msg =
   let line = Agent_protocol.encode msg in
   let line = if String.ends_with ~suffix:"\n" line then line else line ^ "\n" in
   (* An agent that stops reading fills the pipe and blocks the write. *)
@@ -65,36 +94,38 @@ let read_line t =
   | exception Eio.Buf_read.Buffer_limit_exceeded -> Error Line_too_long
 
 let recv_message t =
-  let remaining = t.deadline -. Eio.Time.now t.clock in
-  if remaining <= 0. then Error Total_timeout
-  else
-    let limit, timeout_error =
-      if t.config.turn_timeout <= remaining then
-        (t.config.turn_timeout, Turn_timeout)
-      else (remaining, Total_timeout)
-    in
-    let read () = Result.map_error (fun e -> `Read e) (read_line t) in
-    match Eio.Time.with_timeout t.clock limit read with
-    | Error `Timeout -> Error timeout_error
-    | Error (`Read e) -> Error e
-    | Ok line -> (
-        match Agent_protocol.decode line with
-        | Ok msg -> Ok msg
-        | Error error -> Error (Protocol_violation { line; error }))
+  match
+    step_limit ~clock:t.clock ~deadline:t.deadline
+      ~turn_timeout:t.config.turn_timeout
+  with
+  | Error _ as e -> e
+  | Ok (limit, timeout_error) -> (
+      let read () = Result.map_error (fun e -> `Read e) (read_line t) in
+      match Eio.Time.with_timeout t.clock limit read with
+      | Error `Timeout -> Error timeout_error
+      | Error (`Read e) -> Error e
+      | Ok line -> (
+          match Agent_protocol.decode line with
+          | Ok msg -> Ok msg
+          | Error error -> Error (Protocol_violation { line; error })))
 
-let recv t =
+let recv_process t =
   let result = recv_message t in
   (match result with
   | Error (Turn_timeout | Total_timeout | Protocol_violation _ | Line_too_long)
     ->
       t.aborted <- true
-  | Error (Spawn_failed _ | Write_failed _ | Agent_exited _) | Ok _ -> ());
+  | Error
+      ( Spawn_failed _ | Write_failed _ | Agent_exited _ | Http_error _
+      | Http_status _ | No_message )
+  | Ok _ ->
+      ());
   result
 
 let shutdown t =
   Eio.Cancel.protect @@ fun () ->
   Eio.Resource.close t.stdin;
-  let pgid = pid t in
+  let pgid = Eio.Process.pid t.proc in
   let exit_grace = if t.aborted then 0. else t.config.exit_grace in
   let status =
     match status_within t exit_grace with
@@ -179,8 +210,93 @@ let with_agent ?(fds = []) ~process_mgr ~clock config f =
         }
       in
       let result =
-        Eio.Promise.await (Eio.Fiber.fork_promise ~sw:caller_sw (fun () -> f t))
+        Eio.Promise.await
+          (Eio.Fiber.fork_promise ~sw:caller_sw (fun () -> f (Process t)))
       in
       if Result.is_error result then t.aborted <- true;
       let status = shutdown t in
       match result with Ok v -> Ok (v, status) | Error e -> raise e)
+
+let clip body =
+  if String.length body <= max_error_body then body
+  else String.sub body 0 max_error_body
+
+let describe_upstream : Upstream.error -> error option = function
+  | Timed_out -> None
+  | Connect_failed reason -> Some (Http_error ("agent unreachable: " ^ reason))
+  | Failed_after_send reason ->
+      Some
+        (Http_error ("connection failed after the request was sent: " ^ reason))
+  | Truncated { bytes; reason } ->
+      Some
+        (Http_error
+           (Printf.sprintf "response cut off after %d bytes: %s" bytes reason))
+
+let ( let* ) = Result.bind
+
+let send_http (h : http) msg =
+  let* limit, timeout_error =
+    step_limit ~clock:h.http_clock ~deadline:h.http_deadline
+      ~turn_timeout:h.http_config.turn_timeout
+  in
+  let status = ref 0 and body = Buffer.create 256 in
+  let id = h.http_config.run_id in
+  let request : Upstream.request =
+    {
+      meth = "POST";
+      url = h.http_config.url;
+      headers =
+        [
+          ("Content-Type", "application/json");
+          ("X-Bactrian-Run", id);
+          (h.http_config.namespace_header, id);
+        ];
+      body = Agent_protocol.encode msg;
+    }
+  in
+  let called =
+    Eio.Switch.run @@ fun sw ->
+    Upstream.call ~sw ~net:h.net ~clock:h.http_clock ~timeout:limit h.connector
+      request
+      ~on_head:(fun head -> status := head.status)
+      ~on_chunk:(fun ~dt_ms:_ chunk -> Buffer.add_string body chunk)
+  in
+  let* () =
+    Result.map_error
+      (fun e -> Option.value (describe_upstream e) ~default:timeout_error)
+      called
+  in
+  let body = Buffer.contents body in
+  if !status < 200 || !status > 299 then
+    Error (Http_status { status = !status; body = clip body })
+  else
+    match Agent_protocol.decode_array body with
+    | Error error -> Error (Protocol_violation { line = clip body; error })
+    | Ok messages ->
+        List.iter (fun m -> Queue.add m h.pending) messages;
+        Ok ()
+
+let recv_http (h : http) =
+  match Queue.take_opt h.pending with
+  | Some m -> Ok m
+  | None -> Error No_message
+
+let pid = function Process p -> Some (Eio.Process.pid p.proc) | Http _ -> None
+
+let send t msg =
+  match t with Process p -> send_process p msg | Http h -> send_http h msg
+
+let recv = function Process p -> recv_process p | Http h -> recv_http h
+
+let with_http_agent ~net ~clock ?(connector = Upstream.plain) config f =
+  let clock = (clock :> float Eio.Time.clock_ty Eio.Resource.t) in
+  f
+    (Http
+       {
+         net :> [ `Generic | `Unix ] Eio.Net.ty Eio.Resource.t;
+         http_clock = clock;
+         connector;
+         http_config = config;
+         http_deadline = Eio.Time.now clock +. config.total_timeout;
+         pending = Queue.create ();
+       })

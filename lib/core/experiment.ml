@@ -81,6 +81,12 @@ let policy_of_name name =
 
 let policy = enum ~what:"policy" policies
 
+let valid_url url =
+  let after prefix =
+    String.starts_with ~prefix url && String.length url > String.length prefix
+  in
+  after "http://" || after "https://"
+
 let timeouts ~path c =
   object_ ~path c (fun r ->
       let+ turn = default r "turn" 120.0 duration
@@ -95,6 +101,11 @@ let forbidden r key ~protocol =
         ~path:(field_path (path r) key)
         (Printf.sprintf "not allowed with protocol %s" protocol)
   | Error e -> Error e
+
+let agent_url ~path c =
+  let* url = non_empty_string ~path c in
+  if valid_url url then Ok url
+  else fail ~path "expected an http:// or https:// URL"
 
 let agent ~path c =
   object_ ~path c (fun r ->
@@ -118,7 +129,7 @@ let agent ~path c =
           and+ (turn_timeout, total_timeout), env = common in
           (Command { argv; turn_timeout; total_timeout }, env)
       | Ok `Http ->
-          let+ url = required r "url" non_empty_string
+          let+ url = required r "url" agent_url
           and+ namespace_header = required r "namespace_header" non_empty_string
           and+ () = forbidden r "command" ~protocol:"http"
           and+ (turn_timeout, total_timeout), env = common in
@@ -137,15 +148,11 @@ let mcp_policy ~path c =
          or passthrough"
   | Record | Passthrough | Block -> Ok p
 
-let valid_mcp_url url =
-  let after prefix =
-    String.starts_with ~prefix url && String.length url > String.length prefix
-  in
-  after "http://" || after "https://"
+let valid_mcp_url = valid_url
 
 let mcp_url ~path c =
   let* url = non_empty_string ~path c in
-  if valid_mcp_url url then Ok url
+  if valid_url url then Ok url
   else fail ~path "expected an http:// or https:// URL"
 
 let mcp_server ~path c =
@@ -437,24 +444,42 @@ let baseline_exists (variants : variant list) = function
              (String.concat ", "
                 (List.map (fun (v : variant) -> v.name) variants)))
 
+(* bactrian does not start an HTTP agent, so it cannot put it in a sandbox. *)
+let http_agent_unsandboxed agent_r sandbox_r =
+  match (agent_r, sandbox_r) with
+  | Ok (Http _, _), Ok (`Strict, _, _) ->
+      fail ~path:"sandbox"
+        "strict cannot be met with agent.protocol http: bactrian does not \
+         start the agent, so it cannot sandbox it (use auto or off)"
+  | Ok (Command _, _), Ok ((`Auto | `Strict | `Off), _, _)
+  | Ok (Http _, _), Ok ((`Auto | `Off), _, _)
+  | Error _, _
+  | Ok _, Error _ ->
+      Ok ()
+
 let decode c =
   object_ ~path:"" c (fun r ->
       let variants_r = required r "variants" variants in
       let compare = optional r "compare" compare_block in
       (* Checks that need two decoded parts run beside the others, so their
          errors come out in the same round. *)
+      let agent_r = required r "agent" agent in
+      let sandbox_r = default r "sandbox" (`Auto, [], []) sandbox in
       let cross_checks =
-        match (variants_r, compare) with
-        | Ok (vs, mapping_form), Ok cmp ->
-            let+ () = baseline_exists vs cmp
-            and+ () = env_not_reserved ~mapping_form vs in
-            ()
-        | Ok (vs, mapping_form), Error _ -> env_not_reserved ~mapping_form vs
-        | Error _, (Ok _ | Error _) -> Ok ()
+        let+ () =
+          match (variants_r, compare) with
+          | Ok (vs, mapping_form), Ok cmp ->
+              let+ () = baseline_exists vs cmp
+              and+ () = env_not_reserved ~mapping_form vs in
+              ()
+          | Ok (vs, mapping_form), Error _ -> env_not_reserved ~mapping_form vs
+          | Error _, (Ok _ | Error _) -> Ok ()
+        and+ () = http_agent_unsandboxed agent_r sandbox_r in
+        ()
       in
       let+ _version = required r "version" (version 1)
       and+ name = required r "name" non_empty_string
-      and+ agent, env_passthrough = required r "agent" agent
+      and+ agent, env_passthrough = agent_r
       and+ scenarios = required r "scenarios" (non_empty_list non_empty_string)
       and+ variants, _ = variants_r
       and+ repeats = default r "repeats" 1 (int_at_least 1)
@@ -465,8 +490,7 @@ let decode c =
       and+ mcp = default r "mcp" [] mcp_servers
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
-      and+ sandbox, sandbox_allow_write, sandbox_deny_read =
-        default r "sandbox" (`Auto, [], []) sandbox
+      and+ sandbox, sandbox_allow_write, sandbox_deny_read = sandbox_r
       and+ faketime = default r "clock" true clock
       and+ caps_usd = default r "caps_usd" [] caps_usd
       and+ pricing = optional r "pricing" non_empty_string
@@ -500,6 +524,13 @@ let decode c =
 let unenforced t =
   List.concat
     [
+      (match t.agent with
+      | Http _ ->
+          [
+            "agent: protocol http, so the runs are unsandboxed and bactrian \
+             cannot reset the server between them";
+          ]
+      | Command _ -> []);
       (if List.mem `Egress t.intercept then
          [
            "egress: the agent's network access is neither blocked nor recorded";

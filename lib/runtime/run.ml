@@ -34,8 +34,12 @@ type checks = {
   checker_timeout : float;
 }
 
+type agent =
+  | Command of string list
+  | Http of { url : string; namespace_header : string }
+
 type config = {
-  agent : string list;
+  agent : agent;
   cwd : string;
   turns : string list;
   scenario : string;
@@ -135,6 +139,10 @@ let describe_driver_error : D.error -> string = function
   | Agent_exited (Some st) ->
       "protocol_violation: stdout closed before the final reply ("
       ^ describe_exit st ^ ")"
+  | Http_error s -> "agent_http_error: " ^ s
+  | Http_status { status; body } ->
+      Printf.sprintf "agent_http_error: status %d: %s" status body
+  | No_message -> "protocol_violation: the response ended before the reply"
 
 let describe_refusal : Ledger.refusal -> string = function
   | Cap_reached { provider; cap; spent; requested } ->
@@ -243,7 +251,8 @@ let base_env =
 
 (* The agent's home and caches are its state directory, and its temporary files
    go to the run's temporary directory, sandboxed or not, so the environment
-   is the same either way (design §5 step 2). *)
+   is the same either way (design §5 step 2). They belong to the agent's own
+   process, so an HTTP-mode agent is not sent them (design §5.1). *)
 let home_env ~state_dir ~temp_dir =
   let under = Filename.concat state_dir in
   [
@@ -256,7 +265,14 @@ let home_env ~state_dir ~temp_dir =
     ("PYTHONDONTWRITEBYTECODE", "1");
   ]
 
-let build_env config ~proxy ~token ~run_id ~state_dir ~temp_dir ~sim_now =
+(* Later entries win. *)
+let merge vars =
+  List.fold_left (fun acc (k, v) -> (k, v) :: List.remove_assoc k acc) [] vars
+
+(* What bactrian sets for one run (design §5 step 2), with the variant's own
+   variables. A command agent gets them as its environment and an HTTP agent in
+   the [env] of its [start] message (design §5.1), so the two cannot differ. *)
+let run_variables config ~proxy ~token ~run_id ~state_dir ~sim_now =
   let ours =
     [
       ("SIM_NOW", sim_now);
@@ -264,7 +280,6 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~temp_dir ~sim_now =
       ("BACTRIAN_RUN_ID", run_id);
       ("BACTRIAN_STATE_DIR", state_dir);
     ]
-    @ home_env ~state_dir ~temp_dir
     @ List.concat_map
         (fun (p, _, url_var) ->
           [
@@ -285,17 +300,17 @@ let build_env config ~proxy ~token ~run_id ~state_dir ~temp_dir ~sim_now =
           | Stdio _ -> None)
         config.mcp
   in
+  (* Ours come last, so a variant cannot replace a placeholder key or a
+     bactrian variable. *)
+  merge (config.variant_env @ ours)
+
+let process_env config variables ~state_dir ~temp_dir =
   let passthrough =
     List.filter_map
       (fun k -> Option.map (fun v -> (k, v)) (Sys.getenv_opt k))
       config.env_passthrough
   in
-  (* Later entries win, so nothing the caller passes through can replace a
-     placeholder key or a bactrian variable. *)
-  List.fold_left
-    (fun acc (k, v) -> (k, v) :: List.remove_assoc k acc)
-    []
-    (base_env @ passthrough @ config.variant_env @ ours)
+  merge (base_env @ passthrough @ variables @ home_env ~state_dir ~temp_dir)
 
 (* The conversation *)
 
@@ -614,38 +629,11 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       };
     registered := true;
     Fun.protect ~finally:(fun () -> ignore (unregister ())) @@ fun () ->
-    let* sandboxed, sandbox_started =
-      Result.map_error
-        (fun m -> "sandbox: " ^ m)
-        (Sandbox.start ~sw config.sandbox
-           {
-             run_id;
-             run_dir = run_dir_path;
-             state_dir = state_dir_path;
-             temp_dir = temp_dir_path;
-             port = P.port proxy;
-             listen_unix =
-               (fun path ->
-                 P.listen_unix proxy ~sw ~net:(Eio.Stdenv.net env) ~token path);
-           }
-           config.agent)
+    let variables =
+      run_variables config ~proxy ~token ~run_id ~state_dir:state_dir_path
+        ~sim_now
     in
-    let driver_config : D.config =
-      {
-        argv = sandboxed.argv;
-        env =
-          build_env config ~proxy ~token ~run_id ~state_dir:state_dir_path
-            ~temp_dir:temp_dir_path ~sim_now
-          @ sandboxed.env;
-        cwd = Some Eio.Path.(Eio.Stdenv.fs env / config.cwd);
-        stderr_path = Eio.Path.(run_dir / "agent.stderr");
-        turn_timeout = config.turn_timeout;
-        total_timeout = config.total_timeout;
-        exit_grace;
-        kill_grace;
-      }
-    in
-    let start : Agent_protocol.to_agent =
+    let start env : Agent_protocol.to_agent =
       Start
         {
           run_id;
@@ -653,31 +641,88 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           variant = config.variant;
           sim_now;
           state_dir = state_dir_path;
+          env;
         }
     in
-    let session =
-      D.with_agent ~fds:sandboxed.fds ~process_mgr:(Eio.Stdenv.process_mgr env)
-        ~clock driver_config (fun d -> converse ~t_ms ~add d ~start turns)
-    in
-    let collected = Sandbox.collect ~env sandbox_started in
-    violations := Some collected;
-    (match collected with
-    | Collected vs ->
-        List.iter
-          (fun (v : Sandbox_log.violation) ->
-            add
-              (Trace_builder.Got_violation
-                 { t_ms = t_ms (); kind = v.kind; detail = v.detail }))
-          vs
-    | Not_collected _ -> ());
     let failure =
-      match session with
-      | Error e -> Some (describe_driver_error e)
-      | Ok (Error reason, _) -> Some reason
-      | Ok (Ok (), `Exited 0) -> None
-      | Ok (Ok (), ((`Exited _ | `Signaled _) as st)) ->
-          Some ("exit_nonzero: " ^ describe_exit st)
+      match config.agent with
+      | Command argv -> (
+          match
+            Result.map_error
+              (fun m -> "sandbox: " ^ m)
+              (Sandbox.start ~sw config.sandbox
+                 {
+                   run_id;
+                   run_dir = run_dir_path;
+                   state_dir = state_dir_path;
+                   temp_dir = temp_dir_path;
+                   port = P.port proxy;
+                   listen_unix =
+                     (fun path ->
+                       P.listen_unix proxy ~sw ~net:(Eio.Stdenv.net env) ~token
+                         path);
+                 }
+                 argv)
+          with
+          | Error reason -> Error reason
+          | Ok (sandboxed, sandbox_started) ->
+              let driver_config : D.config =
+                {
+                  argv = sandboxed.argv;
+                  env =
+                    process_env config variables ~state_dir:state_dir_path
+                      ~temp_dir:temp_dir_path
+                    @ sandboxed.env;
+                  cwd = Some Eio.Path.(Eio.Stdenv.fs env / config.cwd);
+                  stderr_path = Eio.Path.(run_dir / "agent.stderr");
+                  turn_timeout = config.turn_timeout;
+                  total_timeout = config.total_timeout;
+                  exit_grace;
+                  kill_grace;
+                }
+              in
+              let session =
+                D.with_agent ~fds:sandboxed.fds
+                  ~process_mgr:(Eio.Stdenv.process_mgr env) ~clock driver_config
+                  (fun d -> converse ~t_ms ~add d ~start:(start None) turns)
+              in
+              let collected = Sandbox.collect ~env sandbox_started in
+              violations := Some collected;
+              (match collected with
+              | Collected vs ->
+                  List.iter
+                    (fun (v : Sandbox_log.violation) ->
+                      add
+                        (Trace_builder.Got_violation
+                           { t_ms = t_ms (); kind = v.kind; detail = v.detail }))
+                    vs
+              | Not_collected _ -> ());
+              Ok
+                (match session with
+                | Error e -> Some (describe_driver_error e)
+                | Ok (Error reason, _) -> Some reason
+                | Ok (Ok (), `Exited 0) -> None
+                | Ok (Ok (), ((`Exited _ | `Signaled _) as st)) ->
+                    Some ("exit_nonzero: " ^ describe_exit st)))
+      | Http { url; namespace_header } -> (
+          let http_config : D.http_config =
+            {
+              url = Uri.of_string url;
+              namespace_header;
+              run_id;
+              turn_timeout = config.turn_timeout;
+              total_timeout = config.total_timeout;
+            }
+          in
+          match
+            D.with_http_agent ~net:(Eio.Stdenv.net env) ~clock ~connector
+              http_config (fun d ->
+                converse ~t_ms ~add d ~start:(start (Some variables)) turns)
+          with
+          | Error reason -> Ok (Some reason)
+          | Ok () -> Ok None)
     in
+    let* failure = failure in
     let findings = unregister () in
     Option.iter Store.close writer;
     Ok (failure, findings)

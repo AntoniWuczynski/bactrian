@@ -295,7 +295,7 @@ let build_config ~agent ~cwd ~turns ~scenario ~variant ~sim_now ~timezone
     ~replay ~env_passthrough ~turn_timeout ~total_timeout ~mcp ~sandbox :
     Run.config =
   {
-    agent;
+    agent = Command agent;
     cwd;
     turns;
     scenario;

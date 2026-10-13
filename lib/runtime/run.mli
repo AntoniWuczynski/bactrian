@@ -53,8 +53,18 @@ type checks = {
 }
 (** A scenario's assertions and checkers (design §6). *)
 
+type agent =
+  | Command of string list
+      (** argv: bactrian starts the agent and talks to it on its standard input
+          and output. *)
+  | Http of { url : string; namespace_header : string }
+      (** A server the user started (design §5.1): one POST per message. The
+          per-run environment travels in the [start] message ({!Agent_driver}).
+          bactrian does not start it, so its runs are unsandboxed with the
+          reason ["http mode"] ({!Sandbox.http_mode}). *)
+
 type config = {
-  agent : string list;  (** argv *)
+  agent : agent;
   cwd : string;
   turns : string list;
       (** In a replay, [[]] means the turns of the recording's [trace.jsonl]. *)
@@ -149,10 +159,13 @@ val execute :
     placeholder keys, SIM_NOW, TZ, BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP
     variables, HOME and the XDG and npm cache variables inside the state
     directory, TMPDIR, PYTHONDONTWRITEBYTECODE=1, PATH, LANG, TERM and the
-    passthrough list, and nothing else), starts the agent inside the sandbox
-    when [config.sandbox] says so, drives the turns, tears down, collects the
-    sandbox's violations, derives and writes trace.jsonl and meta.json
-    (atomically), and returns the outcome.
+    passthrough list, and nothing else; an HTTP agent gets the per-run variables
+    (not HOME, the XDG, npm and TMPDIR ones, PYTHONDONTWRITEBYTECODE, PATH, LANG
+    and TERM, nor the passthrough list), with the variant's variables, as the
+    [env] of its [start] message instead and keeps its own environment), starts
+    a command agent inside the sandbox when [config.sandbox] says so, drives the
+    turns, tears down, collects the sandbox's violations, derives and writes
+    trace.jsonl and meta.json (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
     failure, unreadable fixtures, an invalid pattern): no agent was started.
@@ -167,7 +180,7 @@ val execute :
     the non-empty [OPENAI_API_KEY], [ANTHROPIC_API_KEY], [GEMINI_API_KEY] and
     [OPENROUTER_API_KEY] of bactrian's own environment. [upstream] and
     [connector] default to {!Model_proxy.default_upstream} and
-    {!Upstream.plain}.
+    {!Upstream.plain}. [connector] also serves an HTTP agent.
 
     In a replay, the run's own cassette holds a copy of every exchange served
     from the recording plus any live-tail exchanges, so a strict replay's trace

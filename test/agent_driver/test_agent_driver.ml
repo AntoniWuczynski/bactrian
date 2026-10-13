@@ -39,6 +39,7 @@ let start =
       variant = "v";
       sim_now = "2026-01-01T00:00:00Z";
       state_dir = "/tmp";
+      env = None;
     }
 
 let pp_error ppf (e : D.error) =
@@ -55,6 +56,10 @@ let pp_error ppf (e : D.error) =
       Format.fprintf ppf "Agent_exited (Exited %d)" n
   | Agent_exited (Some (`Signaled n)) ->
       Format.fprintf ppf "Agent_exited (Signaled %d)" n
+  | Http_error s -> Format.fprintf ppf "Http_error %S" s
+  | Http_status { status; body } ->
+      Format.fprintf ppf "Http_status %d %S" status body
+  | No_message -> Format.pp_print_string ppf "No_message"
 
 let show_msg : Agent_protocol.from_agent -> string = function
   | Reply { turn; content } -> Printf.sprintf "Reply %d %S" turn content
@@ -173,7 +178,7 @@ let test_kills_group () =
            wait 100;
            Eio.Time.sleep clock 0.1;
            ok "send" (D.send d Agent_protocol.End);
-           (D.pid d, read_pid dir "child.pid")))
+           (Option.get (D.pid d), read_pid dir "child.pid")))
   in
   let leader, child = (fst pids, snd pids) in
   Alcotest.(check bool) "leader is gone" false (alive leader);
@@ -210,6 +215,189 @@ let test_spawn_failure () =
   in
   Alcotest.(check string) "spawn error" "Spawn_failed " prefix
 
+(* HTTP mode, against a scripted server *)
+
+module F = Fake_upstream
+
+let scripted_reply ?(status = 200) body : F.reply =
+  {
+    status;
+    headers = [ ("content-type", "application/json") ];
+    chunks = [ body ];
+    ending = Complete;
+  }
+
+let http_config ?(turn_timeout = 5.) ?(total_timeout = 30.) url : D.http_config
+    =
+  {
+    url = Uri.of_string url;
+    namespace_header = "X-Agent-Run";
+    run_id = "run-1";
+    turn_timeout;
+    total_timeout;
+  }
+
+(* Runs [f] against a server that answers with [replies], in order. *)
+let with_script ?turn_timeout ?total_timeout replies f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env in
+  let server =
+    match F.start ~sw ~net (F.Script replies) with
+    | Ok s -> s
+    | Error e -> Alcotest.failf "fake server: %a" F.pp_error e
+  in
+  D.with_http_agent ~net ~clock:(Eio.Stdenv.clock env)
+    (http_config ?turn_timeout ?total_timeout (F.base_url server ^ "/chat"))
+    (f server)
+
+let contains s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s
+    && (String.equal (String.sub s i n) sub || go (i + 1))
+  in
+  go 0
+
+(* The outcome of one POST, as text. *)
+let sent d =
+  match D.send d Agent_protocol.End with
+  | Ok () -> "ok"
+  | Error e -> Format.asprintf "%a" pp_error e
+
+let reply_json turn content =
+  Agent_protocol.(encode_array [ Reply { turn; content } ])
+
+let test_http_two_steps () =
+  let event =
+    Agent_protocol.Event { turn = 1; name = "tool"; data = Canon.empty_object }
+  in
+  with_script
+    [
+      scripted_reply "[]";
+      scripted_reply
+        Agent_protocol.(
+          encode_array [ event; Reply { turn = 1; content = "hi" } ]);
+      scripted_reply "[]";
+    ]
+    (fun server d ->
+      ok "start"
+        (D.send d
+           (Agent_protocol.Start
+              {
+                run_id = "run-1";
+                scenario = "s";
+                variant = "v";
+                sim_now = "2026-01-01T00:00:00Z";
+                state_dir = "/tmp";
+                env = Some [ ("K", "v") ];
+              }));
+      ok "turn" (D.send d (Agent_protocol.Turn { turn = 1; content = "q" }));
+      Alcotest.(check string)
+        "event first" "Event 1 tool"
+        (show_msg (ok "recv" (D.recv d)));
+      Alcotest.(check string)
+        "then the reply" {|Reply 1 "hi"|}
+        (show_msg (ok "recv" (D.recv d)));
+      Alcotest.(check string) "nothing more" "No_message" (show (D.recv d));
+      ok "end" (D.send d Agent_protocol.End);
+      let requests = F.requests server in
+      Alcotest.(check (list string))
+        "one POST per message" [ "POST"; "POST"; "POST" ]
+        (List.map (fun (r : F.request) -> r.meth) requests);
+      List.iter
+        (fun (r : F.request) ->
+          let header k = List.assoc_opt k r.headers in
+          Alcotest.(check string) "path" "/chat" r.path;
+          Alcotest.(check (option string))
+            "content type" (Some "application/json") (header "content-type");
+          Alcotest.(check (option string))
+            "run header" (Some "run-1") (header "x-bactrian-run");
+          Alcotest.(check (option string))
+            "namespace header" (Some "run-1") (header "x-agent-run"))
+        requests;
+      Alcotest.(check bool)
+        "the start message carries the env" true
+        (contains (List.hd requests).body {|"env":{"K":"v"}|}))
+  |> ignore
+
+let test_http_status () =
+  let body = String.make 3000 'x' in
+  with_script
+    [ scripted_reply ~status:500 body ]
+    (fun _ d ->
+      Alcotest.(check string)
+        "status and the first 2 KiB of the body"
+        (Printf.sprintf "Http_status 500 %S" (String.sub body 0 2048))
+        (sent d))
+
+let test_http_bad_bodies () =
+  List.iter
+    (fun body ->
+      with_script
+        [ scripted_reply body ]
+        (fun _ d ->
+          Alcotest.(check string)
+            "the body is quoted"
+            (Printf.sprintf "Protocol_violation %S" body)
+            (sent d)))
+    [
+      "not json";
+      {|{"v":1,"type":"reply","turn":1,"content":"x"}|};
+      {|[{"v":1,"type":"bogus"}]|};
+      reply_json 1 "ok" ^ " trailing";
+    ]
+
+(* A server that accepts connections and never answers. *)
+let with_silent_server f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env in
+  let sock =
+    Eio.Net.listen ~sw ~backlog:4 ~reuse_addr:true net
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  match Eio.Net.listening_addr sock with
+  | `Tcp (_, port) -> f env (Printf.sprintf "http://127.0.0.1:%d/a" port)
+  | `Unix _ -> Alcotest.fail "not a TCP listener"
+
+let test_http_timeouts () =
+  with_silent_server @@ fun env url ->
+  let send ?turn_timeout ?total_timeout () =
+    D.with_http_agent ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      (http_config ?turn_timeout ?total_timeout url)
+      sent
+  in
+  Alcotest.(check string) "turn" "Turn_timeout" (send ~turn_timeout:0.3 ());
+  Alcotest.(check string)
+    "total" "Total_timeout"
+    (send ~turn_timeout:10. ~total_timeout:0.3 ())
+
+let test_http_unreachable_and_https () =
+  Eio_main.run @@ fun env ->
+  let port =
+    Eio.Switch.run @@ fun sw ->
+    match
+      Eio.Net.listening_addr
+        (Eio.Net.listen ~sw ~backlog:1 ~reuse_addr:true (Eio.Stdenv.net env)
+           (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0)))
+    with
+    | `Tcp (_, port) -> port
+    | `Unix _ -> Alcotest.fail "not a TCP listener"
+  in
+  let send url =
+    D.with_http_agent ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      (http_config url) sent
+  in
+  Alcotest.(check bool)
+    "unreachable" true
+    (String.starts_with ~prefix:{|Http_error "agent unreachable|}
+       (send (Printf.sprintf "http://127.0.0.1:%d/a" port)));
+  Alcotest.(check string)
+    "https needs a connector"
+    {|Http_error "agent unreachable: https needs a TLS connector"|}
+    (send "https://127.0.0.1:1/a")
+
 let () =
   Alcotest.run "agent_driver"
     [
@@ -222,5 +410,14 @@ let () =
           Alcotest.test_case "kills the process group" `Quick test_kills_group;
           Alcotest.test_case "stderr, env, cwd" `Quick test_stderr_env_cwd;
           Alcotest.test_case "spawn failure" `Quick test_spawn_failure;
+        ] );
+      ( "http driver",
+        [
+          Alcotest.test_case "two steps" `Quick test_http_two_steps;
+          Alcotest.test_case "non-2xx status" `Quick test_http_status;
+          Alcotest.test_case "malformed bodies" `Quick test_http_bad_bodies;
+          Alcotest.test_case "timeouts" `Quick test_http_timeouts;
+          Alcotest.test_case "unreachable and https" `Quick
+            test_http_unreachable_and_https;
         ] );
     ]

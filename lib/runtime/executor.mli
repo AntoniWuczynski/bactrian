@@ -52,12 +52,13 @@ val read_manifest : _ Eio.Path.t -> (manifest, string option) result
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string
-      (** A spend cap of 0 everywhere, a missing key, no TLS, a sandbox that
-          does not work under [sandbox: strict]. *)
+      (** A spend cap of 0 everywhere, a missing key, no TLS (for a provider or
+          an [https] agent), a sandbox that does not work under
+          [sandbox: strict]. *)
   | Usage of string
-      (** An unsupported agent, an unknown experiment to resume, a plan or
-          fingerprint that no longer matches the experiment being resumed, an
-          experiment that another process is running. *)
+      (** An unknown experiment to resume, a plan or fingerprint that no longer
+          matches the experiment being resumed, an experiment that another
+          process is running. *)
 
 val run_experiment :
   ?root:Eio.Fs.dir_ty Eio.Path.t ->
@@ -112,14 +113,19 @@ val run_experiment :
     before the first run, and the same lines are recorded in every run's
     [meta.json].
 
+    An [http] agent is not started by bactrian, so there is no preflight: its
+    runs are unsandboxed whatever the mode, labelled with the reason
+    ["http mode"] ({!Sandbox.http_mode}). [sandbox: strict], in the experiment
+    or as [sandbox], is a [Configuration] error.
+
     Cancelling the calling fibre (see {!Interrupt}) cancels the runs in flight,
     marks them [Interrupted], writes the manifest, and re-raises the
-    cancellation. Only command agents are supported.
+    cancellation.
 
     [announce] is called with the experiment ID once it is known and the
     manifest is about to be written, so an interrupted caller can say what to
     resume.
 
     [random_bytes], [keys], [upstream] and [connector] are passed to
-    {!Run.execute}. Without [connector], an https upstream is refused with
-    [Environment] (this build has no TLS). *)
+    {!Run.execute}. Without [connector], an https upstream or an https HTTP
+    agent is refused with [Environment] (this build has no TLS). *)

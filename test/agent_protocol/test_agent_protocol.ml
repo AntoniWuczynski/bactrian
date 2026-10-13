@@ -46,6 +46,10 @@ let to_equal a b =
       && String.equal x.variant y.variant
       && String.equal x.sim_now y.sim_now
       && String.equal x.state_dir y.state_dir
+      && Option.equal
+           (List.equal (fun (k, v) (k', v') ->
+                String.equal k k' && String.equal v v'))
+           x.env y.env
   | Turn x, Turn y ->
       Int.equal x.turn y.turn && String.equal x.content y.content
   | End, End -> true
@@ -65,9 +69,27 @@ let start =
       variant = "v";
       sim_now = "2026-10-13T09:00:00Z";
       state_dir = "/tmp/x";
+      env = None;
     }
 
-let to_msgs = [ start; P.Turn { turn = 1; content = "hi \"there\"\n" }; P.End ]
+let start_with_env =
+  P.Start
+    {
+      run_id = "r1";
+      scenario = "s";
+      variant = "v";
+      sim_now = "2026-10-13T09:00:00Z";
+      state_dir = "/tmp/x";
+      env = Some [ ("OPENAI_BASE_URL", "http://127.0.0.1:1/r/t/openai/v1") ];
+    }
+
+let to_msgs =
+  [
+    start;
+    start_with_env;
+    P.Turn { turn = 1; content = "hi \"there\"\n" };
+    P.End;
+  ]
 
 let from_msgs =
   [
@@ -87,6 +109,10 @@ let test_encode_wire () =
     "start"
     {|{"v":1,"type":"start","run_id":"r1","scenario":"s","variant":"v","sim_now":"2026-10-13T09:00:00Z","state_dir":"/tmp/x"}|}
     (P.encode start);
+  Alcotest.(check string)
+    "start in HTTP mode"
+    {|{"v":1,"type":"start","run_id":"r1","scenario":"s","variant":"v","sim_now":"2026-10-13T09:00:00Z","state_dir":"/tmp/x","env":{"OPENAI_BASE_URL":"http://127.0.0.1:1/r/t/openai/v1"}}|}
+    (P.encode start_with_env);
   Alcotest.(check string)
     "reply" {|{"v":1,"type":"reply","turn":2,"content":"ok"}|}
     (P.encode_from_agent (P.Reply { turn = 2; content = "ok" }));
@@ -121,6 +147,45 @@ let test_roundtrip_examples () =
     (fun m ->
       Alcotest.check decoded "from" (Ok m) (P.decode (P.encode_from_agent m)))
     from_msgs
+
+(* A start message without env is a command-mode one. *)
+let test_start_env_optional () =
+  let line =
+    {|{"v":1,"type":"start","run_id":"r","scenario":"s","variant":"v","sim_now":"t","state_dir":"d"|}
+  in
+  Alcotest.(check bool)
+    "absent" true
+    (match P.decode_to_agent (line ^ "}") with
+    | Ok (Start { env = None; _ }) -> true
+    | Ok (Start _ | Turn _ | End) | Error _ -> false);
+  Alcotest.(check bool)
+    "empty object is not absent" true
+    (match P.decode_to_agent (line ^ {|,"env":{}}|}) with
+    | Ok (Start { env = Some []; _ }) -> true
+    | Ok (Start _ | Turn _ | End) | Error _ -> false)
+
+let test_array () =
+  Alcotest.(check (result (list from_t) error_t))
+    "empty" (Ok []) (P.decode_array "[]");
+  Alcotest.(check (result (list from_t) error_t))
+    "in order" (Ok from_msgs)
+    (P.decode_array (P.encode_array from_msgs));
+  List.iter
+    (fun (name, body, error) ->
+      Alcotest.(check (result (list from_t) error_t))
+        name (Error error) (P.decode_array body))
+    [
+      ("not json", "[", P.Invalid_json "");
+      ( "object",
+        {|{"v":1,"type":"reply","turn":1,"content":"x"}|},
+        P.Bad_message { type_ = ""; reason = "" } );
+      ("empty body", "", P.Invalid_json "");
+      ("not an envelope", "[1]", P.Bad_message { type_ = ""; reason = "" });
+      ("unknown type", {|[{"v":1,"type":"ping"}]|}, P.Unknown_type "ping");
+      ( "bad element after a good one",
+        {|[{"v":1,"type":"reply","turn":1,"content":"x"},{"v":1,"type":"reply"}]|},
+        P.Bad_message { type_ = "reply"; reason = "" } );
+    ]
 
 let test_decode_tolerates_whitespace_and_key_order () =
   Alcotest.check decoded "reordered"
@@ -190,6 +255,12 @@ let rejections =
 
 let to_rejections =
   [
+    ( "start env not an object",
+      {|{"v":1,"type":"start","run_id":"r","scenario":"s","variant":"v","sim_now":"t","state_dir":"d","env":["A"]}|},
+      bad "start" );
+    ( "start env value not a string",
+      {|{"v":1,"type":"start","run_id":"r","scenario":"s","variant":"v","sim_now":"t","state_dir":"d","env":{"A":1}}|},
+      bad "start" );
     ( "start missing field",
       {|{"v":1,"type":"start","run_id":"r","scenario":"s","variant":"v","sim_now":"t"}|},
       bad "start" );
@@ -274,6 +345,7 @@ let prop_to =
                 variant = a;
                 sim_now = b;
                 state_dir = a;
+                env = (if turn mod 2 = 0 then None else Some [ (a, b) ]);
               }
         | 1 -> P.Turn { turn; content = a }
         | _ -> P.End
@@ -310,6 +382,9 @@ let () =
           Alcotest.test_case "single line" `Quick test_one_line;
           Alcotest.test_case "round trip examples" `Quick
             test_roundtrip_examples;
+          Alcotest.test_case "start env is optional" `Quick
+            test_start_env_optional;
+          Alcotest.test_case "response arrays" `Quick test_array;
           Alcotest.test_case "key order and whitespace" `Quick
             test_decode_tolerates_whitespace_and_key_order;
           Alcotest.test_case "pp_error" `Quick test_pp_error;

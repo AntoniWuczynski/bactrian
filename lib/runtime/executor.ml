@@ -192,6 +192,25 @@ let funded caps =
       match List.assoc_opt name caps with Some usd -> usd > 0. | None -> false)
     Run.providers
 
+let no_tls what =
+  Environment
+    (Printf.sprintf
+       "this build has no TLS support (bactrian.tls), so it cannot call %s \
+        over HTTPS"
+       what)
+
+(* An HTTP agent at an https URL needs the connector, like an https upstream. *)
+let agent_preflight ~connector : Run.agent -> (unit, error) result = function
+  | Command _ -> Ok ()
+  | Http { url; _ } ->
+      if
+        Option.is_none connector
+        && Option.equal String.equal
+             (Uri.scheme (Uri.of_string url))
+             (Some "https")
+      then Error (no_tls ("the agent at " ^ url))
+      else Ok ()
+
 let preflight ~caps ~keys ~upstream ~connector =
   match funded caps with
   | [] ->
@@ -218,11 +237,7 @@ let preflight ~caps ~keys ~upstream ~connector =
                      (Uri.scheme (upstream p))
                      (Some "https"))
                  funded
-          then
-            Error
-              (Environment
-                 "this build has no TLS support (bactrian.tls), so it cannot \
-                  call providers over HTTPS")
+          then Error (no_tls "providers")
           else Ok ())
 
 (* Loading *)
@@ -258,7 +273,7 @@ type loaded = {
   experiment : Experiment.t;
   dir : string;
   scenarios : (string * Scenario.t) list;  (** Path relative to [dir]. *)
-  argv : string list;
+  agent : Run.agent;
   turn_timeout : float;
   total_timeout : float;
   pricing : Pricing.table;
@@ -317,10 +332,24 @@ let duplicate_ids ~fs ~dir scenarios =
   in
   go [] scenarios
 
+(* The command line's [--sandbox strict] cannot be met by an agent bactrian does
+   not start; the experiment's own [sandbox: strict] is refused when it is
+   decoded. *)
+let http_agent_strict ~experiment_file ~find experiment sandbox_override =
+  match (experiment, sandbox_override) with
+  | Ok ({ agent = Http _; _ } : Experiment.t), Some `Strict ->
+      [
+        at_key ~experiment_file ~find "agent.protocol"
+          "--sandbox strict cannot be met with protocol http: bactrian does \
+           not start the agent, so it cannot sandbox it (use auto or off)";
+      ]
+  | Ok { agent = Command _; _ }, _ | Ok _, (None | Some (`Auto | `Off)) -> []
+  | Error _, _ -> []
+
 (* Every stage reports, so one round shows every mistake: the experiment, its
    globs, each scenario and the price file. A stage that needs a field of an
    experiment that did not decode reads it straight from the document. *)
-let load ~fs ~experiment_file =
+let load ~fs ~experiment_file ~sandbox_override =
   let exp_path = Eio.Path.(fs / experiment_file) in
   let dir = Filename.dirname experiment_file in
   let base = Eio.Path.(fs / dir) in
@@ -381,6 +410,7 @@ let load ~fs ~experiment_file =
              (function Ok _ -> [] | Error es -> es)
              loaded_scenarios;
            duplicate_ids ~fs ~dir scenarios;
+           http_agent_strict ~experiment_file ~find experiment sandbox_override;
            (match pricing with Ok _ -> [] | Error es -> es);
          ])
   in
@@ -388,27 +418,31 @@ let load ~fs ~experiment_file =
   | _ :: _, _, _, _ -> Error (Configuration errors)
   | [], Error es, _, _ | [], Ok _, Error es, _ -> Error (Configuration es)
   | [], Ok _, Ok _, Error es -> Error (Configuration es)
-  | [], Ok experiment, Ok pricing, Ok (canon, _) -> (
+  | [], Ok experiment, Ok pricing, Ok (canon, _) ->
       let* fingerprint =
         Result.map_error
           (fun m -> Environment m)
           (Fingerprint.compute ~base ~experiment:canon ~pricing_file
              ~scenario_files:files)
       in
-      match experiment.agent with
-      | Http _ -> Error (Usage "http agents are not supported yet")
-      | Command { argv; turn_timeout; total_timeout } ->
-          Ok
-            {
-              experiment;
-              dir;
-              scenarios;
-              argv;
-              turn_timeout;
-              total_timeout;
-              pricing;
-              fingerprint;
-            })
+      let agent, turn_timeout, total_timeout =
+        match experiment.agent with
+        | Command { argv; turn_timeout; total_timeout } ->
+            (Run.Command argv, turn_timeout, total_timeout)
+        | Http { url; namespace_header; turn_timeout; total_timeout } ->
+            (Run.Http { url; namespace_header }, turn_timeout, total_timeout)
+      in
+      Ok
+        {
+          experiment;
+          dir;
+          scenarios;
+          agent;
+          turn_timeout;
+          total_timeout;
+          pricing;
+          fingerprint;
+        }
 
 (* Running *)
 
@@ -433,7 +467,7 @@ let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
 let run_config ~fs ~sandbox (l : loaded) (scenario : Scenario.t) ~scenario_dir
     (variant : Experiment.variant) : Run.config =
   {
-    agent = l.argv;
+    agent = l.agent;
     cwd = l.dir;
     turns = List.map (fun (t : Scenario.turn) -> t.user) scenario.turns;
     scenario = scenario.id;
@@ -552,7 +586,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     | Some r -> r
     | None -> Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")
   in
-  let* l = load ~fs ~experiment_file in
+  let* l = load ~fs ~experiment_file ~sandbox_override:sandbox in
   let experiment = l.experiment in
   let planned =
     plan ~seed:experiment.seed ~scenarios:(List.map fst l.scenarios)
@@ -566,21 +600,26 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let* experiment_id, initial =
     start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume l planned
   in
+  let* () = agent_preflight ~connector l.agent in
   let* () = preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector in
   let in_dir path =
     if Filename.is_relative path then Filename.concat l.dir path else path
   in
+  let mode = Option.value sandbox ~default:experiment.sandbox in
   let* sandbox =
-    Result.map_error
-      (fun m -> Environment m)
-      (Sandbox.preflight ~env ~warn
-         {
-           mode = Option.value sandbox ~default:experiment.sandbox;
-           allow_write = List.map in_dir experiment.sandbox_allow_write;
-           deny_read = List.map in_dir experiment.sandbox_deny_read;
-           bactrian_exe;
-           bactrian_dir = Eio.Path.native_exn root;
-         })
+    match l.agent with
+    | Http _ -> Ok (Sandbox.http_mode mode)
+    | Command _ ->
+        Result.map_error
+          (fun m -> Environment m)
+          (Sandbox.preflight ~env ~warn
+             {
+               mode;
+               allow_write = List.map in_dir experiment.sandbox_allow_write;
+               deny_read = List.map in_dir experiment.sandbox_deny_read;
+               bactrian_exe;
+               bactrian_dir = Eio.Path.native_exn root;
+             })
   in
   on_sandbox (Sandbox.label sandbox);
   let* jobs =

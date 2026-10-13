@@ -1,0 +1,3 @@
+(library
+ (name http_agent)
+ (libraries bactrian.core bactrian.runtime eio cohttp-eio http uri))

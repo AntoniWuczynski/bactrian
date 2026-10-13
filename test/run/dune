@@ -1,5 +1,5 @@
 (tests
- (names test_run test_run_checks test_run_mcp test_run_sandbox)
+ (names test_run test_run_checks test_run_mcp test_run_sandbox test_run_http)
  (package bactrian)
  (deps
   (source_tree ../fixtures/protocols)
@@ -13,6 +13,7 @@
   bactrian.core
   bactrian.runtime
   fake_upstream
+  http_agent
   weather_agent
   eio_main
   mirage-crypto-rng.unix

@@ -70,7 +70,7 @@ let with_ctx name f () =
 let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     ?(turns = [ first_turn ]) () : Run.config =
   {
-    agent;
+    agent = Command agent;
     cwd = ".";
     turns;
     scenario = "weather";
@@ -92,10 +92,11 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     sandbox = Sandbox.off;
   }
 
-let execute ?random_bytes:(rb = random_bytes) ?(cap = 100.) ctx config =
+let execute ?random_bytes:(rb = random_bytes) ?(cap = 100.)
+    ?(ledger_name = string_of_int !counter) ctx config =
   let ledger =
     Ledger.create
-      ~path:Eio.Path.(ctx.dir / ("ledger-" ^ string_of_int !counter ^ ".jsonl"))
+      ~path:Eio.Path.(ctx.dir / ("ledger-" ^ ledger_name ^ ".jsonl"))
       ~caps:(caps cap)
   in
   Run.execute ~random_bytes:rb

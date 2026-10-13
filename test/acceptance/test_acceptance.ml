@@ -152,7 +152,7 @@ type world = {
   up : F.t;
   dir : string;  (** The world's directory, with its [.bactrian] store. *)
   execute :
-    argv:string list ->
+    agent:Run.agent ->
     ?replay:Run.replay ->
     ?mcp:Mcp_proxy.config list ->
     ?variant_env:(string * string) list ->
@@ -194,7 +194,7 @@ let with_world ?(deny_read = []) name f =
     sandbox ~env ~dir:abs_dir
       ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
   in
-  let execute ~argv ?replay ?(mcp = []) ?(variant_env = []) () =
+  let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) () =
     incr counter;
     let ledger =
       Ledger.create
@@ -203,7 +203,7 @@ let with_world ?(deny_read = []) name f =
     in
     let config : Run.config =
       {
-        agent = argv;
+        agent;
         cwd = ".";
         turns = (if replay = None then [ first_turn ] else []);
         scenario = "weather";
@@ -222,7 +222,10 @@ let with_world ?(deny_read = []) name f =
         turn_timeout = 60.;
         total_timeout = 90.;
         mcp;
-        sandbox;
+        sandbox =
+          (match agent with
+          | Command _ -> sandbox
+          | Http _ -> Sandbox.http_mode `Auto);
       }
     in
     ok
@@ -239,7 +242,7 @@ let strict from : Run.replay =
 let acceptance agent () =
   let argv = agent.argv () in
   with_world agent.name @@ fun { up; execute; dir = _ } ->
-  let execute = execute ~argv in
+  let execute = execute ~agent:(Command argv) in
   (* (a) record *)
   let recorded = execute () in
   Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
@@ -329,7 +332,7 @@ let mcp_acceptance agent era () =
   in
   let fake_calls () = List.length (lines log) in
   let recorded =
-    execute ~argv ~variant_env
+    execute ~agent:(Command argv) ~variant_env
       ~mcp:
         (weather_server
            [ executable "FAKE_MCP_SERVER"; "--era"; era.fake; "--log"; log ])
@@ -350,7 +353,7 @@ let mcp_acceptance agent era () =
     (List.map (member_string "content") (entries "tool_result" recorded));
   (* Strict replay, with the server unavailable. *)
   let replayed =
-    execute ~argv ~variant_env ~replay:(strict recorded.run_dir)
+    execute ~agent:(Command argv) ~variant_env ~replay:(strict recorded.run_dir)
       ~mcp:(weather_server [ "/nonexistent/fake-mcp-server" ])
       ()
   in
@@ -401,7 +404,7 @@ let mcp_flags_acceptance agent era () =
     | Ok mcp -> mcp
     | Error m -> Alcotest.failf "flags: %s" m
   in
-  let recorded = execute ~argv ~variant_env ~mcp () in
+  let recorded = execute ~agent:(Command argv) ~variant_env ~mcp () in
   Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
   Alcotest.(check int) "server saw" era.requests (List.length (lines log));
   (* The replay finds no server: the fake's path is nowhere in its command. *)
@@ -624,12 +627,138 @@ let escapes agent () =
          other denials show only as the agent's own errors, checked above. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
+(* HTTP mode: the agent is a server the test starts (--http 0 prints its port
+   as the first line of its standard output), and stops by its recorded pid. *)
+
+let rec reap pid =
+  match Unix.waitpid [] pid with
+  | _ -> ()
+  | exception Unix.Unix_error (Unix.EINTR, _, _) -> reap pid
+
+let with_server argv f =
+  let out_r, out_w = Unix.pipe ~cloexec:true () in
+  let null = Unix.openfile "/dev/null" [ Unix.O_RDONLY ] 0 in
+  let pid =
+    Unix.create_process (List.hd argv) (Array.of_list argv) null out_w
+      Unix.stderr
+  in
+  Unix.close null;
+  Unix.close out_w;
+  let out = Unix.in_channel_of_descr out_r in
+  Fun.protect ~finally:(fun () ->
+      Unix.kill pid Sys.sigterm;
+      reap pid;
+      close_in out)
+  @@ fun () ->
+  match int_of_string_opt (input_line out) with
+  | Some port -> f port
+  | None -> Alcotest.fail "the server did not print its port first"
+  | exception End_of_file -> Alcotest.fail "the server exited before its port"
+
+let namespace_header = "X-Agent-Run"
+
+let http_agent port : Run.agent =
+  Http
+    { url = Printf.sprintf "http://127.0.0.1:%d/agent" port; namespace_header }
+
+(* The record, strict replay and prompt-change cycle of [acceptance]. The
+   system prompt reaches the agent through the run's env, so the variant
+   carries it. *)
+let http_acceptance agent () =
+  let argv = agent.argv () @ [ "--http"; "0" ] in
+  with_server argv @@ fun port ->
+  with_world (agent.name ^ "-http") @@ fun { up; execute; dir = _ } ->
+  let execute = execute ~agent:(http_agent port) in
+  let recorded = execute () in
+  Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  Alcotest.(check int) "model exchanges" 2 recorded.findings.exchanges;
+  Alcotest.(check int) "upstream requests" 2 (List.length (F.requests up));
+  Alcotest.(check (list string))
+    "tool calls" [ "get_weather" ]
+    (List.map (member_string "name") (entries "tool_call" recorded));
+  Alcotest.(check int) "one reply" 1 (List.length (entries "reply" recorded));
+  let meta =
+    Yojson.Safe.from_file (Filename.concat recorded.run_dir "meta.json")
+  in
+  let label = Yojson.Safe.Util.member "sandbox" meta in
+  Alcotest.(check bool)
+    "unsandboxed" false
+    Yojson.Safe.Util.(to_bool (member "applied" label));
+  Alcotest.(check string)
+    "because of the mode" "http mode"
+    (member_string "reason" label);
+  let replayed = execute ~replay:(strict recorded.run_dir) () in
+  Alcotest.(check string) "replay outcome" "passed" (outcome_name replayed);
+  Alcotest.(check int)
+    "no divergences" 0
+    (List.length replayed.findings.divergences);
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
+  let changed =
+    execute
+      ~variant_env:[ (prompt_variable, "You are a terse assistant.") ]
+      ~replay:(strict recorded.run_dir) ()
+  in
+  Alcotest.(check string) "changed outcome" "diverged" (outcome_name changed);
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up));
+  match
+    List.filter_map
+      (function
+        | Matcher.Missing_request { nearest; _ } -> Some nearest
+        | Unconsumed _ | Reordered _ | Shape_mismatch _ -> None)
+      changed.findings.divergences
+  with
+  | [ Some (_, changes, _) ] ->
+      Alcotest.(check bool)
+        "diff names the system message" true
+        (List.exists
+           (fun (c : Diff.change) -> String.equal c.path "messages[0].content")
+           changes)
+  | [ None ] -> Alcotest.fail "the missing request has no nearest exchange"
+  | [] | _ :: _ :: _ -> Alcotest.fail "expected exactly one Missing_request"
+
+(* Two strict replays at once against one server: each run keeps its own
+   conversation, so both match the recording. *)
+let http_concurrent agent () =
+  let argv = agent.argv () @ [ "--http"; "0" ] in
+  with_server argv @@ fun port ->
+  with_world (agent.name ^ "-http-concurrent")
+  @@ fun { up; execute; dir = _ } ->
+  let execute = execute ~agent:(http_agent port) in
+  let recorded = execute () in
+  Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
+  let replay () = execute ~replay:(strict recorded.run_dir) () in
+  let a = ref None and b = ref None in
+  Eio.Fiber.both
+    (fun () -> a := Some (replay ()))
+    (fun () -> b := Some (replay ()));
+  let a = Option.get !a and b = Option.get !b in
+  List.iter
+    (fun (r : Run.result) ->
+      Alcotest.(check string) "replay outcome" "passed" (outcome_name r);
+      Alcotest.(check int)
+        "no divergences" 0
+        (List.length r.findings.divergences);
+      Alcotest.(check int) "its own exchanges" 2 r.findings.exchanges)
+    [ a; b ];
+  Alcotest.(check bool) "distinct run IDs" true (a.run_id <> b.run_id);
+  Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up))
+
 let () =
   Alcotest.run "acceptance"
     [
       ( "example agents",
         List.map
           (fun a -> Alcotest.test_case a.name `Slow (acceptance a))
+          agents );
+      ( "http mode",
+        List.concat_map
+          (fun a ->
+            [
+              Alcotest.test_case (a.name ^ ", cycle") `Slow (http_acceptance a);
+              Alcotest.test_case
+                (a.name ^ ", concurrent replays")
+                `Slow (http_concurrent a);
+            ])
           agents );
       ( "mcp through mcp-shim",
         List.concat_map

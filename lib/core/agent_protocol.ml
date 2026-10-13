@@ -5,6 +5,7 @@ type to_agent =
       variant : string;
       sim_now : string;
       state_dir : string;
+      env : (string * string) list option;
     }
   | Turn of { turn : int; content : string }
   | End
@@ -27,15 +28,20 @@ let line type_ fields =
     (`Assoc (("v", `Int version) :: ("type", `String type_) :: fields))
 
 let encode = function
-  | Start { run_id; scenario; variant; sim_now; state_dir } ->
+  | Start { run_id; scenario; variant; sim_now; state_dir; env } ->
       line "start"
-        [
-          ("run_id", `String run_id);
-          ("scenario", `String scenario);
-          ("variant", `String variant);
-          ("sim_now", `String sim_now);
-          ("state_dir", `String state_dir);
-        ]
+        ([
+           ("run_id", `String run_id);
+           ("scenario", `String scenario);
+           ("variant", `String variant);
+           ("sim_now", `String sim_now);
+           ("state_dir", `String state_dir);
+         ]
+        @
+        match env with
+        | None -> []
+        | Some vars ->
+            [ ("env", `Assoc (List.map (fun (k, v) -> (k, `String v)) vars)) ])
   | Turn { turn; content } ->
       line "turn" [ ("turn", `Int turn); ("content", `String content) ]
   | End -> line "end" []
@@ -61,12 +67,12 @@ type envelope = { type_ : string; fields : (string * Canon.t) list }
 
 let bad type_ reason = Error (Bad_message { type_; reason })
 
-let parse_envelope text =
-  let* doc =
-    Result.map_error
-      (fun e -> Invalid_json (Format.asprintf "%a" Canon.pp_error e))
-      (Canon.of_string text)
-  in
+let parse_json text =
+  Result.map_error
+    (fun e -> Invalid_json (Format.asprintf "%a" Canon.pp_error e))
+    (Canon.of_string text)
+
+let envelope_of_canon doc =
   match Canon.to_fields_opt doc with
   | None -> bad "" "not a JSON object"
   | Some fields -> (
@@ -83,6 +89,10 @@ let parse_envelope text =
               with
               | None -> bad "" "missing or non-string field \"type\""
               | Some type_ -> Ok { type_; fields })))
+
+let parse_envelope text =
+  let* doc = parse_json text in
+  envelope_of_canon doc
 
 let field env key conv what =
   match Option.bind (List.assoc_opt key env.fields) conv with
@@ -107,8 +117,7 @@ let only env allowed =
   | None -> Ok ()
   | Some (k, _) -> bad env.type_ (Printf.sprintf "unknown field %S" k)
 
-let decode text =
-  let* env = parse_envelope text in
+let from_agent_of_envelope env =
   match env.type_ with
   | "reply" ->
       let* () = only env [ "turn"; "content" ] in
@@ -128,19 +137,59 @@ let decode text =
       Ok (Agent_error { turn; message })
   | other -> Error (Unknown_type other)
 
+let decode text =
+  let* env = parse_envelope text in
+  from_agent_of_envelope env
+
+let decode_array text =
+  let* doc = parse_json text in
+  match Canon.to_list_opt doc with
+  | None -> bad "" "not a JSON array"
+  | Some items ->
+      List.fold_right
+        (fun item acc ->
+          let* rest = acc in
+          let* env = envelope_of_canon item in
+          let* msg = from_agent_of_envelope env in
+          Ok (msg :: rest))
+        items (Ok [])
+
+let encode_array msgs =
+  "[" ^ String.concat "," (List.map encode_from_agent msgs) ^ "]"
+
+let string_map env key =
+  match List.assoc_opt key env.fields with
+  | None -> Ok None
+  | Some c -> (
+      let strings =
+        Option.bind (Canon.to_fields_opt c) (fun fields ->
+            List.fold_right
+              (fun (k, v) acc ->
+                Option.bind acc (fun rest ->
+                    Option.map (fun s -> (k, s) :: rest) (Canon.to_string_opt v)))
+              fields (Some []))
+      in
+      match strings with
+      | Some vars -> Ok (Some vars)
+      | None ->
+          bad env.type_
+            (Printf.sprintf "field %S is not an object of strings" key))
+
 let decode_to_agent text =
   let* env = parse_envelope text in
   match env.type_ with
   | "start" ->
       let* () =
-        only env [ "run_id"; "scenario"; "variant"; "sim_now"; "state_dir" ]
+        only env
+          [ "run_id"; "scenario"; "variant"; "sim_now"; "state_dir"; "env" ]
       in
       let* run_id = str env "run_id" in
       let* scenario = str env "scenario" in
       let* variant = str env "variant" in
       let* sim_now = str env "sim_now" in
       let* state_dir = str env "state_dir" in
-      Ok (Start { run_id; scenario; variant; sim_now; state_dir })
+      let* vars = string_map env "env" in
+      Ok (Start { run_id; scenario; variant; sim_now; state_dir; env = vars })
   | "turn" ->
       let* () = only env [ "turn"; "content" ] in
       let* turn = int env "turn" in

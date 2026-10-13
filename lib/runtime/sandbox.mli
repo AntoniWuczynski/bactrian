@@ -33,6 +33,10 @@ type t
 val off : t
 (** Unsandboxed by choice ([sandbox: off]). *)
 
+val http_mode : mode -> t
+(** Unsandboxed because bactrian does not start an HTTP-mode agent, so it cannot
+    wrap it: no preflight is run. The label's reason is ["http mode"]. *)
+
 val label : t -> label
 
 type settings = {

@@ -35,6 +35,9 @@ type t = Sandboxed of { mode : mode; host : host } | Unsandboxed of label
 let off =
   Unsandboxed { mode = `Off; applied = false; reason = Some "sandbox: off" }
 
+let http_mode mode =
+  Unsandboxed { mode; applied = false; reason = Some "http mode" }
+
 let label = function
   | Sandboxed { mode; host = _ } -> { mode; applied = true; reason = None }
   | Unsandboxed l -> l
