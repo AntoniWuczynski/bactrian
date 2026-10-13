@@ -1,0 +1,6 @@
+(test
+ (name test_store)
+ (package bactrian)
+ (libraries bactrian.core bactrian.runtime eio_main alcotest)
+ (flags
+  (:standard -w -70)))

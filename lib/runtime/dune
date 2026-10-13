@@ -1,0 +1,4 @@
+(library
+ (name bactrian_runtime)
+ (public_name bactrian.runtime)
+ (libraries bactrian.core eio eio.unix cohttp-eio uri mirage-crypto-rng mirage-crypto-rng.unix))
