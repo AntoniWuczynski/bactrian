@@ -21,8 +21,8 @@ type conn = { c : C.t; seen : Buffer.t }
    allows only with both flags. *)
 let trusting = [ "--allow-unsandboxed"; "--trust-project" ]
 
-let connect ?(env = key_env) ~dir era =
-  let c = C.start ~env ~args:trusting ~exe:(exe ()) ~dir era in
+let connect ?(env = key_env) ?(args = trusting) ~dir era =
+  let c = C.start ~env ~args ~exe:(exe ()) ~dir era in
   { c; seen = Buffer.create 1024 }
 
 let note conn c = Buffer.add_string conn.seen (Canon.to_string c)
@@ -724,6 +724,131 @@ let cancel_and_resume era () =
   check_exit "the server exits at end of input" 0 (C.close conn.c);
   no_secret conn
 
+(* Checkers run in the sandbox, so a server started without flags runs them,
+   in [check] and in an experiment. The checker passes only when it cannot
+   reach the fake upstream on loopback, which proves where it ran, and
+   [check] gives what [check --sandbox strict --json] prints. Allowed to run
+   them unsandboxed, the server still needs --trust-project for that. *)
+
+let judge_scenario ~port ~golden =
+  let checker =
+    Printf.sprintf
+      "import json, socket, sys\n\
+       json.load(sys.stdin)\n\
+       try:\n\
+      \    socket.create_connection(('127.0.0.1', %d), timeout=3).close()\n\
+      \    ok = False\n\
+       except OSError:\n\
+      \    ok = True\n\
+       print(json.dumps({'pass': ok}))\n"
+      port
+  in
+  Yojson.Safe.to_string
+    (`Assoc
+       ([
+          ("version", `Int 1);
+          ("id", `String "weather");
+          ("timezone", `String "UTC");
+          ("turns", `List [ `Assoc [ ("user", `String first_turn) ] ]);
+          ( "checkers",
+            `List
+              [
+                `Assoc
+                  [
+                    ( "command",
+                      `List
+                        (List.map
+                           (fun a -> `String a)
+                           [ "python3"; "-I"; "-c"; checker ]) );
+                  ];
+              ] );
+        ]
+       @
+       match golden with
+       | Some g -> [ ("golden", `Assoc [ ("pass", `List [ `String g ]) ]) ]
+       | None -> []))
+
+let upstream_port up =
+  match String.rindex_opt (upstream_url up) ':' with
+  | Some i ->
+      let url = upstream_url up in
+      get "the upstream's port"
+        (int_of_string_opt (String.sub url (i + 1) (String.length url - i - 1)))
+  | None -> Alcotest.fail "the upstream URL has no port"
+
+let sandboxed_checkers era () =
+  if not sandbox_available then Alcotest.skip ();
+  let agent = List.hd agents in
+  with_project ("checkers-" ^ era_name era) @@ fun ~parent:_ ~project ->
+  with_upstream ~dir:project @@ fun up ->
+  let port = upstream_port up in
+  write_experiment project (agent.argv ());
+  write
+    (Filename.concat project "scenarios/weather.json")
+    (judge_scenario ~port ~golden:None);
+  let env = (upstream_variable, upstream_url up) :: key_env in
+  let conn = connect ~args:[] ~env ~dir:project era in
+  Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
+  let job =
+    string_field "job_id"
+      (ok_call conn "run_start" [ ("experiment", Canon.string "exp.json") ])
+  in
+  let status = C.poll_job conn.c job in
+  Alcotest.(check string)
+    "the job succeeded" "succeeded"
+    (string_field "state" status);
+  let runs = get "runs" (Canon.list_member "runs" (field "result" status)) in
+  Alcotest.(check (list string))
+    "every run passed, its checker included"
+    (List.init 4 (fun _ -> "passed"))
+    (List.map (string_field "status") runs);
+  let run = string_field "run_id" (List.hd runs) in
+  write
+    (Filename.concat project "checks/golden/pass.jsonl")
+    (read
+       (Filename.concat project
+          (Printf.sprintf ".bactrian/runs/%s/trace.jsonl" run)));
+  write
+    (Filename.concat project "checks/weather.json")
+    (judge_scenario ~port ~golden:(Some "golden/pass.jsonl"));
+  let checked =
+    ok_call conn "check" [ ("scenarios", strings [ "checks/weather.json" ]) ]
+  in
+  check_exit "the server exits at end of input" 0 (C.close conn.c);
+  no_secret conn;
+  Alcotest.(check bool)
+    "the check passed" true
+    (get "passed"
+       (Option.bind (Canon.member "passed" checked) Canon.to_bool_opt));
+  let code, printed =
+    cli ~dir:project ~env
+      [ "check"; "--sandbox"; "strict"; "--json"; "checks/weather.json" ]
+  in
+  Alcotest.(check int) "check: the exit status" 0 code;
+  Alcotest.check json "check equals the CLI's" printed checked;
+  Alcotest.check json "the checkers ran in the strict sandbox"
+    (obj [ ("mode", Canon.string "strict"); ("applied", Canon.bool true) ])
+    (field "sandbox" checked);
+  let conn = connect ~args:[ "--allow-unsandboxed" ] ~env ~dir:project era in
+  Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
+  let refused =
+    error_call conn "check"
+      [
+        ("scenarios", strings [ "checks/weather.json" ]);
+        ("sandbox", Canon.string "off");
+      ]
+  in
+  Alcotest.(check bool)
+    "check with sandbox off names --trust-project" true
+    (contains (Canon.to_string refused) "--trust-project");
+  let job = string_field "job_id" (ok_call conn "run_start" (run_args ())) in
+  let status = C.poll_job conn.c job in
+  Alcotest.(check string) "refused" "failed" (string_field "state" status);
+  Alcotest.(check bool)
+    "run_start with sandbox off names --trust-project" true
+    (contains (Canon.to_string status) "--trust-project");
+  check_exit "the second server exits at end of input" 0 (C.close conn.c)
+
 (* An https upstream cannot be called in this build, so the job fails as
    [bactrian run] does. *)
 
@@ -790,6 +915,7 @@ let () =
               eras)
           agents );
       ("job_cancel, then resume", per_era cancel_and_resume);
+      ("checkers without --trust-project", per_era sandboxed_checkers);
       ( "run_start with an https upstream",
         [
           Alcotest.test_case "fails as run does" `Quick

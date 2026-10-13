@@ -25,6 +25,8 @@ The temporary directory is `HOME` and `TMPDIR` in every mode, not only inside th
 
 **Launch environment.** On macOS a sandboxed checker can read bactrian's launch environment as an agent can, so `check` now scrubs its own as `record`, `replay` and `run` do (decision 0010).
 
+**The MCP server.** Jobs and `check` run `strict` unless the server was started with `--allow-unsandboxed` (decision 0011), and under `strict` checkers are inside the sandbox or the command fails with exit status 69. So the Model Context Protocol (MCP) server now allows checkers without `--trust-project` in `check` and in experiments whenever the resolved mode is `strict`. Under `auto` or `off`, which only `--allow-unsandboxed` permits, they can run unsandboxed and still need `--trust-project`. The rule looks at the mode rather than the outcome of the probe, so it is decided before anything runs. `check` gained the same `sandbox` argument as `run_start`. MCP servers, passed variables and `allow_write` outside the root still need `--trust-project`.
+
 ## Consequences
 
 A checker that needs the network, for example one that asks a language model, or one that writes beside the scenario, fails in the sandbox. It has to run with `sandbox: off`, which the labels then show.
