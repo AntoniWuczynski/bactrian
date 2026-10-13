@@ -1,0 +1,6 @@
+(test
+ (name test_redact)
+ (package bactrian)
+ (libraries bactrian.core alcotest qcheck-core qcheck-alcotest)
+ (flags
+  (:standard -w -70)))
