@@ -6,6 +6,11 @@ open Bactrian_core
 val providers : (Model_proxy.provider * string) list
 (** Every provider with its name, which is also its ledger name. *)
 
+val overridden_upstreams :
+  (Model_proxy.provider -> Uri.t) -> (string * Uri.t) list
+(** The providers, by name, whose upstream is not
+    {!Model_proxy.default_upstream}. *)
+
 val keys_from_environment : unit -> (Model_proxy.provider * string) list
 (** The non-empty real provider keys of bactrian's own environment. *)
 
@@ -194,7 +199,10 @@ val execute :
     the non-empty [OPENAI_API_KEY], [ANTHROPIC_API_KEY], [GEMINI_API_KEY] and
     [OPENROUTER_API_KEY] of bactrian's own environment. [upstream] and
     [connector] default to {!Model_proxy.default_upstream} and
-    {!Upstream.plain}. [connector] also serves an HTTP agent.
+    {!Upstream.plain}. [connector] also serves an HTTP agent. [meta.json] lists
+    under [upstreams] the {!overridden_upstreams} (provider name to URL, an
+    empty object when there are none) of a run that can call a provider, which
+    is every run but a strict or fuzzy replay.
 
     In a replay, the run's own cassette holds a copy of every exchange served
     from the recording plus any live-tail exchanges, so a strict replay's trace

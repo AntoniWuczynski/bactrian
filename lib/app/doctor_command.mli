@@ -13,7 +13,9 @@ val run :
   request ->
   (Bactrian_runtime.Doctor.report, Command_error.t) result
 (** Runs the checks; no agent is started and no URL is contacted. An invalid
-    experiment file is [Configuration]. Seeds the random generator. *)
+    experiment file is [Configuration], and an invalid
+    [BACTRIAN_UPSTREAM_<PROVIDER>] variable ({!Upstream_env}) is [Usage]. Seeds
+    the random generator. *)
 
 val exit_code : Bactrian_runtime.Doctor.report -> int
 (** {!Exit_code.ok}, or {!Exit_code.environment} when a check failed. *)

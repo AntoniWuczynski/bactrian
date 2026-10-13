@@ -82,6 +82,30 @@ let key_checks ~keys ~funded =
                    variable provider))
     Run.providers
 
+(* Upstream overrides *)
+
+let on_this_machine uri =
+  match Uri.host uri with
+  | Some host ->
+      String.equal host "localhost"
+      || String.equal host "::1"
+      || String.starts_with ~prefix:"127." host
+  | None -> false
+
+let upstream_checks ~upstream =
+  List.map
+    (fun (name, url) ->
+      let shown = Uri.to_string url in
+      let check_name = "upstream-" ^ name in
+      if Upstream.is_https url || on_this_machine url then
+        check check_name Pass shown
+      else
+        check check_name Warn
+          (shown
+         ^ " is plain HTTP to another machine: the real API key is sent \
+            unencrypted"))
+    (Run.overridden_upstreams upstream)
+
 (* The agent *)
 
 let http_url_problem url =
@@ -236,9 +260,7 @@ let clock_check ~linux ~library_override ~path target =
 
 (* TLS *)
 
-let https_scheme uri = Option.equal String.equal (Uri.scheme uri) (Some "https")
-
-let tls_check ~available target =
+let tls_check ~available ~upstream target =
   if available then check "tls" Pass "HTTPS support is built in"
   else
     let needed =
@@ -247,11 +269,11 @@ let tls_check ~available target =
       | Some t -> (
           List.filter_map
             (fun (p, name) ->
-              if https_scheme (P.default_upstream p) then Some name else None)
+              if Upstream.is_https (upstream p) then Some name else None)
             t.funded
           @
           match t.agent with
-          | Http { url; _ } when https_scheme (Uri.of_string url) ->
+          | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
               [ "the agent at " ^ url ]
           | Http _ | Command _ -> [])
     in
@@ -273,7 +295,7 @@ let egress_checks =
 
 (* All of them *)
 
-let run ~env ~bactrian_exe ~tls_available ~keys ~path target =
+let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
   let keys = List.map fst keys in
   let cwd = match target with Some t -> t.dir | None -> Sys.getcwd () in
   let http_agent =
@@ -283,6 +305,7 @@ let run ~env ~bactrian_exe ~tls_available ~keys ~path target =
   in
   let mode = match target with Some t -> t.sandbox | None -> `Auto in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
+  @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with
     | Some t -> [ agent_check ~path ~cwd t.agent ]
@@ -292,6 +315,6 @@ let run ~env ~bactrian_exe ~tls_available ~keys ~path target =
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;
-      tls_check ~available:tls_available target;
+      tls_check ~available:tls_available ~upstream target;
     ]
   @ egress_checks

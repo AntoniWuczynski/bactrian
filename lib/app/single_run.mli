@@ -48,12 +48,14 @@ val execute :
   sandbox:Sandbox.mode ->
   (Store.t -> Sandbox.t -> (Run.config, string) result) ->
   (Run.result, Command_error.t) result
-(** Reads the spend caps from [BACTRIAN_CAP_<PROVIDER>], and when [live] checks
-    that a provider has a cap above 0, its key and TLS support, then opens the
-    ledger and the store under [./.bactrian], preflights the sandbox in mode
-    [sandbox], starts the model proxy and runs the configuration the function
-    builds from the store and the preflight's decision. [bactrian_exe] is the
-    executable the sandbox re-runs as its probe.
+(** Reads the spend caps from [BACTRIAN_CAP_<PROVIDER>] and the upstreams from
+    [BACTRIAN_UPSTREAM_<PROVIDER>] ({!Upstream_env}; an invalid one is [Usage]),
+    and when [live] checks that a provider has a cap above 0, its key and, if
+    its upstream is an [https] URL, TLS support, then opens the ledger and the
+    store under [./.bactrian], preflights the sandbox in mode [sandbox], starts
+    the model proxy and runs the configuration the function builds from the
+    store and the preflight's decision. [bactrian_exe] is the executable the
+    sandbox re-runs as its probe.
 
     Seeds the random generator, and must be called inside [Eio_main.run]. A
     command that starts agents needs a launch environment free of secrets, so

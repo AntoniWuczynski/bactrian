@@ -10,26 +10,30 @@ type t = { summary : Executor.summary; sandbox : Sandbox.label option }
 
 let run ?stop ~on_progress ~bactrian_exe ~env (r : request) =
   Mirage_crypto_rng_unix.use_default ();
-  let announced = ref None in
-  let label = ref None in
-  match
-    Interrupt.run ?stop (fun () ->
-        Executor.run_experiment ?sandbox:r.sandbox
-          ~on_sandbox:(fun l -> label := Some l)
-          ~bactrian_exe ~env ~experiment_file:r.experiment ~resume:r.resume
-          ~announce:(fun id ->
-            announced := Some id;
-            on_progress (Progress.Experiment_started id))
-          ~warn:(fun w -> on_progress (Progress.Warning w))
-          ())
-  with
-  | Error signal ->
-      Error (Command_error.Interrupted { signal; experiment_id = !announced })
-  | Ok (Error (Configuration errors)) ->
-      Error (Command_error.Configuration errors)
-  | Ok (Error (Usage m)) -> Error (Command_error.Usage m)
-  | Ok (Error (Environment m)) -> Error (Command_error.Environment m)
-  | Ok (Ok summary) -> Ok { summary; sandbox = !label }
+  match Upstream_env.from_environment () with
+  | Error m -> Error (Command_error.Usage m)
+  | Ok upstream -> (
+      let announced = ref None in
+      let label = ref None in
+      match
+        Interrupt.run ?stop (fun () ->
+            Executor.run_experiment ~upstream ?sandbox:r.sandbox
+              ~on_sandbox:(fun l -> label := Some l)
+              ~bactrian_exe ~env ~experiment_file:r.experiment ~resume:r.resume
+              ~announce:(fun id ->
+                announced := Some id;
+                on_progress (Progress.Experiment_started id))
+              ~warn:(fun w -> on_progress (Progress.Warning w))
+              ())
+      with
+      | Error signal ->
+          Error
+            (Command_error.Interrupted { signal; experiment_id = !announced })
+      | Ok (Error (Configuration errors)) ->
+          Error (Command_error.Configuration errors)
+      | Ok (Error (Usage m)) -> Error (Command_error.Usage m)
+      | Ok (Error (Environment m)) -> Error (Command_error.Environment m)
+      | Ok (Ok summary) -> Ok { summary; sandbox = !label })
 
 let exit_code t = Exit_code.of_summary t.summary
 

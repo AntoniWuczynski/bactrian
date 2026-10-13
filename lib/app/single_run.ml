@@ -82,8 +82,9 @@ let read_caps () =
     (Ok []) Run.providers
   |> Result.map List.rev
 
-(* A live call needs a spend cap above zero, the key behind it and TLS. *)
-let live_problem caps =
+(* A live call needs a spend cap above zero, the key behind it and, for an
+   https upstream, TLS. *)
+let live_problem ~upstream caps =
   let funded =
     List.filter
       (fun (_, name) ->
@@ -113,19 +114,24 @@ let live_problem caps =
           Some
             (Printf.sprintf "%s has a spend cap but %s is not set" name
                (Run.key_variable p))
-      | None ->
-          if Features.tls_available then None
-          else
-            Some
-              "this build has no TLS support (bactrian.tls), so it cannot call \
-               providers over HTTPS")
+      | None -> (
+          match
+            List.filter (fun (p, _) -> Upstream.is_https (upstream p)) funded
+          with
+          | _ :: _ as https when not Features.tls_available ->
+              Some
+                (Printf.sprintf
+                   "this build has no TLS support (bactrian.tls), so it cannot \
+                    call providers (%s) over HTTPS"
+                   (String.concat ", " (List.map snd https)))
+          | _ :: _ | [] -> None))
 
 let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   let warn w = on_progress (Progress.Warning w) in
-  match read_caps () with
-  | Error m -> Error (Command_error.Usage m)
-  | Ok caps -> (
-      match if live then live_problem caps else None with
+  match (read_caps (), Upstream_env.from_environment ()) with
+  | Error m, _ | _, Error m -> Error (Command_error.Usage m)
+  | Ok caps, Ok upstream -> (
+      match if live then live_problem ~upstream caps else None with
       | Some m -> Error (Command_error.Environment m)
       | None -> (
           Mirage_crypto_rng_unix.use_default ();
@@ -167,7 +173,8 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                             Option.iter warn
                               (Sandbox.mcp_warning sandbox
                                  (config : Run.config).mcp);
-                            Run.execute ~env ~proxy ~store ~ledger config))
+                            Run.execute ~upstream ~env ~proxy ~store ~ledger
+                              config))
                   with
                   | Error signal ->
                       Error

@@ -166,14 +166,23 @@ let test_clock () =
 (* TLS and egress *)
 
 let test_tls () =
-  let tls ?(available = false) t = Doctor.tls_check ~available t in
+  let tls ?(available = false) ?(upstream = P.default_upstream) t =
+    Doctor.tls_check ~available ~upstream t
+  in
   let funded = [ (P.Openai, "openai") ] in
+  let local _ = Uri.of_string "http://127.0.0.1:11434" in
   check_status "built in" Pass (tls ~available:true None);
   check_status "no experiment" Skip (tls None);
   check_status "no provider called live" Skip
     (tls (Some (target ~dir:"." (command ()))));
   check_status "a provider is called live" Fail
     (tls (Some (target ~funded ~dir:"." (command ()))));
+  check_status "a provider is called live at an http upstream" Skip
+    (tls ~upstream:local (Some (target ~funded ~dir:"." (command ()))));
+  check_status "an https upstream that is not a default" Fail
+    (tls
+       ~upstream:(fun _ -> Uri.of_string "https://gateway.example/v1")
+       (Some (target ~funded ~dir:"." (command ()))));
   check_status "an https agent" Fail
     (tls (Some (target ~dir:"." (http "https://a.example/x"))));
   check_status "an http agent" Skip
@@ -181,6 +190,37 @@ let test_tls () =
   Alcotest.check pairs "egress is not built"
     [ ("ca", "skip"); ("node", "skip") ]
     (statuses Doctor.egress_checks)
+
+(* Upstream overrides *)
+
+let test_upstream_checks () =
+  let upstream p =
+    match p with
+    | P.Openai -> Uri.of_string "http://127.0.0.1:11434"
+    | P.Anthropic -> Uri.of_string "https://gateway.example/anthropic"
+    | P.Gemini -> Uri.of_string "http://10.0.0.5:8080/gemini"
+    | P.Openrouter -> P.default_upstream p
+  in
+  let checks = Doctor.upstream_checks ~upstream in
+  Alcotest.check pairs "one line per overridden provider"
+    [
+      ("upstream-openai", "ok");
+      ("upstream-anthropic", "ok");
+      ("upstream-gemini", "warn");
+    ]
+    (statuses checks);
+  Alcotest.(check (list string))
+    "the URL is shown"
+    [
+      "http://127.0.0.1:11434";
+      "https://gateway.example/anthropic";
+      "http://10.0.0.5:8080/gemini is plain HTTP to another machine: the real \
+       API key is sent unencrypted";
+    ]
+    (List.map (fun (c : Doctor.check) -> c.message) checks);
+  Alcotest.(check int)
+    "none without an override" 0
+    (List.length (Doctor.upstream_checks ~upstream:P.default_upstream))
 
 let test_loopback () = check_status "binds" Pass (Doctor.loopback_check ())
 
@@ -218,7 +258,8 @@ let test_no_key_value_in_output () =
   let report t =
     Doctor.report
       (Doctor.run ~env ~bactrian_exe:"/nonexistent" ~tls_available:false
-         ~keys:sentinels ~path:(Some "/usr/bin:/bin") t)
+         ~upstream:P.default_upstream ~keys:sentinels
+         ~path:(Some "/usr/bin:/bin") t)
   in
   let funded = Executor.funded [ ("openai", 1.); ("gemini", 1.) ] in
   let reports =
@@ -263,6 +304,7 @@ let () =
           Alcotest.test_case "sandbox" `Quick test_sandbox;
           Alcotest.test_case "clock" `Quick test_clock;
           Alcotest.test_case "tls and egress" `Quick test_tls;
+          Alcotest.test_case "upstream overrides" `Quick test_upstream_checks;
           Alcotest.test_case "loopback" `Quick test_loopback;
         ] );
       ( "output",

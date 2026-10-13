@@ -203,12 +203,8 @@ let no_tls what =
 let agent_preflight ~connector : Run.agent -> (unit, error) result = function
   | Command _ -> Ok ()
   | Http { url; _ } ->
-      if
-        Option.is_none connector
-        && Option.equal String.equal
-             (Uri.scheme (Uri.of_string url))
-             (Some "https")
-      then Error (no_tls ("the agent at " ^ url))
+      if Option.is_none connector && Upstream.is_https (Uri.of_string url) then
+        Error (no_tls ("the agent at " ^ url))
       else Ok ()
 
 let preflight ~caps ~keys ~upstream ~connector =
@@ -228,17 +224,16 @@ let preflight ~caps ~keys ~upstream ~connector =
             (Environment
                (Printf.sprintf "%s has a spend cap but %s is not set" name
                   (Run.key_variable p)))
-      | None ->
-          if
-            Option.is_none connector
-            && List.exists
-                 (fun (p, _) ->
-                   Option.equal String.equal
-                     (Uri.scheme (upstream p))
-                     (Some "https"))
-                 funded
-          then Error (no_tls "providers")
-          else Ok ())
+      | None -> (
+          match
+            List.filter (fun (p, _) -> Upstream.is_https (upstream p)) funded
+          with
+          | _ :: _ as https when Option.is_none connector ->
+              Error
+                (no_tls
+                   (Printf.sprintf "providers (%s)"
+                      (String.concat ", " (List.map snd https))))
+          | _ :: _ | [] -> Ok ()))
 
 (* Loading *)
 

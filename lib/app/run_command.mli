@@ -25,8 +25,10 @@ val run :
   env:Eio_unix.Stdenv.base ->
   request ->
   (t, Command_error.t) result
-(** Runs the experiment (see {!Bactrian_runtime.Executor.run_experiment}).
-    [on_progress] gets {!Progress.Experiment_started} once the ID is known and a
+(** Runs the experiment (see {!Bactrian_runtime.Executor.run_experiment}),
+    calling each provider at its {!Upstream_env} URL. An invalid
+    [BACTRIAN_UPSTREAM_<PROVIDER>] variable is [Usage]. [on_progress] gets
+    {!Progress.Experiment_started} once the ID is known and a
     {!Progress.Warning} for each setting that is accepted but not enforced.
     SIGINT and SIGTERM, or [stop] when given (then no signal handler is
     installed), stop the experiment and give [Interrupted] with the experiment's

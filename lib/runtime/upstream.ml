@@ -196,13 +196,13 @@ let request_text (req : request) ~host =
   in
   head ^ req.body
 
+let is_https url = Option.equal String.equal (Uri.scheme url) (Some "https")
+
 let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
   match Uri.host req.url with
   | None -> Error (Connect_failed "url has no host")
   | Some host -> (
-      let https =
-        Option.equal String.equal (Uri.scheme req.url) (Some "https")
-      in
+      let https = is_https req.url in
       let port =
         Option.value (Uri.port req.url) ~default:(if https then 443 else 80)
       in

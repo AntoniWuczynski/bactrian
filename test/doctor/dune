@@ -9,6 +9,7 @@
   mirage-crypto-rng.unix
   re
   unix
+  uri
   yojson
   alcotest)
  (flags

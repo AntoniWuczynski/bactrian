@@ -48,6 +48,12 @@ val key_checks :
     non-empty. Without an experiment ([funded = None]) a missing key is [Warn].
     With one, it is [Fail] for a funded provider and [Skip] for the others. *)
 
+val upstream_checks : upstream:(Model_proxy.provider -> Uri.t) -> check list
+(** One check per provider whose upstream is not the real one
+    ({!Run.overridden_upstreams}), named [upstream-<provider>] and showing the
+    URL. [Pass], or [Warn] for plain [http] to a host other than this machine,
+    because the real API key goes there unencrypted. *)
+
 val agent_check : path:string option -> cwd:string -> Experiment.agent -> check
 (** A command agent's executable must be found ({!Proc_util.find_executable}).
     An HTTP agent's URL must be an [http] or [https] URL with a host, and is
@@ -76,9 +82,14 @@ val clock_check :
     ({!Agent_clock.decide}). Without, whether this host can enforce the clock at
     all. Contract-only on macOS is expected, so it is [Pass]. *)
 
-val tls_check : available:bool -> target option -> check
+val tls_check :
+  available:bool ->
+  upstream:(Model_proxy.provider -> Uri.t) ->
+  target option ->
+  check
 (** [Pass] when the build has the TLS stack. Otherwise [Skip], or [Fail] when
-    the experiment calls a provider or an agent over HTTPS. *)
+    the experiment calls a provider whose [upstream] is an [https] URL, or an
+    agent at one. An [http] upstream does not count. *)
 
 val egress_checks : check list
 (** The CA and the Node version, which only matter once egress is intercepted:
@@ -88,6 +99,7 @@ val run :
   env:Eio_unix.Stdenv.base ->
   bactrian_exe:string ->
   tls_available:bool ->
+  upstream:(Model_proxy.provider -> Uri.t) ->
   keys:(Model_proxy.provider * string) list ->
   path:string option ->
   target option ->

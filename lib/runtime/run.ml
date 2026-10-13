@@ -93,6 +93,13 @@ let key_variable : P.provider -> string = function
   | Gemini -> "GEMINI_API_KEY"
   | Openrouter -> "OPENROUTER_API_KEY"
 
+let overridden_upstreams upstream =
+  List.filter_map
+    (fun (p, name) ->
+      let url = upstream p in
+      if Uri.equal url (P.default_upstream p) then None else Some (name, url))
+    providers
+
 let keys_from_environment () =
   List.filter_map
     (fun (p, _) ->
@@ -372,7 +379,8 @@ let decide_outcome ~replay (findings : P.findings) failure =
 (* Files *)
 
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
-    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock =
+    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock
+    ~upstreams =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -382,6 +390,11 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
        ("bactrian_version", `String Version.current);
        ("sim_now", `String sim_now);
        ("clock", Clock_label.to_json clock);
+       ( "upstreams",
+         `Assoc
+           (List.map
+              (fun (name, url) -> (name, `String (Uri.to_string url)))
+              upstreams) );
        ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
        ("sandbox_violations", Sandbox.violations_json violations);
        ("outcome", `String (outcome_kind outcome));
@@ -583,6 +596,13 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
             allow_reorder = r.allow_reorder;
             timing = r.timing;
           }
+  in
+  (* A run that only serves a recording calls nobody. *)
+  let upstreams =
+    match mode with
+    | Record | Passthrough | Replay { matcher = Until_divergence; _ } ->
+        overridden_upstreams upstream
+    | Replay { matcher = Strict | Fuzzy _; _ } -> []
   in
   let started = ref 0. in
   let t_ms () = Float.to_int ((Eio.Time.now clock -. !started) *. 1000.) in
@@ -825,7 +845,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~tokens:(Report_data.tokens entries)
               ~normalise:normalise_sources ~redact:redact_sources
               ~replay_of:(Option.map (fun (_, id, _) -> id) recording)
-              ~violations ~clock:clock_label)
+              ~violations ~clock:clock_label ~upstreams)
         ^ "\n")
     with
     | () ->

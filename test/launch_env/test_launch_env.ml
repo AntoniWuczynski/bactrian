@@ -87,6 +87,23 @@ let test_round_trip () =
     "nothing" []
     (Launch_env.decode (Launch_env.encode [||]))
 
+(* The re-executed image reads BACTRIAN_UPSTREAM_<PROVIDER> from the restored
+   environment, not from the launch environment, which holds no BACTRIAN_*. *)
+let test_upstream_variables_are_restored () =
+  let upstream =
+    [| "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:11434"; "PATH=/usr/bin" |]
+  in
+  Alcotest.(check (list string))
+    "not in the launch environment" [ "PATH=/usr/bin" ]
+    (Launch_env.kept upstream);
+  Alcotest.(check (list (pair string string)))
+    "restored"
+    [
+      ("BACTRIAN_UPSTREAM_OPENAI", "http://127.0.0.1:11434");
+      ("PATH", "/usr/bin");
+    ]
+    (Launch_env.decode (Launch_env.encode upstream))
+
 let () =
   Alcotest.run "launch_env"
     [
@@ -94,6 +111,8 @@ let () =
         [
           Alcotest.test_case "allowlist split" `Quick test_kept;
           Alcotest.test_case "encode and decode" `Quick test_round_trip;
+          Alcotest.test_case "upstream variables are restored" `Quick
+            test_upstream_variables_are_restored;
           Alcotest.test_case "inherited descriptors stay home" `Quick
             test_inherited_closed;
         ] );

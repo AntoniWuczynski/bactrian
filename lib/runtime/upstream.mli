@@ -17,6 +17,9 @@ type https =
 
 val of_https : https -> connector
 
+val is_https : Uri.t -> bool
+(** Whether the URL's scheme is [https], which needs a TLS connector. *)
+
 type request = {
   meth : string;
   url : Uri.t;

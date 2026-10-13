@@ -224,7 +224,7 @@ experiment cannot be resumed.
   bactrian: openai has a spend cap but OPENAI_API_KEY is not set
   [69]
   $ OPENAI_API_KEY=k bactrian run capped.yaml
-  bactrian: this build has no TLS support (bactrian.tls), so it cannot call providers over HTTPS
+  bactrian: this build has no TLS support (bactrian.tls), so it cannot call providers (openai) over HTTPS
   [69]
   $ OPENAI_API_KEY=k bactrian run capped.yaml --resume nope
   bactrian: no experiment "nope"

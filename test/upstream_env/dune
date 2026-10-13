@@ -1,0 +1,6 @@
+(test
+ (name test_upstream_env)
+ (package bactrian)
+ (libraries bactrian.app bactrian.runtime uri alcotest)
+ (flags
+  (:standard -w -70)))
