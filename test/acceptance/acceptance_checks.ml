@@ -162,8 +162,7 @@ let escapes ?vm ~name argv_of =
     (fun name ->
       Printf.printf "%s: %s\n" name (detail name);
       Alcotest.(check bool)
-        (name ^ " shows nothing")
-        true
+        (name ^ " shows nothing") true
         (String.equal (outcome name) "failed"
         || String.equal (detail name) "read 0 bytes"))
     [ "masked_file"; "masked_file_upper"; "masked_file_mixed" ];

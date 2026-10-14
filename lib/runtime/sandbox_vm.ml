@@ -106,6 +106,7 @@ let args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd ~forwards command =
          env_file;
          relay = t.relay;
          project_root = layout.project_root;
+         bactrian_dir = layout.bactrian_dir;
          runs_dir = Filename.concat layout.bactrian_dir "runs";
          state_dir;
          temp_dir;

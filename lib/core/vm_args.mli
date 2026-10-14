@@ -44,6 +44,10 @@ type input = {
   env_file : string;  (** The file {!val-env_file} wrote. *)
   relay : string;  (** The relay binary on the host. *)
   project_root : string;
+  bactrian_dir : string;
+      (** [.bactrian]. A mask over it leaves the run's own [state_dir] and
+          [temp_dir] and the [allow_write] paths in it visible, except those in
+          another mask beneath it. *)
   runs_dir : string;
       (** [.bactrian/runs]. Its mask leaves the run's own [state_dir] and
           [temp_dir] visible, and no other mask does. *)
@@ -97,10 +101,11 @@ val argv : input -> (string list, error) result
     read-write. An entry that is the masked file under another name is left out,
     and so is a symbolic link, unless it leads to a file the container shows (a
     bind follows the link). An entry with a mount of its own keeps that one, so
-    masks nest. A writable path under a directory mask is left out, except the
-    run's own directories under [runs_dir], so a path inside another run stays
-    hidden. A mask is left out where no mount shows its path, and a mount whose
-    path equals a mask's is replaced by the mask. *)
+    masks nest. A writable path under a directory mask is left out, except under
+    [bactrian_dir] and, for the run's own directories, under [runs_dir], so a
+    path inside another run stays hidden. A mask is left out where no mount
+    shows its path, and a mount whose path equals a mask's is replaced by the
+    mask. *)
 
 val env_file : (string * string) list -> (string, error) result
 (** The agent's environment in the runtime's env-file format: one [NAME=VALUE]

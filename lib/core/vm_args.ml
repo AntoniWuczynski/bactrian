@@ -15,6 +15,7 @@ type input = {
   env_file : string;
   relay : string;
   project_root : string;
+  bactrian_dir : string;
   runs_dir : string;
   state_dir : string;
   temp_dir : string;
@@ -176,11 +177,16 @@ let plain_mounts i =
          (fun (p, k) -> match k with `File -> Some p | `Dir | `Absent -> None)
          i.deny)
   in
-  (* A writable path is hidden by any directory mask over it, except that the
-     run's own directories come back under the mask over every run. *)
+  (* A writable path is hidden by any directory mask over it, except that
+     every writable path comes back under the mask over .bactrian and the run's
+     own directories under the mask over every run. *)
   let hidden ~own path =
     List.exists
-      (fun d -> within ~dir:d path && not (own && String.equal d i.runs_dir))
+      (fun d ->
+        within ~dir:d path
+        && not
+             (String.equal d i.bactrian_dir
+             || (own && String.equal d i.runs_dir)))
       dirs
   in
   let masked path = List.exists (String.equal path) (dirs @ files) in

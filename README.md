@@ -202,7 +202,7 @@ Every agent runs inside an operating-system sandbox when the host supports one. 
 
 - can connect only to bactrian's own listeners, so a direct HTTPS request, a raw Transmission Control Protocol (TCP) connection, a WebSocket and a Domain Name System (DNS) lookup all fail, whatever proxy variables the agent ignores
 - can write only to its run's state directory, its temporary directory and the paths you allow
-- cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca` and the other runs in `.bactrian/runs`, and, where one of these is a symbolic link, the file or directory it leads to
+- cannot read credential paths: `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials`, `~/Library/Keychains`, the `.env` files at the project root, `.bactrian/ca`, the other runs in `.bactrian/runs`, every run's recorded payloads, the experiments and the spend ledger (`.bactrian/blobs`, `.bactrian/experiments`, `.bactrian/ledger.jsonl`, and in the virtual machine all of `.bactrian` but the run's own directories), and, where one of these is a symbolic link, the file or directory it leads to
 - holds a placeholder API key (`bactrian-<token>`) and never the real one, which only bactrian's proxy adds on the way upstream
 
 There are three backends, chosen with `backend`:

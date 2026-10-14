@@ -155,7 +155,8 @@ type deny = { path : string; keep_own_run : bool }
    path, so the target is denied. Seatbelt also gets the link's own path, which
    costs nothing. bubblewrap does not: a mount on a link to an absolute path
    would be resolved outside the sandbox's root. *)
-let denies ?(resolve = Fun.id) i =
+let denies ?(resolve = Fun.id) ?credentials i =
+  let credentials = Option.value credentials ~default:i.platform in
   let plain path = { path; keep_own_run = false } in
   let with_target d =
     let real = resolve d.path in
@@ -168,15 +169,22 @@ let denies ?(resolve = Fun.id) i =
   List.concat_map with_target
     (List.map
        (fun p -> plain (Filename.concat i.home p))
-       (home_credentials i.platform)
+       (home_credentials credentials)
     @ List.map (fun p -> plain (Filename.concat i.project_root p)) env_files
     @ [
         plain (Filename.concat i.bactrian_dir "ca");
+        (* Every run's large payloads, the experiments' manifests and the spend
+           ledger: no agent needs them, and a replayed agent could read its
+           own recording in them. *)
+        plain (Filename.concat i.bactrian_dir "blobs");
+        plain (Filename.concat i.bactrian_dir "experiments");
+        plain (Filename.concat i.bactrian_dir "ledger.jsonl");
         { path = Filename.concat i.bactrian_dir "runs"; keep_own_run = true };
       ])
   @ List.map plain i.deny_read
 
-let deny_list ?resolve i = List.map (fun d -> d.path) (denies ?resolve i)
+let deny_list ?resolve ?credentials i =
+  List.map (fun d -> d.path) (denies ?resolve ?credentials i)
 
 (* ---- macOS ---- *)
 

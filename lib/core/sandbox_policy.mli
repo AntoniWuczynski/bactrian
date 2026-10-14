@@ -65,13 +65,17 @@ type error =
 
 val describe_error : error -> string
 
-val deny_list : ?resolve:(string -> string) -> input -> string list
+val deny_list :
+  ?resolve:(string -> string) -> ?credentials:platform -> input -> string list
 (** The paths the agent may not read, in the order they are applied: the default
     list of design §5.3 expanded against [home], [project_root] and
     [bactrian_dir] (credential directories and files under [home], the project's
-    [.env] files, [.bactrian/ca] and [.bactrian/runs]), then [deny_read]. A
-    run's own state and temporary directories stay readable even when they sit
-    under [.bactrian/runs], except for paths in [deny_read].
+    [.env] files, [.bactrian/ca], [.bactrian/blobs], [.bactrian/experiments],
+    [.bactrian/ledger.jsonl] and [.bactrian/runs]), then [deny_read].
+    [credentials] (default: [input.platform]) is the platform whose credential
+    paths are listed: the virtual machine is Linux, but the home it might show
+    is the host's. A run's own state and temporary directories stay readable
+    even when they sit under [.bactrian/runs], except for paths in [deny_read].
 
     [resolve] (default: the identity) gives a default path with its symbolic
     links resolved. Where that differs, the resolved path is denied, because

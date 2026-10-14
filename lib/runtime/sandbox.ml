@@ -447,6 +447,14 @@ let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
     input_of host ~state_dir:None ~temp_dir:host.bactrian_dir ~listeners:[]
       ~tag:"" ~preload:None [ "agent" ]
   in
+  (* The home a mount might show is the host's, so its credential paths are
+     the host's (the keychains on macOS). The whole of .bactrian is masked:
+     the run's own directories and allow_write paths come back beneath it. *)
+  let credentials =
+    match host_backend () with
+    | `Seatbelt -> Policy.Macos
+    | `Bubblewrap -> Linux
+  in
   {
     project_root = host.project_root;
     bactrian_dir = host.bactrian_dir;
@@ -454,8 +462,9 @@ let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
     deny =
       List.map
         (fun p -> (p, kind p))
-        (Policy.deny_list ~resolve:resolved
-           { input with deny_read = input.deny_read @ extra });
+        (host.bactrian_dir
+        :: Policy.deny_list ~resolve:resolved ~credentials
+             { input with deny_read = input.deny_read @ extra });
   }
 
 let check_vm ~env settings =

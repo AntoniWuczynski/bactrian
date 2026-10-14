@@ -75,11 +75,11 @@ let expected_profile =
        "(allow ipc-posix-sem)";
        "(allow file-read*)";
      ]
-    @ List.init 23 deny_rule
+    @ List.init 26 deny_rule
     @ [
         "(allow file-read-data (subpath (param \"STATE\")) (subpath (param \
          \"TEMP\")))";
-        deny_rule 23;
+        deny_rule 26;
         "(allow file-write* (subpath (param \"STATE\")) (subpath (param \
          \"TEMP\")) (subpath (param \"WRITE_0\")) (literal \"/dev/null\") \
          (literal \"/dev/dtracehelper\"))";
@@ -120,8 +120,11 @@ let expected_params =
     ("DENY_19", "/work/proj/.env.test");
     ("DENY_20", "/work/proj/.env.test.local");
     ("DENY_21", "/work/proj/.bactrian/ca");
-    ("DENY_22", "/work/proj/.bactrian/runs");
-    ("DENY_23", "/work/proj/private");
+    ("DENY_22", "/work/proj/.bactrian/blobs");
+    ("DENY_23", "/work/proj/.bactrian/experiments");
+    ("DENY_24", "/work/proj/.bactrian/ledger.jsonl");
+    ("DENY_25", "/work/proj/.bactrian/runs");
+    ("DENY_26", "/work/proj/private");
     ("WRITE_0", "/work/proj/out");
     ("PORT_0", "8080");
     ("PORT_1", "8081");
@@ -214,9 +217,28 @@ let test_other_run_stays_hidden () =
     (List.mem other (after_mask argv))
 
 let test_keychains_macos_only () =
-  let has i = List.mem "/home/u/Library/Keychains" (P.deny_list i) in
+  let has ?credentials i =
+    List.mem "/home/u/Library/Keychains" (P.deny_list ?credentials i)
+  in
   Alcotest.(check bool) "macos" true (has base);
-  Alcotest.(check bool) "linux" false (has linux)
+  Alcotest.(check bool) "linux" false (has linux);
+  Alcotest.(check bool)
+    "linux with the credentials of a macOS host" true
+    (has ~credentials:Macos linux)
+
+(* Other runs' payloads, the experiments and the ledger are denied on both
+   platforms. *)
+let test_cross_run_data () =
+  List.iter
+    (fun i ->
+      List.iter
+        (fun p -> Alcotest.(check bool) p true (List.mem p (P.deny_list i)))
+        [
+          "/work/proj/.bactrian/blobs";
+          "/work/proj/.bactrian/experiments";
+          "/work/proj/.bactrian/ledger.jsonl";
+        ])
+    [ base; linux ]
 
 (* ~/.aws and the project's .env are symbolic links: their targets are denied,
    and on macOS the links too. *)
@@ -268,7 +290,7 @@ let test_deny_read_wins_in_state () =
   in
   Alcotest.(check bool)
     "own dirs readable again before the extra deny" true
-    (index "(allow file-read-data" < index (deny_rule 23))
+    (index "(allow file-read-data" < index (deny_rule 26))
 
 let contains hay needle = Re.execp (Re.compile (Re.str needle)) hay
 
@@ -666,6 +688,8 @@ let () =
             test_other_run_stays_hidden;
           Alcotest.test_case "keychains on macOS only" `Quick
             test_keychains_macos_only;
+          Alcotest.test_case "other runs' data is denied" `Quick
+            test_cross_run_data;
           Alcotest.test_case "linked defaults deny their targets" `Quick
             test_linked_defaults;
           Alcotest.test_case "deny_read wins inside the state dir" `Quick

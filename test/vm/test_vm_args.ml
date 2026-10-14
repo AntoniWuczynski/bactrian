@@ -43,6 +43,7 @@ let input ?(allow_write = []) ?(deny = []) ?(listing = default_listing)
     env_file = "/p/.bactrian/runs/r1/agent.env";
     relay = "/c/relay";
     project_root = project;
+    bactrian_dir = "/p/.bactrian";
     runs_dir = "/p/.bactrian/runs";
     state_dir = "/p/.bactrian/runs/r1/state";
     temp_dir = "/p/.bactrian/runs/r1/tmp";
@@ -319,6 +320,43 @@ let test_every_file_mask () =
     ]
     m
 
+(* In the virtual machine all of .bactrian is masked: the run's own
+   directories and allow_write paths come back, except in another run or the
+   CA. *)
+let test_bactrian_masked () =
+  let m =
+    mounts
+      (input
+         ~deny:
+           [
+             ("/p/.env", `File);
+             ("/p/.bactrian", `Dir);
+             ("/p/.bactrian/ca", `Dir);
+             ("/p/.bactrian/blobs", `Dir);
+             ("/p/.bactrian/ledger.jsonl", `File);
+             ("/p/.bactrian/runs", `Dir);
+           ]
+         ~allow_write:
+           [
+             "/p/.bactrian/shared";
+             "/p/.bactrian/runs/r2/state";
+             "/p/.bactrian/ca/x";
+           ]
+         ~listing:[ ("/p", [ plain ".env"; plain ".bactrian"; plain "a.js" ]) ]
+         ())
+  in
+  Alcotest.check strings "the run's own directories alone come back"
+    [
+      "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "/p:ro,mode=0755";
+      "/p/.bactrian:ro,mode=0755";
+      "type=bind,source=/p/a.js,target=/p/a.js,readonly";
+      "type=bind,source=/p/.bactrian/shared,target=/p/.bactrian/shared";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+    ]
+    m
+
 let test_errors () =
   Alcotest.(check string)
     "a comma"
@@ -414,6 +452,7 @@ let () =
           Alcotest.test_case "writable paths" `Quick test_writable_paths;
           Alcotest.test_case "masks over mounts" `Quick test_masks_over_mounts;
           Alcotest.test_case "nested masks" `Quick test_nested_masks;
+          Alcotest.test_case ".bactrian masked" `Quick test_bactrian_masked;
           Alcotest.test_case "every file mask" `Quick test_every_file_mask;
         ] );
       ("environment", [ Alcotest.test_case "env file" `Quick test_env_file ]);
