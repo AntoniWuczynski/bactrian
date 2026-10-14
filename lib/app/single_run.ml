@@ -7,6 +7,7 @@ type sandbox = {
   mode : Sandbox.mode;
   backend : Sandbox.backend;
   image : string option;
+  seatbelt_hint : bool;
 }
 
 type common = {
@@ -33,7 +34,8 @@ let defaults =
     env_passthrough = [];
     turn_timeout = 120.;
     total_timeout = 600.;
-    sandbox = { mode = `Auto; backend = `Auto; image = None };
+    sandbox =
+      { mode = `Auto; backend = `Auto; image = None; seatbelt_hint = true };
   }
 
 let positive name v =
@@ -140,7 +142,8 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
           | ledger -> (
               match
                 let* sandbox =
-                  Sandbox.preflight ~env ~warn
+                  Sandbox.preflight ~seatbelt_hint:sandbox.seatbelt_hint ~env
+                    ~warn
                     {
                       mode = sandbox.mode;
                       backend = sandbox.backend;

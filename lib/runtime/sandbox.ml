@@ -524,7 +524,7 @@ let exposure =
   "the agent can read the launch environment of every process of this user \
    that is not an Apple binary (decision record 0010)"
 
-let preflight ~env ~warn settings =
+let preflight ?(seatbelt_hint = true) ~env ~warn settings =
   match settings.mode with
   | `Off -> Ok off
   | (`Auto | `Strict) as mode -> (
@@ -572,7 +572,9 @@ let preflight ~env ~warn settings =
       | `Auto, `Bubblewrap -> on_host `Bubblewrap
       | `Auto, `Seatbelt -> (
           let seatbelt_fix =
-            ". Or set sandbox.backend: seatbelt to accept that " ^ exposure
+            if seatbelt_hint then
+              ". Or set sandbox.backend: seatbelt to accept that " ^ exposure
+            else ""
           in
           match (settings.image, mode) with
           | Some _, (`Auto | `Strict) -> in_vm ~fix:seatbelt_fix
@@ -587,8 +589,11 @@ let preflight ~env ~warn settings =
                 ("sandbox: auto: the agent runs under Seatbelt, where "
                ^ exposure
                ^ ". Fix: set sandbox.image and run OrbStack or Docker Desktop \
-                  to run it in a virtual machine, or set sandbox.backend: \
-                  seatbelt to accept this");
+                  to run it in a virtual machine"
+                ^
+                if seatbelt_hint then
+                  ", or set sandbox.backend: seatbelt to accept this"
+                else "");
               on_host `Seatbelt))
 
 let backend_available : backend -> (unit, string) result = function

@@ -30,6 +30,13 @@ val sandbox :
     is. An experiment with an HTTP-mode agent cannot meet [strict], which
     loading it reports. *)
 
+val backend :
+  t -> field:string -> Bactrian_runtime.Sandbox.backend -> (unit, string) result
+(** Refuses the [seatbelt] backend unless {!field-allow_unsandboxed}: on macOS
+    it leaves the launch environment of the user's other processes readable to
+    the agent, which only the user may accept. [field] names where it was asked
+    for. *)
+
 val env : t -> string list -> (unit, string) result
 (** Refuses a non-empty [env] argument unless {!field-trust_project}. *)
 
@@ -54,9 +61,10 @@ val experiment :
 (** Refuses an experiment loaded for [run_start] that the policy does not allow:
     [env_passthrough], MCP servers, checkers in its scenarios unless the mode
     (the result of {!sandbox}, else the experiment's own) is [strict], a
-    [sandbox.allow_write] path outside the root. Whatever the policy, it refuses
-    an MCP stdio server's [cwd] or a scenario's [fixtures] outside the root. The
-    error names the key. *)
+    [sandbox.allow_write] path outside the root, [sandbox.backend: seatbelt]
+    (see {!backend}). Whatever the policy, it refuses an MCP stdio server's
+    [cwd] or a scenario's [fixtures] outside the root. The error names the key.
+*)
 
 val describe : t -> string
 (** The policy in a few sentences, for the server's instructions. *)

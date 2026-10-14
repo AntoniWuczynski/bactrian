@@ -7,6 +7,10 @@ type sandbox = {
   mode : Sandbox.mode;
   backend : Sandbox.backend;
   image : string option;  (** Required for [`Vm]. *)
+  seatbelt_hint : bool;
+      (** Whether a sandbox message may suggest [backend: seatbelt] (see
+          {!Bactrian_runtime.Sandbox.preflight}): on the command line, not in
+          the MCP server. *)
 }
 (** The sandbox of a command-line run (design §5.3). *)
 

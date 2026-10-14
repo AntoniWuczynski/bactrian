@@ -77,6 +77,7 @@ type settings = {
 }
 
 val preflight :
+  ?seatbelt_hint:bool ->
   env:Eio_unix.Stdenv.base ->
   warn:(string -> unit) ->
   settings ->
@@ -103,7 +104,11 @@ val preflight :
     and building the relay if needed. When the sandbox does not work, [`Auto]
     calls [warn] with the cause and the fix and gives an unsandboxed {!t}
     labelled with that reason, and [`Strict] gives [Error] with the same message
-    (exit 69). *)
+    (exit 69).
+
+    [seatbelt_hint] (default [true]) is whether a message on macOS may suggest
+    [backend: seatbelt]: right where the user reads it, wrong for an MCP client,
+    which must not accept that exposure on the user's behalf. *)
 
 val backend_available : backend -> (unit, string) result
 (** [Error] for [seatbelt] off macOS and [bubblewrap] on macOS: a configuration

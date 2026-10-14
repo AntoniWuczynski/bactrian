@@ -73,6 +73,7 @@ type contents = {
 (** What a loaded experiment holds, for [vet]. *)
 
 val run_experiment :
+  ?seatbelt_hint:bool ->
   ?root:Eio.Fs.dir_ty Eio.Path.t ->
   ?random_bytes:(int -> string) ->
   ?announce:(string -> unit) ->
@@ -121,17 +122,17 @@ val run_experiment :
     this process holds keeps a second caller in the same process (another job of
     the MCP server) from doing so.
 
-    Before the first run, {!Sandbox.preflight} checks the sandbox once, in the
-    experiment's [sandbox] mode or in [sandbox] when given (the command line's
-    [--sandbox]), with its [allow_write] and [deny_read] paths taken relative to
-    the experiment file. [bactrian_exe] is the executable the probe re-runs. A
-    sandbox that does not work is [Environment] (exit 69) under [strict], and a
-    warning and unsandboxed runs under [auto]. The scenarios' checkers run in
-    the same sandbox ({!Sandbox.checker}). [on_sandbox] is called with the label
-    every run will carry. [warn] is also called once per setting that is
-    accepted but not enforced (see {!Bactrian_core.Experiment.unenforced})
-    before the first run, and the same lines are recorded in every run's
-    [meta.json].
+    Before the first run, {!Sandbox.preflight} (with [seatbelt_hint]) checks the
+    sandbox once, in the experiment's [sandbox] mode or in [sandbox] when given
+    (the command line's [--sandbox]), with its [allow_write] and [deny_read]
+    paths taken relative to the experiment file. [bactrian_exe] is the
+    executable the probe re-runs. A sandbox that does not work is [Environment]
+    (exit 69) under [strict], and a warning and unsandboxed runs under [auto].
+    The scenarios' checkers run in the same sandbox ({!Sandbox.checker}).
+    [on_sandbox] is called with the label every run will carry. [warn] is also
+    called once per setting that is accepted but not enforced (see
+    {!Bactrian_core.Experiment.unenforced}) before the first run, and the same
+    lines are recorded in every run's [meta.json].
 
     An [http] agent is not started by bactrian, so its runs are unsandboxed
     whatever the mode, labelled with the reason ["http mode"]

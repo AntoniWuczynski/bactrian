@@ -27,6 +27,20 @@ let sandbox t (requested : Sandbox.mode option) =
         (Printf.sprintf "argument sandbox: %s can run outside the sandbox"
            (Sandbox.mode_name m))
 
+(* Under Seatbelt an agent on macOS can read the launch environment of every
+   process of the user that is not an Apple binary (decision 0014): a risk the
+   user takes by starting the server with --allow-unsandboxed, never one a
+   client or an experiment file takes for them. *)
+let backend t ~field (b : Sandbox.backend) =
+  match (t.allow_unsandboxed, b) with
+  | true, _ | false, (`Auto | `Vm | `Bubblewrap) -> Ok ()
+  | false, `Seatbelt ->
+      unsandboxed
+        (Printf.sprintf
+           "%s: seatbelt leaves the launch environment of the user's other \
+            processes readable to the agent on macOS"
+           field)
+
 let gate t ~field what = function
   | [] -> Ok ()
   | _ :: _ when t.trust_project -> Ok ()
@@ -64,6 +78,7 @@ let in_dir dir p = if Filename.is_relative p then Filename.concat dir p else p
 let experiment t root ~sandbox (c : Bactrian_runtime.Executor.contents) =
   let e = c.experiment in
   let sandbox = Option.value sandbox ~default:e.sandbox in
+  let* () = backend t ~field:"sandbox.backend" e.sandbox_backend in
   let* () =
     gate t ~field:"agent.env_passthrough"
       "passes variables of the server's environment to the agent"

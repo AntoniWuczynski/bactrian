@@ -4,6 +4,7 @@ type request = {
   experiment : string;
   resume : string option;
   sandbox : Sandbox.mode option;
+  seatbelt_hint : bool;
 }
 
 type t = { summary : Executor.summary; sandbox : Sandbox.label option }
@@ -17,7 +18,8 @@ let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
       let label = ref None in
       match
         Interrupt.run ?stop (fun () ->
-            Executor.run_experiment ~upstream ?sandbox:r.sandbox
+            Executor.run_experiment ~seatbelt_hint:r.seatbelt_hint ~upstream
+              ?sandbox:r.sandbox
               ~on_sandbox:(fun l -> label := Some l)
               ~bactrian_exe ~env ?files ?vet ~experiment_file:r.experiment
               ~resume:r.resume

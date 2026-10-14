@@ -793,6 +793,12 @@ let test_policy () =
           {|{"agent":["true"],"turns":["hi"],"sandbox":"off"}|},
           "--allow-unsandboxed" );
         ( "record_start",
+          {|{"agent":["true"],"turns":["hi"],"sandbox_backend":"seatbelt"}|},
+          "--allow-unsandboxed" );
+        ( "replay_start",
+          {|{"agent":["true"],"run":"r1","sandbox_backend":"seatbelt"}|},
+          "--allow-unsandboxed" );
+        ( "record_start",
           {|{"agent":["true"],"turns":["hi"],"env":["HOME"]}|},
           "--trust-project" );
         ( "record_start",
@@ -844,6 +850,19 @@ let test_policy () =
           ("../pol2/*.json", {|, "env_passthrough": ["HOME"]|}),
           "--trust-project" );
       ];
+    write "polx/seatbelt.json"
+      {|{"version": 1, "name": "x",
+        "agent": {"protocol": "command", "command": ["true"]},
+        "scenarios": ["../pol2/*.json"], "variants": {"a": {}}, "repeats": 1,
+        "caps_usd": {"openai": 1},
+        "sandbox": {"mode": "strict", "backend": "seatbelt"}}|};
+    let status =
+      finished context.env call
+        (call "run_start" (Some {|{"experiment":"polx/seatbelt.json"}|}))
+    in
+    Alcotest.(check bool)
+      "an experiment's backend seatbelt names --allow-unsandboxed" true
+      (mentions "--allow-unsandboxed" (Canon.to_string status));
     let instructions = (Mcp_server.server context.policy).instructions in
     Alcotest.(check bool)
       "the instructions state the policy" true
@@ -885,7 +904,10 @@ let test_policy () =
        (Policy.sandbox context.policy (Some `Off)));
   Alcotest.(check (result unit string))
     "trusted, env passes" (Ok ())
-    (Policy.env context.policy [ "HOME" ])
+    (Policy.env context.policy [ "HOME" ]);
+  Alcotest.(check (result unit string))
+    "allowed outside the sandbox, seatbelt passes" (Ok ())
+    (Policy.backend context.policy ~field:"argument sandbox_backend" `Seatbelt)
 
 (* A job beyond the limit is refused, and names the flag that raises it. *)
 let test_job_limit () =

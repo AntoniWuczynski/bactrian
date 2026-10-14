@@ -589,7 +589,8 @@ let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
                         id
                         (String.concat ", " changes)))))
 
-let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
+let run_experiment ?seatbelt_hint ?root
+    ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
     ?(upstream = P.default_upstream) ?connector ?sandbox
     ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env ?files
@@ -648,7 +649,7 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let preflight settings =
     Result.map_error
       (fun m -> Environment m)
-      (Sandbox.preflight ~env ~warn settings)
+      (Sandbox.preflight ?seatbelt_hint ~env ~warn settings)
   in
   let has_checkers =
     List.exists

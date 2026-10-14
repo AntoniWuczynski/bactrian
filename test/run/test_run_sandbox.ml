@@ -563,6 +563,41 @@ let test_auto_falls_back =
         Yojson.Safe.Util.(
           to_bool (member "applied" (member "sandbox" (meta r))))
 
+(* On macOS strict needs the virtual machine. The command line's refusal
+   names backend: seatbelt as the alternative, the MCP server's does not, as
+   the exposure is the user's to accept. *)
+let test_seatbelt_hint =
+  with_ctx "sandbox-hint" @@ fun ctx ->
+  match Sandbox.host_backend () with
+  | `Bubblewrap ->
+      print_endline "not macOS: strict needs no image here, skipped";
+      Alcotest.skip ()
+  | `Seatbelt ->
+      let refusal seatbelt_hint =
+        match
+          Sandbox.preflight ~seatbelt_hint ~env:ctx.env
+            ~warn:(fun w -> Alcotest.failf "warned: %s" w)
+            {
+              mode = `Strict;
+              backend = `Auto;
+              image = None;
+              runtime = None;
+              allow_write = [];
+              deny_read = [];
+              bactrian_exe = bactrian_bin;
+              bactrian_dir = root ctx;
+            }
+        with
+        | Ok _ -> Alcotest.fail "strict on macOS without an image passed"
+        | Error m -> m
+      in
+      Alcotest.(check bool)
+        "the command line names seatbelt" true
+        (contains (refusal true) "sandbox.backend: seatbelt");
+      Alcotest.(check bool)
+        "the MCP server does not" false
+        (contains (refusal false) "seatbelt")
+
 let test_off_probes_nothing =
   with_ctx "sandbox-off" @@ fun ctx ->
   match preflight ctx `Off ~warn:(fun w -> Alcotest.failf "warned: %s" w) with
@@ -676,6 +711,7 @@ let () =
           Alcotest.test_case "auto falls back, labelled" `Slow
             test_auto_falls_back;
           Alcotest.test_case "off probes nothing" `Quick test_off_probes_nothing;
+          Alcotest.test_case "the seatbelt hint" `Quick test_seatbelt_hint;
           Alcotest.test_case "an unsandboxed probe is rejected" `Quick
             test_unsandboxed_probe_is_rejected;
           Alcotest.test_case "judging reports" `Quick test_judge;

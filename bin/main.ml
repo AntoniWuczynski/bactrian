@@ -30,7 +30,7 @@ let experiment_command ~json ~experiment ~resume ~sandbox =
   Eio_main.run @@ fun env ->
   match
     Run_command.run ~on_progress:Cli.print_progress ~bactrian_exe ~env
-      { experiment; resume; sandbox }
+      { experiment; resume; sandbox; seatbelt_hint = true }
   with
   | Error e ->
       Cli.fail_with ~json
@@ -166,7 +166,7 @@ let sandbox_mode =
   in
   Term.(
     const (fun mode backend image : Single_run.sandbox ->
-        { mode; backend; image })
+        { mode; backend; image; seatbelt_hint = true })
     $ mode $ backend $ image)
 
 let sandbox_override =

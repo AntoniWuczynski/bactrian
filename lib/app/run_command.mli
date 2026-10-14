@@ -9,6 +9,10 @@ type request = {
           runs that finished are not repeated. *)
   sandbox : Sandbox.mode option;
       (** Overrides the experiment's [sandbox] setting. *)
+  seatbelt_hint : bool;
+      (** Whether a sandbox message may suggest [backend: seatbelt] (see
+          {!Bactrian_runtime.Sandbox.preflight}): on the command line, not in
+          the MCP server. *)
 }
 
 type t = {
