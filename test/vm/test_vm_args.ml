@@ -3,8 +3,34 @@
 open Bactrian_core
 
 let project = "/p"
+let plain name : Vm_args.entry = { name; kind = Plain; masked_file = false }
 
-let input ?(allow_write = []) ?(deny = [])
+(* The directories of a masked file, as a host would list them. *)
+let default_listing =
+  [
+    ( "/p",
+      [
+        plain ".bactrian";
+        plain ".env";
+        plain "agent.js";
+        plain "src";
+        {
+          name = "readme";
+          kind = Link_to_file "/p/src/README";
+          masked_file = false;
+        };
+        {
+          name = "outside";
+          kind = Link_to_file "/h/notes";
+          masked_file = false;
+        };
+        { name = "config"; kind = Link_to_file "/p/.env"; masked_file = true };
+        { name = ".env.bak"; kind = Plain; masked_file = true };
+        { name = "lib"; kind = Other_link; masked_file = false };
+      ] );
+  ]
+
+let input ?(allow_write = []) ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -16,7 +42,6 @@ let input ?(allow_write = []) ?(deny = [])
     workdir;
     env_file = "/p/.bactrian/runs/r1/agent.env";
     relay = "/c/relay";
-    empty_file = "/p/.bactrian/runs/r1/vm-empty";
     project_root = project;
     runs_dir = "/p/.bactrian/runs";
     state_dir = "/p/.bactrian/runs/r1/state";
@@ -25,6 +50,9 @@ let input ?(allow_write = []) ?(deny = [])
     deny;
     forwards = [ 4242 ];
     command;
+    list_dir =
+      (fun dir ->
+        Option.to_result ~none:"no such directory" (List.assoc_opt dir listing));
   }
 
 let argv i =
@@ -48,6 +76,14 @@ let mounts i =
   go (argv i)
 
 let strings = Alcotest.(list string)
+
+let contains s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s
+    && (String.equal (String.sub s i n) sub || go (i + 1))
+  in
+  go 0
 
 (* The default deny-list of a project at /p with a home at /h. *)
 let default_deny =
@@ -138,8 +174,11 @@ let test_masks () =
   Alcotest.check strings "masks where the mounts show the path, by depth"
     [
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
-      "type=bind,source=/p,target=/p,readonly";
-      "type=bind,source=/p/.bactrian/runs/r1/vm-empty,target=/p/.env,readonly";
+      "/p:ro,mode=0755";
+      "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
+      "type=bind,source=/p/agent.js,target=/p/agent.js,readonly";
+      "type=bind,source=/p/readme,target=/p/readme,readonly";
+      "type=bind,source=/p/src,target=/p/src,readonly";
       "/p/.bactrian/ca:ro,mode=0755";
       "/p/.bactrian/runs:ro,mode=0755";
       "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
@@ -180,29 +219,105 @@ let test_writable_paths () =
     (List.exists (fun s -> String.starts_with ~prefix:"/h" s) m)
 
 let test_masks_over_mounts () =
+  let state = "/p/.bactrian/runs/r1/state" in
   let m =
     mounts
       (input
          ~deny:
            [
              ("/p/.bactrian/runs", `Dir);
-             ("/p/.bactrian/runs/r1/state/key", `File);
+             (state ^ "/key", `File);
              ("/w/private", `Dir);
              ("/p/out", `Dir);
            ]
+         ~listing:[ (state, [ plain "key"; plain "notes" ]) ]
          ~allow_write:[ "/w"; "/p/out" ] ())
   in
   let has s = List.mem s m in
   Alcotest.(check bool)
-    "a file in the run's own state is masked" true
+    "the run's own state holding a masked file is an empty directory" true
+    (has (state ^ ":ro,mode=0755"));
+  Alcotest.(check bool)
+    "its other entries stay writable" true
     (has
-       "type=bind,source=/p/.bactrian/runs/r1/vm-empty,target=/p/.bactrian/runs/r1/state/key,readonly");
+       (Printf.sprintf "type=bind,source=%s/notes,target=%s/notes" state state));
+  Alcotest.(check bool)
+    "the masked file is not mounted" false
+    (List.exists (fun s -> contains s "/key") m);
   Alcotest.(check bool)
     "a denied directory in a writable path is masked" true
     (has "/w/private:ro,mode=0755");
   Alcotest.(check bool)
     "a mask replaces a mount of the same path" false
     (has "type=bind,source=/p/out,target=/p/out")
+
+(* A mask nests in another: the directory of one masked file holds the
+   directory of another, and a directory mask. *)
+let test_nested_masks () =
+  let m =
+    mounts
+      (input
+         ~deny:
+           [
+             ("/p/.env", `File);
+             ("/p/sub/key", `File);
+             ("/p/sub/secret", `Dir);
+             ("/p/.bactrian/runs", `Dir);
+           ]
+         ~listing:
+           [
+             ("/p", [ plain ".env"; plain ".bactrian"; plain "sub" ]);
+             ("/p/sub", [ plain "key"; plain "secret"; plain "code" ]);
+           ]
+         ())
+  in
+  Alcotest.check strings "each directory once, parents first"
+    [
+      "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "/p:ro,mode=0755";
+      "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
+      "/p/sub:ro,mode=0755";
+      "/p/.bactrian/runs:ro,mode=0755";
+      "type=bind,source=/p/sub/code,target=/p/sub/code,readonly";
+      "/p/sub/secret:ro,mode=0755";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+    ]
+    m
+
+(* Every file mask of the deny-list (a project's .env, a deny_read file, a
+   credential file under a home that a writable path shows) hides its file the
+   same way. *)
+let test_every_file_mask () =
+  let m =
+    mounts
+      (input ~allow_write:[ "/h" ]
+         ~deny:
+           [
+             ("/p/.env", `File);
+             ("/p/notes.txt", `File);
+             ("/h/.netrc", `File);
+             ("/h/.ssh", `Dir);
+           ]
+         ~listing:
+           [
+             ("/p", [ plain ".env"; plain "notes.txt"; plain "agent.js" ]);
+             ("/h", [ plain ".netrc"; plain ".ssh"; plain ".profile" ]);
+           ]
+         ())
+  in
+  Alcotest.check strings "no masked file under any name"
+    [
+      "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "/h:ro,mode=0755";
+      "/p:ro,mode=0755";
+      "type=bind,source=/h/.profile,target=/h/.profile";
+      "/h/.ssh:ro,mode=0755";
+      "type=bind,source=/p/agent.js,target=/p/agent.js,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+    ]
+    m
 
 let test_errors () =
   Alcotest.(check string)
@@ -223,7 +338,35 @@ let test_errors () =
     (error (input ~command:(Agent []) ()));
   Alcotest.(check string)
     "a NUL byte" {|the argument "a\000b" holds a NUL byte|}
-    (error (input ~command:(Agent [ "a\000b" ]) ()))
+    (error (input ~command:(Agent [ "a\000b" ]) ()));
+  Alcotest.(check string)
+    "a masked file in /"
+    "/key cannot be hidden in the virtual machine: it is in /, which cannot be \
+     replaced by an empty directory"
+    (error (input ~allow_write:[ "/" ] ~deny:[ ("/key", `File) ] ()));
+  Alcotest.(check string)
+    "a crowded directory"
+    "/p/.env cannot be hidden in the virtual machine: its directory /p holds \
+     1001 entries, more than the 1000 that are mounted again around it"
+    (error
+       (input
+          ~deny:[ ("/p/.env", `File) ]
+          ~listing:
+            [ ("/p", List.init 1001 (fun n -> plain (Printf.sprintf "f%d" n))) ]
+          ()));
+  Alcotest.(check string)
+    "an unlistable directory"
+    "the directory /p, which holds a hidden file, cannot be listed: no such \
+     directory"
+    (error (input ~deny:[ ("/p/.env", `File) ] ~listing:[] ()));
+  Alcotest.(check string)
+    "an entry that cannot be mounted"
+    {|an entry beside a hidden file "/p/a,b" cannot be mounted: it must be absolute and hold no comma, colon, double quote or control character|}
+    (error
+       (input
+          ~deny:[ ("/p/.env", `File) ]
+          ~listing:[ ("/p", [ plain ".env"; plain "a,b" ]) ]
+          ()))
 
 let env_error vars =
   match Vm_args.env_file vars with
@@ -270,6 +413,8 @@ let () =
           Alcotest.test_case "deny-list masks" `Quick test_masks;
           Alcotest.test_case "writable paths" `Quick test_writable_paths;
           Alcotest.test_case "masks over mounts" `Quick test_masks_over_mounts;
+          Alcotest.test_case "nested masks" `Quick test_nested_masks;
+          Alcotest.test_case "every file mask" `Quick test_every_file_mask;
         ] );
       ("environment", [ Alcotest.test_case "env file" `Quick test_env_file ]);
     ]

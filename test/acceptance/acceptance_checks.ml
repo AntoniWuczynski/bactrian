@@ -103,6 +103,10 @@ let escapes ?vm ~name argv_of =
   let secret_file = Filename.concat (Filename.concat dir "secret") "key" in
   Out_channel.with_open_bin secret_file (fun oc -> output_string oc "s3cret");
   let project_file = Filename.concat dir "escaped" in
+  (* The project's .env, which every sandbox hides. *)
+  let masked_file = Filename.concat dir ".env" in
+  Out_channel.with_open_bin masked_file (fun oc ->
+      output_string oc "OPENAI_API_KEY=sk-masked-file\n");
   let r =
     execute
       ~agent:(Command (argv_of ~dir))
@@ -111,6 +115,7 @@ let escapes ?vm ~name argv_of =
           ("REAL_HOME_FILE", home_file);
           ("PROJECT_FILE", project_file);
           ("SECRET_FILE", secret_file);
+          ("MASKED_FILE", masked_file);
         ]
       ()
   in
@@ -150,6 +155,18 @@ let escapes ?vm ~name argv_of =
       Printf.printf "%s: %s\n" name (detail name);
       Alcotest.(check string) (name ^ " is denied") "failed" (outcome name))
     escapes;
+  (* bubblewrap binds /dev/null over the file, which reads empty. The other
+     spellings find no file on Linux, and on macOS they lead to the same one,
+     which Seatbelt denies and the virtual machine does not show. *)
+  List.iter
+    (fun name ->
+      Printf.printf "%s: %s\n" name (detail name);
+      Alcotest.(check bool)
+        (name ^ " shows nothing")
+        true
+        (String.equal (outcome name) "failed"
+        || String.equal (detail name) "read 0 bytes"))
+    [ "masked_file"; "masked_file_upper"; "masked_file_mixed" ];
   Alcotest.(check bool)
     "nothing in the real home" false
     (Sys.file_exists home_file);

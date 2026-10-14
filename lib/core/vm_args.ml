@@ -2,6 +2,9 @@ type command =
   | Agent of string list
   | Probe of { outside : string; inside : string; denied : string }
 
+type entry_kind = Plain | Link_to_file of string | Other_link
+type entry = { name : string; kind : entry_kind; masked_file : bool }
+
 type input = {
   runtime : string;
   name : string;
@@ -11,7 +14,6 @@ type input = {
   workdir : string;
   env_file : string;
   relay : string;
-  empty_file : string;
   project_root : string;
   runs_dir : string;
   state_dir : string;
@@ -20,7 +22,14 @@ type input = {
   deny : (string * Sandbox_policy.kind) list;
   forwards : int list;
   command : command;
+  list_dir : string -> (entry list, string) result;
 }
+
+(* Each entry beside a masked file is one more --mount of about twice its path:
+   1000 of them at 300 bytes is 0.3 MiB of arguments, well under the 1 MiB
+   ARG_MAX of macOS. A project root or a home directory rarely holds a few
+   hundred. *)
+let max_entries = 1000
 
 type error =
   | Bad_path of { what : string; path : string }
@@ -29,6 +38,9 @@ type error =
   | Bad_port of int
   | Empty_agent
   | Hidden_workdir of string
+  | Mask_in_root of string
+  | Crowded_dir of { file : string; dir : string; entries : int }
+  | Unlistable of { dir : string; reason : string }
 
 let describe_error = function
   | Bad_path { what; path } ->
@@ -47,6 +59,20 @@ let describe_error = function
         "the agent's working directory %s is outside the project, its run and \
          sandbox.allow_write, so the virtual machine does not show it"
         d
+  | Mask_in_root f ->
+      Printf.sprintf
+        "%s cannot be hidden in the virtual machine: it is in /, which cannot \
+         be replaced by an empty directory"
+        f
+  | Crowded_dir { file; dir; entries } ->
+      Printf.sprintf
+        "%s cannot be hidden in the virtual machine: its directory %s holds %d \
+         entries, more than the %d that are mounted again around it"
+        file dir entries max_entries
+  | Unlistable { dir; reason } ->
+      Printf.sprintf
+        "the directory %s, which holds a hidden file, cannot be listed: %s" dir
+        reason
 
 let relay_path = "/bactrian/relay"
 
@@ -61,12 +87,6 @@ let limits = [ "--pids-limit"; "1024"; "--memory"; "4g"; "--memory-swap"; "4g" ]
    defaults are. *)
 let tmp_mount = "/tmp:rw,noexec,nosuid,nodev,size=1g"
 let ( let* ) = Result.bind
-
-let rec all f = function
-  | [] -> Ok ()
-  | x :: rest ->
-      let* () = f x in
-      all f rest
 
 (* A --mount value is comma-separated, with double quotes for quoting, and a
    --tmpfs value ends at its first colon, so a path holding any of them is
@@ -88,13 +108,19 @@ let check_argument a =
 
 (* Mounts *)
 
+(* A file is masked by replacing its directory ([Mask_parent]) with an empty
+   read-only tmpfs and mounting every other entry of it again. A bind over the
+   file itself covers one name only, and on a case-insensitive host (APFS) the
+   same file is reached under another case or Unicode normalisation of its name.
+   In the tmpfs a lookup is exact, so no other spelling finds anything. *)
 type mount =
   | Bind of { path : string; writable : bool }
   | Mask_dir of string
   | Mask_file of string
+  | Mask_parent of string
 
 let mount_path = function
-  | Bind { path; _ } | Mask_dir path | Mask_file path -> path
+  | Bind { path; _ } | Mask_dir path | Mask_file path | Mask_parent path -> path
 
 let depth path =
   List.length
@@ -103,27 +129,42 @@ let depth path =
        (String.split_on_char '/' path))
 
 let within ~dir path =
-  String.equal dir path || Sandbox_policy.is_under ~dir path
+  String.equal dir path || String.equal dir "/"
+  || Sandbox_policy.is_under ~dir path
 
-let mount_args ~empty_file = function
+let mount_args = function
   | Bind { path; writable } ->
       [
         "--mount";
         Printf.sprintf "type=bind,source=%s,target=%s%s" path path
           (if writable then "" else ",readonly");
       ]
-  | Mask_dir path ->
+  | Mask_dir path | Mask_parent path ->
       (* A tmpfs took the mode of the directory it covers (0700 for every
          directory bactrian makes) in a test on OrbStack, which stopped the
          agent reaching its own directories beneath the mask over the runs. *)
       [ "--tmpfs"; path ^ ":ro,mode=0755" ]
-  | Mask_file path ->
-      [
-        "--mount";
-        Printf.sprintf "type=bind,source=%s,target=%s,readonly" empty_file path;
-      ]
+  | Mask_file _ -> []
 
-let mounts i =
+(* The deepest of [mounts] at or above [path]. *)
+let deepest mounts path =
+  List.fold_left
+    (fun best o ->
+      if not (within ~dir:(mount_path o) path) then best
+      else
+        match best with
+        | Some b when depth (mount_path b) >= depth (mount_path o) -> best
+        | Some _ | None -> Some o)
+    None mounts
+
+(* Whether [mounts] show [path], and writable. *)
+let shows mounts path =
+  match deepest mounts path with
+  | Some (Bind { writable; _ }) -> Some writable
+  | Some (Mask_dir _ | Mask_file _ | Mask_parent _) | None -> None
+
+(* The mounts of the deny-list, as single binds and masks. *)
+let plain_mounts i =
   let dirs =
     List.sort_uniq String.compare
       (List.filter_map
@@ -159,25 +200,107 @@ let mounts i =
   (* A mask counts where the deepest mount above it shows its path. *)
   let shown m =
     let p = mount_path m in
-    let above =
-      List.filter
-        (fun o -> Sandbox_policy.is_under ~dir:(mount_path o) p)
-        (binds @ masks)
-    in
-    match
-      List.fold_left
-        (fun best o ->
-          match best with
-          | Some b when depth (mount_path b) >= depth (mount_path o) -> best
-          | Some _ | None -> Some o)
-        None above
-    with
-    | Some (Bind _) -> true
-    | Some (Mask_dir _ | Mask_file _) | None -> false
+    Option.is_some
+      (shows
+         (List.filter
+            (fun o ->
+              (not (String.equal (mount_path o) p))
+              && within ~dir:(mount_path o) p)
+            (binds @ masks))
+         p)
   in
-  List.stable_sort
-    (fun a b -> Int.compare (depth (mount_path a)) (depth (mount_path b)))
-    (binds @ List.filter shown masks)
+  binds @ List.filter shown masks
+
+let rec all f = function
+  | [] -> Ok ()
+  | x :: rest ->
+      let* () = f x in
+      all f rest
+
+let rec map_all f = function
+  | [] -> Ok []
+  | x :: rest ->
+      let* y = f x in
+      let* ys = map_all f rest in
+      Ok (y :: ys)
+
+(* The entries of a masked file's directory, mounted again as the plain mounts
+   showed them. One that is a masked file under any name (a hard link, a link
+   to it) is left out, and so is a link to anything but a file the container
+   shows, because a bind follows the link and would show its target here,
+   unmasked. Entries that have a mount of their own keep it. *)
+let entries_of i plain ~parents ~files dir =
+  let* listing =
+    Result.map_error (fun reason -> Unlistable { dir; reason }) (i.list_dir dir)
+  in
+  let file =
+    Option.value ~default:dir
+      (List.find_opt (fun f -> String.equal (Filename.dirname f) dir) files)
+  in
+  let n = List.length listing in
+  if n > max_entries then Error (Crowded_dir { file; dir; entries = n })
+  else
+    let taken path =
+      List.exists (fun m -> String.equal (mount_path m) path) plain
+      || List.exists (String.equal path) parents
+    in
+    let* binds =
+      map_all
+        (fun (e : entry) ->
+          let path = Filename.concat dir e.name in
+          if e.masked_file || taken path then Ok None
+          else
+            let bind writable =
+              let* () = check_path "an entry beside a hidden file" path in
+              Ok (Some (Bind { path; writable }))
+            in
+            match (e.kind, shows plain path) with
+            | Plain, Some writable -> bind writable
+            | Link_to_file target, Some _ -> (
+                match shows plain target with
+                | Some writable -> bind writable
+                | None -> Ok None)
+            | (Plain | Link_to_file _ | Other_link), None | Other_link, Some _
+              ->
+                Ok None)
+        listing
+    in
+    Ok (List.filter_map Fun.id binds)
+
+let mounts i =
+  let plain = plain_mounts i in
+  let files =
+    List.filter_map
+      (function
+        | Mask_file f -> Some f | Bind _ | Mask_dir _ | Mask_parent _ -> None)
+      plain
+  in
+  let parents =
+    List.sort_uniq String.compare (List.map Filename.dirname files)
+  in
+  let* () =
+    all
+      (fun f ->
+        if String.equal (Filename.dirname f) "/" then Error (Mask_in_root f)
+        else Ok ())
+      files
+  in
+  let* entries = map_all (entries_of i plain ~parents ~files) parents in
+  let replaced m =
+    match m with
+    | Mask_file _ -> true
+    | Bind { path; _ } -> List.exists (String.equal path) parents
+    | Mask_dir _ | Mask_parent _ -> false
+  in
+  Ok
+    (List.stable_sort
+       (fun a b ->
+         match Int.compare (depth (mount_path a)) (depth (mount_path b)) with
+         | 0 -> String.compare (mount_path a) (mount_path b)
+         | c -> c)
+       (List.filter (fun m -> not (replaced m)) plain
+       @ List.map (fun d -> Mask_parent d) parents
+       @ List.concat entries))
 
 let check_port p = if p >= 1 && p <= 65535 then Ok () else Error (Bad_port p)
 
@@ -188,7 +311,6 @@ let argv i =
       ([
          ("the working directory", i.workdir);
          ("the relay", i.relay);
-         ("the empty file", i.empty_file);
          ("the project root", i.project_root);
          ("the state directory", i.state_dir);
          ("the temporary directory", i.temp_dir);
@@ -197,16 +319,11 @@ let argv i =
       @ List.map (fun (p, _) -> ("the deny-list path", p)) i.deny)
   in
   let* () = all check_port i.forwards in
+  let* mounts = mounts i in
   let* () =
-    if
-      List.exists
-        (fun m ->
-          match m with
-          | Bind { path; _ } -> within ~dir:path i.workdir
-          | Mask_dir _ | Mask_file _ -> false)
-        (mounts i)
-    then Ok ()
-    else Error (Hidden_workdir i.workdir)
+    match shows (plain_mounts i) i.workdir with
+    | Some _ -> Ok ()
+    | None -> Error (Hidden_workdir i.workdir)
   in
   let* tail =
     match i.command with
@@ -234,7 +351,7 @@ let argv i =
         Printf.sprintf "type=bind,source=%s,target=%s,readonly" i.relay
           relay_path;
       ]
-    @ List.concat_map (mount_args ~empty_file:i.empty_file) (mounts i)
+    @ List.concat_map mount_args mounts
     @ [ "--"; i.image ]
     @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
     @ tail)

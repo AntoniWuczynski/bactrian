@@ -7,25 +7,42 @@
     command and the paths in its arguments and environment work unchanged: the
     project root read-only, the run's state and temporary directories and the
     [allow_write] paths read-write. The deny-list is masked where it is visible:
-    an empty read-only tmpfs over a directory, an empty read-only file over a
-    file. Nothing outside those mounts is there at all, so the deny-list entries
-    under the user's home need no mask unless a mount shows them. *)
+    an empty read-only tmpfs over a directory, and for a file an empty read-only
+    tmpfs over its directory with every other entry of that directory mounted
+    again, so the file is not there under any spelling of its name (a bind over
+    the file alone covers one name, and a case-insensitive host has others).
+    Nothing outside those mounts is there at all, so the deny-list entries under
+    the user's home need no mask unless a mount shows them. *)
 
 type command =
   | Agent of string list  (** The agent's command and arguments. Non-empty. *)
   | Probe of { outside : string; inside : string; denied : string }
       (** The relay's own probe (see {!Vm_probe}) instead of an agent. *)
 
+type entry_kind =
+  | Plain  (** Not a symbolic link. *)
+  | Link_to_file of string
+      (** A symbolic link to a regular file, at this resolved path. *)
+  | Other_link  (** A symbolic link to anything else, or to nothing. *)
+
+type entry = {
+  name : string;
+  kind : entry_kind;
+  masked_file : bool;
+      (** It leads to a file of the deny-list under another name: a hard link,
+          or a symbolic link to it. *)
+}
+(** An entry of a directory that holds a masked file. *)
+
 type input = {
   runtime : string;  (** The runtime's executable, such as [docker]. *)
   name : string;  (** The container's name. *)
   uid : int;
   gid : int;  (** The agent runs as this user and group. *)
-  image : string;
+  image : string;  (** The image's ID. *)
   workdir : string;
   env_file : string;  (** The file {!val-env_file} wrote. *)
   relay : string;  (** The relay binary on the host. *)
-  empty_file : string;  (** An empty file on the host, mounted over files. *)
   project_root : string;
   runs_dir : string;
       (** [.bactrian/runs]. Its mask leaves the run's own [state_dir] and
@@ -38,6 +55,8 @@ type input = {
           what is at the path. *)
   forwards : int list;  (** Ports the relay listens on, from 1 to 65535. *)
   command : command;
+  list_dir : string -> (entry list, string) result;
+      (** The entries of a directory that holds a masked file. *)
 }
 
 type error =
@@ -51,6 +70,11 @@ type error =
   | Empty_agent
   | Hidden_workdir of string
       (** The working directory is in none of the mounts. *)
+  | Mask_in_root of string  (** A masked file directly under [/]. *)
+  | Crowded_dir of { file : string; dir : string; entries : int }
+      (** A masked file whose directory has more than 1000 entries, each of
+          which would be one more mount. *)
+  | Unlistable of { dir : string; reason : string }
 
 val describe_error : error -> string
 
@@ -66,9 +90,14 @@ val argv : input -> (string list, error) result
      PORT... -- AGENT...] (or [--probe OUTSIDE INSIDE DENIED] in place of
     [-- AGENT...]).
 
-    Mounts are given in order of depth, as the runtime applies them. A directory
-    mask is [--tmpfs PATH:ro,mode=0755], a file mask a read-only bind of
-    [empty_file]. A writable path under a directory mask is left out, except the
+    Mounts are given in order of depth, as the runtime applies them, then of
+    path. A directory mask is [--tmpfs PATH:ro,mode=0755]. For a file mask the
+    same tmpfs covers the file's directory, and each other entry of it
+    ([list_dir]) is bound again as the mounts above showed it, read-only or
+    read-write. An entry that is the masked file under another name is left out,
+    and so is a symbolic link, unless it leads to a file the container shows (a
+    bind follows the link). An entry with a mount of its own keeps that one, so
+    masks nest. A writable path under a directory mask is left out, except the
     run's own directories under [runs_dir], so a path inside another run stays
     hidden. A mask is left out where no mount shows its path, and a mount whose
     path equals a mask's is replaced by the mask. *)

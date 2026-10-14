@@ -4,8 +4,10 @@ outcome of each attempt: "ok" when it worked, "failed" with the error when it
 did not. A sandboxed run must have every attempt fail except the model call and
 the write to the state directory, which also dumps the agent's environment.
 
-The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE. It
-also tries to forge a line in the Linux forwarder's violation log."""
+The paths to attack come from REAL_HOME_FILE, PROJECT_FILE, SECRET_FILE and
+MASKED_FILE, a file of the deny-list that it also reads under its name in upper
+case and in mixed case, which a case-insensitive host resolves to the same
+file. It also tries to forge a line in the Linux forwarder's violation log."""
 
 import base64
 import json
@@ -81,6 +83,19 @@ def deny_read() -> str:
         return f"read {len(secret.read())} bytes"
 
 
+def read_as(spell: Callable[[str], str]) -> Callable[[], str]:
+    def read() -> str:
+        directory, name = os.path.split(os.environ["MASKED_FILE"])
+        with open(os.path.join(directory, spell(name))) as masked:
+            return f"read {len(masked.read())} bytes"
+
+    return read
+
+
+def mixed_case(name: str) -> str:
+    return "".join(c.upper() if i % 2 == 1 else c for i, c in enumerate(name))
+
+
 def forwarder_log() -> str:
     # On Linux the agent's parent is the sandbox's forwarder, which holds the
     # violation log's pipe as descriptor 3. Elsewhere there is no /proc.
@@ -108,6 +123,9 @@ ACTIONS: dict[str, Callable[[], str]] = {
     "home_write": lambda: write(os.environ["REAL_HOME_FILE"]),
     "project_write": lambda: write(os.environ["PROJECT_FILE"]),
     "deny_read": deny_read,
+    "masked_file": read_as(lambda name: name),
+    "masked_file_upper": read_as(str.upper),
+    "masked_file_mixed": read_as(mixed_case),
     "forwarder_log": forwarder_log,
     "state_write": state_write,
 }

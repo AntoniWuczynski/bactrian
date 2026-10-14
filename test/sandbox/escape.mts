@@ -5,13 +5,16 @@
  * and the write to the state directory, which also dumps the agent's
  * environment.
  *
- * The paths to attack come from REAL_HOME_FILE, PROJECT_FILE and SECRET_FILE.
- * It also tries to forge a line in the Linux forwarder's violation log. */
+ * The paths to attack come from REAL_HOME_FILE, PROJECT_FILE, SECRET_FILE and
+ * MASKED_FILE, a file of the deny-list that it also reads under its name in
+ * upper case and in mixed case, which a case-insensitive host resolves to the
+ * same file. It also tries to forge a line in the Linux forwarder's violation
+ * log. */
 
 import { promises as dns } from "node:dns";
 import { closeSync, constants, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { connect } from "node:net";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 
 const TIMEOUT_MS = 5000;
@@ -32,6 +35,7 @@ const STATE_DIR = required("BACTRIAN_STATE_DIR");
 const REAL_HOME_FILE = required("REAL_HOME_FILE");
 const PROJECT_FILE = required("PROJECT_FILE");
 const SECRET_FILE = required("SECRET_FILE");
+const MASKED_FILE = required("MASKED_FILE");
 
 async function status(url: string, init: RequestInit): Promise<string> {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -95,6 +99,16 @@ function write(path: string): Action {
 const denyRead: Action = () =>
   Promise.resolve(`read ${readFileSync(SECRET_FILE).length} bytes`);
 
+const readAs =
+  (spell: (name: string) => string): Action =>
+  () => {
+    const path = join(dirname(MASKED_FILE), spell(basename(MASKED_FILE)));
+    return Promise.resolve(`read ${readFileSync(path).length} bytes`);
+  };
+
+const mixedCase = (name: string): string =>
+  [...name].map((c, i) => (i % 2 === 1 ? c.toUpperCase() : c)).join("");
+
 // On Linux the agent's parent is the sandbox's forwarder, which holds the
 // violation log's pipe as descriptor 3. Elsewhere there is no /proc.
 const forwarderLog: Action = () => {
@@ -124,6 +138,9 @@ const ACTIONS: Record<string, Action> = {
   home_write: write(REAL_HOME_FILE),
   project_write: write(PROJECT_FILE),
   deny_read: denyRead,
+  masked_file: readAs((name) => name),
+  masked_file_upper: readAs((name) => name.toUpperCase()),
+  masked_file_mixed: readAs(mixedCase),
   forwarder_log: forwarderLog,
   state_write: stateWrite,
 };
