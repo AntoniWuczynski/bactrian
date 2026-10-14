@@ -1,0 +1,18 @@
+; The bridge against a fake relay that speaks the frames on its standard input
+; and output, so it runs on any host, with no container runtime.
+
+(executable
+ (name fake_relay)
+ (modules fake_relay)
+ (libraries bactrian.core unix)
+ (flags
+  (:standard -w -70)))
+
+(test
+ (name test_vm_bridge)
+ (modules test_vm_bridge)
+ (package bactrian)
+ (deps fake_relay.exe)
+ (libraries bactrian.core bactrian.runtime eio eio_main alcotest)
+ (flags
+  (:standard -w -70)))

@@ -133,11 +133,41 @@ let sandbox_doc what =
 let sandbox_mode_for what =
   Arg.(
     value
-    & opt (enum Sandbox.modes) Single_run.defaults.sandbox
+    & opt (enum Sandbox.modes) Single_run.defaults.sandbox.mode
     & info [ "sandbox" ] ~docv:"MODE"
         ~doc:(sandbox_doc what ^ " Default $(b,auto)."))
 
-let sandbox_mode = sandbox_mode_for "the agent"
+(* The sandbox of a command-line run: its mode, backend and image. *)
+let sandbox_mode =
+  let mode = sandbox_mode_for "the agent" in
+  let backend =
+    Arg.(
+      value
+      & opt (enum Sandbox.backends) Single_run.defaults.sandbox.backend
+      & info [ "sandbox-backend" ] ~docv:"BACKEND"
+          ~doc:
+            "Where the sandboxed agent runs: $(b,auto) (a virtual machine on \
+             macOS when $(b,--sandbox-image) is given, otherwise the host's \
+             own sandbox), $(b,vm) (a Linux container with no network, through \
+             Docker), $(b,seatbelt) (macOS) or $(b,bubblewrap) (Linux). On \
+             macOS, $(b,--sandbox strict) with $(b,auto) needs \
+             $(b,--sandbox-image) or $(b,seatbelt), under which the agent can \
+             read the launch environment of your other processes.")
+  in
+  let image =
+    Arg.(
+      value
+      & opt (some string) None
+      & info [ "sandbox-image" ] ~docv:"IMAGE"
+          ~doc:
+            "The container image the $(b,vm) backend runs the agent in, \
+             holding its runtime (pin it by digest). It must be present \
+             locally.")
+  in
+  Term.(
+    const (fun mode backend image : Single_run.sandbox ->
+        { mode; backend; image })
+    $ mode $ backend $ image)
 
 let sandbox_override =
   Arg.(
@@ -444,22 +474,50 @@ let mcp_shim_cmd =
   Cmd.v info Term.(const run $ name)
 
 (* cmdliner drops the [--] between the pairs and the agent, so the forwarder
-   reads the raw arguments after its own name. *)
-let sandbox_init_arguments () =
+   and the bridge read the raw arguments after their own name. *)
+let raw_arguments name =
   match
     List.drop_while
-      (fun a -> not (String.equal a "__sandbox-init"))
+      (fun a -> not (String.equal a name))
       (Array.to_list Sys.argv)
   with
   | _ :: args -> args
   | [] -> []
+
+(* The violation log's descriptor, inherited from bactrian: its number, and the
+   descriptor reopened through /dev/fd with close-on-exec, because OCaml cannot
+   name an inherited descriptor by its number. The inherited one was marked
+   close-on-exec at start. *)
+let inherited_log ~sw ~who =
+  let number =
+    Option.bind (Sys.getenv_opt Sandbox_init.log_variable) (fun v ->
+        match int_of_string_opt v with
+        | Some n when n > 2 -> Some n
+        | Some _ | None -> None)
+  in
+  let fd =
+    Option.bind number (fun n ->
+        match
+          Unix.openfile
+            (Printf.sprintf "/dev/fd/%d" n)
+            [ O_WRONLY; O_APPEND; O_CLOEXEC ]
+            0
+        with
+        | fd -> Some (Eio_unix.Fd.of_unix ~sw ~close_unix:true fd)
+        | exception Unix.Unix_error (e, _, _) ->
+            prerr_endline
+              (Printf.sprintf "bactrian %s: no violation log: %s" who
+                 (Unix.error_message e));
+            None)
+  in
+  (number, fd)
 
 let sandbox_init_cmd =
   let args =
     Arg.(value & pos_all string [] & info [] ~docv:"PORT=SOCKET... -- AGENT...")
   in
   let run (_ : string list) =
-    match Sandbox_init.parse (sandbox_init_arguments ()) with
+    match Sandbox_init.parse (raw_arguments "__sandbox-init") with
     | Error e ->
         prerr_endline
           ("bactrian __sandbox-init: " ^ Sandbox_init.describe_parse_error e);
@@ -471,32 +529,9 @@ let sandbox_init_cmd =
              the agent may add lines to the violation log";
         Eio_main.run @@ fun env ->
         Eio.Switch.run @@ fun sw ->
-        (* Standard input, output and error are the agent's own. *)
-        let fd_number =
-          Option.bind (Sys.getenv_opt Sandbox_init.log_variable) (fun v ->
-              match int_of_string_opt v with
-              | Some n when n > 2 -> Some n
-              | Some _ | None -> None)
-        in
-        (* Reopened through /dev/fd with close-on-exec, because OCaml cannot
-           name an inherited descriptor by its number. The inherited one was
-           marked close-on-exec at start, and the agent gets /dev/null in its
-           place as well. *)
-        let log =
-          Option.bind fd_number (fun n ->
-              match
-                Unix.openfile
-                  (Printf.sprintf "/dev/fd/%d" n)
-                  [ O_WRONLY; O_APPEND; O_CLOEXEC ]
-                  0
-              with
-              | fd -> Some (Eio_unix.Fd.of_unix ~sw ~close_unix:true fd)
-              | exception Unix.Unix_error (e, _, _) ->
-                  prerr_endline
-                    ("bactrian __sandbox-init: no violation log: "
-                   ^ Unix.error_message e);
-                  None)
-        in
+        (* Standard input, output and error are the agent's own, and the
+           agent gets /dev/null in place of the log's descriptor. *)
+        let fd_number, log = inherited_log ~sw ~who:"__sandbox-init" in
         match
           Sandbox_init.run ?log ?hidden_fd:fd_number ~net:(Eio.Stdenv.net env)
             ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -511,6 +546,35 @@ let sandbox_init_cmd =
   let info =
     Cmd.info "__sandbox-init" ~docs:Manpage.s_none ~exits:Cli.exits
       ~doc:"Internal: the forwarder bactrian runs inside the Linux sandbox"
+  in
+  Cmd.v info Term.(const run $ args)
+
+let vm_bridge_cmd =
+  let args =
+    Arg.(
+      value & pos_all string []
+      & info [] ~docv:"forward=PORT... container=NAME -- RUNTIME...")
+  in
+  let run (_ : string list) =
+    match Vm_bridge.parse (raw_arguments "__vm-bridge") with
+    | Error m ->
+        prerr_endline ("bactrian __vm-bridge: " ^ m);
+        Exit_code.usage
+    | Ok config -> (
+        Eio_main.run @@ fun env ->
+        Eio.Switch.run @@ fun sw ->
+        let _, log = inherited_log ~sw ~who:"__vm-bridge" in
+        match Vm_bridge.main ~env ~log config with
+        | Ok code -> code
+        | Error m ->
+            prerr_endline ("bactrian __vm-bridge: " ^ m);
+            Exit_code.environment)
+  in
+  let info =
+    Cmd.info "__vm-bridge" ~docs:Manpage.s_none ~exits:Cli.exits
+      ~doc:
+        "Internal: the host side of the virtual machine sandbox, which runs \
+         the container and relays its frames"
   in
   Cmd.v info Term.(const run $ args)
 
@@ -554,6 +618,7 @@ let cmd =
       Serve_mcp_cmd.cmd ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;
+      vm_bridge_cmd;
       sandbox_probe_cmd;
     ]
 
