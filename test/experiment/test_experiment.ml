@@ -271,6 +271,45 @@ let test_sandbox_forms () =
   | [ { path = "sandbox.network"; message = "unknown field" } ] -> ()
   | es -> Alcotest.failf "got %a" pp_errors es
 
+(* The backend, the image and the runtime of the virtual machine. *)
+let test_sandbox_backend () =
+  let t = decoded (doc {|, "sandbox": "strict"|}) in
+  Alcotest.(check bool)
+    "backend defaults to auto" true
+    (t.sandbox_backend = `Auto);
+  Alcotest.(check (option string)) "no image" None t.sandbox_image;
+  let t =
+    decoded
+      (doc
+         {|, "sandbox": {"mode": "strict", "backend": "vm", "image": "node:24@sha256:abc", "runtime": "docker"}|})
+  in
+  Alcotest.(check bool) "vm" true (t.sandbox_backend = `Vm);
+  Alcotest.(check (option string))
+    "image" (Some "node:24@sha256:abc") t.sandbox_image;
+  Alcotest.(check bool) "docker" true (t.sandbox_runtime = Some `Docker);
+  let t = decoded (doc {|, "sandbox": {"backend": "seatbelt"}|}) in
+  Alcotest.(check bool) "seatbelt" true (t.sandbox_backend = `Seatbelt);
+  let one json =
+    match errors (doc json) with
+    | [ { path; message; _ } ] -> (path, message)
+    | es -> Alcotest.failf "got %a" pp_errors es
+  in
+  Alcotest.(check (pair string string))
+    "vm needs an image"
+    ( "sandbox.image",
+      "backend vm needs an image that holds the agent's runtime (a \
+       digest-pinned reference such as node:24-alpine@sha256:...)" )
+    (one {|, "sandbox": {"backend": "vm"}|});
+  Alcotest.(check (pair string string))
+    "podman is not verified"
+    ( "sandbox.runtime",
+      "podman is not supported yet: only docker (Docker Engine, Docker \
+       Desktop, OrbStack) has been verified" )
+    (one {|, "sandbox": {"backend": "vm", "image": "i", "runtime": "podman"}|});
+  Alcotest.(check string)
+    "unknown backend" "sandbox.backend"
+    (fst (one {|, "sandbox": {"backend": "firecracker"}|}))
+
 let http_agent =
   {|"agent": {"protocol": "http", "url": "http://127.0.0.1:3000/chat", "namespace_header": "x-ns"}|}
 
@@ -392,6 +431,7 @@ let () =
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
           Alcotest.test_case "sandbox forms" `Quick test_sandbox_forms;
+          Alcotest.test_case "sandbox backend" `Quick test_sandbox_backend;
           Alcotest.test_case "unenforced settings, http agent" `Quick
             test_unenforced_http;
         ] );

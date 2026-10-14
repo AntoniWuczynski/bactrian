@@ -34,6 +34,9 @@ type compare = {
   population : [ `Suite | `Scenarios ];
 }
 
+type sandbox_backend = [ `Auto | `Vm | `Seatbelt | `Bubblewrap ]
+type sandbox_runtime = [ `Docker ]
+
 type t = {
   name : string;
   agent : agent;
@@ -48,6 +51,9 @@ type t = {
   normalise : string list;
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
+  sandbox_backend : sandbox_backend;
+  sandbox_image : string option;
+  sandbox_runtime : sandbox_runtime option;
   sandbox_allow_write : string list;
   sandbox_deny_read : string list;
   faketime : bool;
@@ -358,20 +364,81 @@ let sandbox_mode =
   enum ~what:"sandbox mode"
     [ ("auto", `Auto); ("strict", `Strict); ("off", `Off) ]
 
+type sandbox_block = {
+  mode : [ `Auto | `Strict | `Off ];
+  backend : sandbox_backend;
+  image : string option;
+  runtime : sandbox_runtime option;
+  allow_write : string list;
+  deny_read : string list;
+}
+
+let sandbox_backends =
+  [
+    ("auto", `Auto);
+    ("vm", `Vm);
+    ("seatbelt", `Seatbelt);
+    ("bubblewrap", `Bubblewrap);
+  ]
+
+(* Only docker has been run against: the others are refused by name rather
+   than taken on trust. *)
+let sandbox_runtime ~path c =
+  match (c : Canon.t) with
+  | String "docker" -> Ok `Docker
+  | String (("podman" | "container") as other) ->
+      fail ~path
+        (Printf.sprintf
+           "%s is not supported yet: only docker (Docker Engine, Docker \
+            Desktop, OrbStack) has been verified"
+           other)
+  | String _ | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ | Object _
+    ->
+      fail ~path "expected docker"
+
+let image ~path c =
+  let* s = non_empty_string ~path c in
+  if String.contains s '\000' then fail ~path "holds a NUL byte" else Ok s
+
+let default_sandbox =
+  {
+    mode = `Auto;
+    backend = `Auto;
+    image = None;
+    runtime = None;
+    allow_write = [];
+    deny_read = [];
+  }
+
 let sandbox ~path c =
   match (c : Canon.t) with
   | String _ ->
       let+ mode = sandbox_mode ~path c in
-      (mode, [], [])
-  | Object _ ->
-      object_ ~path c (fun r ->
-          let+ mode = default r "mode" `Auto sandbox_mode
-          and+ allow_write = default r "allow_write" [] (list non_empty_string)
-          and+ deny_read = default r "deny_read" [] (list non_empty_string) in
-          (mode, allow_write, deny_read))
+      { default_sandbox with mode }
+  | Object _ -> (
+      let* block =
+        object_ ~path c (fun r ->
+            let+ mode = default r "mode" `Auto sandbox_mode
+            and+ backend =
+              default r "backend" `Auto
+                (enum ~what:"sandbox backend" sandbox_backends)
+            and+ image = optional r "image" image
+            and+ runtime = optional r "runtime" sandbox_runtime
+            and+ allow_write =
+              default r "allow_write" [] (list non_empty_string)
+            and+ deny_read = default r "deny_read" [] (list non_empty_string) in
+            { mode; backend; image; runtime; allow_write; deny_read })
+      in
+      match (block.backend, block.image) with
+      | `Vm, None ->
+          fail ~path:(field_path path "image")
+            "backend vm needs an image that holds the agent's runtime (a \
+             digest-pinned reference such as node:24-alpine@sha256:...)"
+      | `Vm, Some _ | (`Auto | `Seatbelt | `Bubblewrap), _ -> Ok block)
   | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ ->
       fail ~path
-        "expected auto, strict, off or a mapping {mode, allow_write, deny_read}"
+        "expected auto, strict, off or a mapping {mode, backend, image, \
+         runtime, allow_write, deny_read}"
 
 let reserved_env =
   [
@@ -447,12 +514,12 @@ let baseline_exists (variants : variant list) = function
 (* bactrian does not start an HTTP agent, so it cannot put it in a sandbox. *)
 let http_agent_unsandboxed agent_r sandbox_r =
   match (agent_r, sandbox_r) with
-  | Ok (Http _, _), Ok (`Strict, _, _) ->
+  | Ok (Http _, _), Ok { mode = `Strict; _ } ->
       fail ~path:"sandbox"
         "strict cannot be met with agent.protocol http: bactrian does not \
          start the agent, so it cannot sandbox it (use auto or off)"
-  | Ok (Command _, _), Ok ((`Auto | `Strict | `Off), _, _)
-  | Ok (Http _, _), Ok ((`Auto | `Off), _, _)
+  | Ok (Command _, _), Ok { mode = `Auto | `Strict | `Off; _ }
+  | Ok (Http _, _), Ok { mode = `Auto | `Off; _ }
   | Error _, _
   | Ok _, Error _ ->
       Ok ()
@@ -464,7 +531,7 @@ let decode c =
       (* Checks that need two decoded parts run beside the others, so their
          errors come out in the same round. *)
       let agent_r = required r "agent" agent in
-      let sandbox_r = default r "sandbox" (`Auto, [], []) sandbox in
+      let sandbox_r = default r "sandbox" default_sandbox sandbox in
       let cross_checks =
         let+ () =
           match (variants_r, compare) with
@@ -490,7 +557,7 @@ let decode c =
       and+ mcp = default r "mcp" [] mcp_servers
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
-      and+ sandbox, sandbox_allow_write, sandbox_deny_read = sandbox_r
+      and+ sandbox_block = sandbox_r
       and+ faketime = default r "clock" true clock
       and+ caps_usd = default r "caps_usd" [] caps_usd
       and+ pricing = optional r "pricing" non_empty_string
@@ -510,9 +577,12 @@ let decode c =
         mcp;
         normalise;
         redact;
-        sandbox;
-        sandbox_allow_write;
-        sandbox_deny_read;
+        sandbox = sandbox_block.mode;
+        sandbox_backend = sandbox_block.backend;
+        sandbox_image = sandbox_block.image;
+        sandbox_runtime = sandbox_block.runtime;
+        sandbox_allow_write = sandbox_block.allow_write;
+        sandbox_deny_read = sandbox_block.deny_read;
         faketime;
         caps_usd;
         pricing;

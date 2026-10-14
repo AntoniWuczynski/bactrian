@@ -1,0 +1,6 @@
+(tests
+ (names test_vm_frame test_vm_args test_vm_probe)
+ (package bactrian)
+ (libraries bactrian.core alcotest qcheck-core qcheck-alcotest)
+ (flags
+  (:standard -w -70)))

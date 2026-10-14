@@ -172,20 +172,11 @@ let judge (platform : Bactrian_core.Sandbox_policy.platform) ~host_netns
         | Some _, Some _ | None, _ | _, None ->
             [ "the probe was not in a network namespace of its own" ])
   in
-  let must_work what = function
-    | Ok () -> []
-    | Error e -> [ Printf.sprintf "%s failed (%s)" what e ]
-  in
-  let must_fail what = function
-    | Ok () -> [ what ^ " succeeded" ]
-    | Error _ -> []
-  in
   match
     public
-    @ must_work "a connection to bactrian's own listener" r.listener
-    @ must_fail "a write outside the state directory" r.outside_write
-    @ must_work "a write inside the state directory" r.inside_write
-    @ must_fail "a read of a denied file" r.denied_read
+    @ Bactrian_core.Vm_probe.checks ~listener:r.listener
+        ~outside_write:r.outside_write ~inside_write:r.inside_write
+        ~denied_read:r.denied_read
   with
   | [] -> Ok ()
   | wrong -> Error wrong

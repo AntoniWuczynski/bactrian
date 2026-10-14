@@ -84,6 +84,10 @@ val deny_list : ?resolve:(string -> string) -> input -> string list
     subdirectories, because neither Seatbelt parameters nor bubblewrap mounts
     take patterns. *)
 
+val is_under : dir:string -> string -> bool
+(** [is_under ~dir path]: whether [path] lies strictly inside [dir], by
+    comparing the text of the two absolute paths. *)
+
 type kind = [ `Dir | `File | `Absent ]
 (** What is at a path on the host, as the caller found it. *)
 

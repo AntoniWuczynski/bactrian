@@ -33,6 +33,12 @@ type compare = {
   population : [ `Suite | `Scenarios ];
 }
 
+type sandbox_backend = [ `Auto | `Vm | `Seatbelt | `Bubblewrap ]
+(** Where a sandboxed agent runs (design §5.3): [auto] chooses for the host. *)
+
+type sandbox_runtime = [ `Docker ]
+(** The container runtime of a [vm] sandbox. *)
+
 type t = {
   name : string;
   agent : agent;
@@ -47,6 +53,11 @@ type t = {
   normalise : string list;  (** Regexes masked before hashing. *)
   redact : string list;
   sandbox : [ `Auto | `Strict | `Off ];
+  sandbox_backend : sandbox_backend;
+  sandbox_image : string option;
+      (** The image a [vm] sandbox runs the agent in. Required for [vm]. *)
+  sandbox_runtime : sandbox_runtime option;
+      (** [None]: the first runtime that works. *)
   sandbox_allow_write : string list;
       (** More writable paths, relative to the experiment file. *)
   sandbox_deny_read : string list;
@@ -83,7 +94,10 @@ val decode : Canon.t -> (t, error list) result
       ['_'] and ['-'], and no two HTTP servers may share a {!mcp_http_variable}.
     - [normalise], [redact]: lists of regular expressions
     - [sandbox: auto|strict|off] (default auto) or
-      [sandbox: {mode, allow_write, deny_read}] (design §5.3),
+      [sandbox: {mode, backend, image, runtime, allow_write, deny_read}] (design
+      §5.3): [backend] is [auto] (default), [vm], [seatbelt] or [bubblewrap],
+      [image] is required for [vm], and [runtime] is [docker] ([podman] and
+      [container] are refused as not yet verified),
       [clock: {faketime: auto|off}] (default auto), [caps_usd: {provider: n}]
       ([provider] is one of {!Pricing.providers}), [pricing] (a price file, see
       {!Price_file})
