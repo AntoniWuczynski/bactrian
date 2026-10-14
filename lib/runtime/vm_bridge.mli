@@ -25,6 +25,7 @@ val describe_error : error -> string
 val run :
   ?stderr:_ Eio.Flow.sink ->
   net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
   process_mgr:_ Eio.Process.mgr ->
   env:string array ->
   forwards:int list ->
@@ -33,11 +34,12 @@ val run :
   log:(string -> unit) ->
   string list ->
   (int, error) result
-(** [run ~net ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv] runs [argv]
-    (the runtime's [run] command, see {!Bactrian_core.Vm_args.argv}) with
-    environment [env] and relays until the runtime exits. The result is the
-    agent's exit code from the relay's [exit] frame: its status, or 128 plus the
-    signal number. [stderr] defaults to bactrian's own.
+(** [run ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv] runs
+    [argv] (the runtime's [run] command, see {!Bactrian_core.Vm_args.argv}) with
+    environment [env] and relays until the runtime exits, sending the relay a
+    heartbeat every {!Bactrian_core.Vm_frame.heartbeat_interval} seconds. The
+    result is the agent's exit code from the relay's [exit] frame: its status,
+    or 128 plus the signal number. [stderr] defaults to bactrian's own.
 
     Memory is bounded: a connection whose host side does not take data stops the
     reading of every frame until it does. A host connection that cannot be made

@@ -137,6 +137,7 @@ let demux ~net ~send ~log ~forwards ~stdout source =
             exit_code := Some s;
             Ok ()
         | None -> Error "an exit frame without a status")
+    | Heartbeat, _ -> Error "a heartbeat from the relay"
     | Log, _ ->
         log
           (String.map (fun c -> if Char.equal c '\n' then ' ' else c) f.payload);
@@ -207,7 +208,16 @@ let demux ~net ~send ~log ~forwards ~stdout source =
   in
   loop ()
 
-let run ?stderr ~net ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv =
+(* The relay ends the agent when bactrian has been silent for
+   [Frame.liveness_timeout], which is what notices a bactrian and a bridge that
+   were both killed: the runtime's client keeps the container's input open. *)
+let rec heartbeat ~clock ~send =
+  send [ Frame.heartbeat ];
+  Eio.Time.sleep clock Frame.heartbeat_interval;
+  heartbeat ~clock ~send
+
+let run ?stderr ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv
+    =
   Eio.Switch.run @@ fun sw ->
   let to_relay_r, to_relay_w = Eio_unix.pipe sw in
   let from_relay_r, from_relay_w = Eio_unix.pipe sw in
@@ -225,7 +235,9 @@ let run ?stderr ~net ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv =
         Eio.Fiber.first
           (fun () -> demux ~net ~send ~log ~forwards ~stdout from_relay_r)
           (fun () ->
-            pump_stdin ~send stdin;
+            Eio.Fiber.both
+              (fun () -> pump_stdin ~send stdin)
+              (fun () -> heartbeat ~clock ~send);
             Eio.Fiber.await_cancel ())
       in
       (* The relay takes the end of its input for bactrian's death and kills
@@ -301,7 +313,7 @@ let main ~env ~log config =
     Eio.Fiber.first
       (fun () ->
         `Done
-          (run ~net:(Eio.Stdenv.net env) ~process_mgr ~env:vars
+          (run ~net:(Eio.Stdenv.net env) ~clock ~process_mgr ~env:vars
              ~forwards:config.forwards ~stdin:(Eio.Stdenv.stdin env)
              ~stdout:(Eio.Stdenv.stdout env) ~log:write_log config.argv))
       (fun () ->

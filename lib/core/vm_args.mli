@@ -47,6 +47,9 @@ type entry = {
 type input = {
   runtime : string;  (** The runtime's executable, such as [docker]. *)
   name : string;  (** The container's name. *)
+  labels : (string * string) list;
+      (** [--label KEY=VALUE] each, so a later bactrian can find the container.
+      *)
   uid : int;
   gid : int;  (** The agent runs as this user and group. *)
   image : string;  (** The image's ID. *)
@@ -96,9 +99,9 @@ val relay_path : string
 (** [/bactrian/relay], where the relay is mounted inside. *)
 
 val argv : input -> (string list, error) result
-(** [RUNTIME run --rm -i --name NAME --network none --read-only --cap-drop ALL
-     --security-opt no-new-privileges --user UID:GID --tmpfs
-     /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
+(** [RUNTIME run --rm -i --name NAME --label KEY=VALUE... --network none
+     --read-only --cap-drop ALL --security-opt no-new-privileges --user UID:GID
+     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
      --memory-swap 4g --log-driver none --pull never --workdir DIR --env-file
      FILE --entrypoint /bactrian/relay --mount|--tmpfs... -- IMAGE --forward
      PORT... -- AGENT...] (or

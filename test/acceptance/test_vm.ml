@@ -309,17 +309,26 @@ let seatbelt_control () =
     "the sentinel is readable" [ "sysctl" ] (found r)
 
 (* Teardown from outside: bactrian record, through the command line, with an
-   agent that never answers. SIGINT ends it with 130, and SIGKILL leaves the
-   bridge to remove the container. *)
+   agent that never answers. SIGINT ends it with 130, SIGKILL leaves the bridge
+   to remove the container, and with the bridge and the runtime's client killed
+   too the relay stops the agent once the heartbeats stop, so the container
+   goes with it. *)
 
 let hung_agent =
   {|touch "$BACTRIAN_STATE_DIR/started"; while :; do sleep 1; done|}
 
-let teardown ~signal () =
-  gate [ node_image ];
-  let dir =
-    Filename.concat (Sys.getcwd ()) (Printf.sprintf "tmp-vm-teardown-%d" signal)
-  in
+let record_env =
+  [|
+    "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
+    "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
+    "BACTRIAN_CAP_OPENAI=1";
+    "OPENAI_API_KEY=not-a-real-key";
+    "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
+  |]
+
+(* bactrian record in the virtual machine, in a directory of its own. *)
+let with_record ~name agent f =
+  let dir = Filename.concat (Sys.getcwd ()) ("tmp-vm-" ^ name) in
   ignore (Sys.command ("rm -rf " ^ Filename.quote dir));
   Unix.mkdir dir 0o700;
   Fun.protect ~finally:(fun () ->
@@ -335,36 +344,33 @@ let teardown ~signal () =
         Printf.sprintf "cd %s && exec %s" (Filename.quote dir)
           (String.concat " "
              (List.map Filename.quote
-                [
-                  executable "BACTRIAN_EXE";
-                  "record";
-                  "--turn";
-                  "hi";
-                  "--sandbox";
-                  "strict";
-                  "--sandbox-backend";
-                  "vm";
-                  "--sandbox-image";
-                  node_image;
-                  "--";
-                  "sh";
-                  "-c";
-                  hung_agent;
-                ]));
+                ([
+                   executable "BACTRIAN_EXE";
+                   "record";
+                   "--turn";
+                   "hi";
+                   "--sandbox";
+                   "strict";
+                   "--sandbox-backend";
+                   "vm";
+                   "--sandbox-image";
+                   node_image;
+                   "--";
+                 ]
+                @ agent)));
       |]
-      [|
-        "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
-        "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
-        "BACTRIAN_CAP_OPENAI=1";
-        "OPENAI_API_KEY=not-a-real-key";
-        "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
-      |]
-      null null null
+      record_env null null null
   in
+  f ~dir ~pid
+
+(* The run's container, once the hung agent has started in it. *)
+let started ~dir =
   let runs = Filename.concat dir ".bactrian/runs" in
-  let deadline = Unix.gettimeofday () +. 120. in
   let run_id = ref "" in
-  until ~deadline "the agent started" (fun () ->
+  until
+    ~deadline:(Unix.gettimeofday () +. 120.)
+    "the agent started"
+    (fun () ->
       Sys.file_exists runs
       && List.exists
            (fun id ->
@@ -378,6 +384,21 @@ let teardown ~signal () =
            (Array.to_list (Sys.readdir runs)));
   let name = "bactrian-" ^ !run_id in
   Alcotest.(check bool) "the container runs" true (container_exists name);
+  name
+
+let gone ~within name =
+  until
+    ~deadline:(Unix.gettimeofday () +. within)
+    "the container is gone"
+    (fun () -> not (container_exists name))
+
+let teardown ~signal () =
+  gate [ node_image ];
+  with_record
+    ~name:(Printf.sprintf "teardown-%d" signal)
+    [ "sh"; "-c"; hung_agent ]
+  @@ fun ~dir ~pid ->
+  let name = started ~dir in
   Unix.kill pid signal;
   (match wait_exit pid with
   | WEXITED n when signal = Sys.sigint ->
@@ -385,10 +406,156 @@ let teardown ~signal () =
   | WEXITED n -> Alcotest.failf "exit %d" n
   | WSIGNALED n when n = signal -> ()
   | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
-  until
-    ~deadline:(Unix.gettimeofday () +. 30.)
-    "the container is gone"
-    (fun () -> not (container_exists name))
+  gone ~within:30. name
+
+(* The process ID of [pid]'s one child whose command holds [word]. *)
+let child_of pid word =
+  let out = Filename.temp_file "ps" ".txt" in
+  Fun.protect ~finally:(fun () -> Sys.remove out) @@ fun () ->
+  run_or_fail
+    (Printf.sprintf "ps -A -o pid= -o ppid= -o command= > %s"
+       (Filename.quote out));
+  match
+    List.filter_map
+      (fun line ->
+        match
+          List.filter
+            (fun w -> not (String.equal w ""))
+            (String.split_on_char ' ' line)
+        with
+        | child :: parent :: command
+          when int_of_string_opt parent = Some pid && List.mem word command ->
+            int_of_string_opt child
+        | _ -> None)
+      (String.split_on_char '\n' (read out))
+  with
+  | [ child ] -> child
+  | found ->
+      Alcotest.failf "expected one child running %s, found %d" word
+        (List.length found)
+
+(* bactrian, its bridge and the runtime's client all killed, as
+   pkill -9 -f bactrian would (the client's arguments name the container
+   bactrian-RUN). The client alone keeps the container's input open: killing
+   only the bridge closes it, which the relay already takes for an end. *)
+let all_killed () =
+  gate [ node_image ];
+  with_record ~name:"all-killed" [ "sh"; "-c"; hung_agent ] @@ fun ~dir ~pid ->
+  let name = started ~dir in
+  let bridge = child_of pid "__vm-bridge" in
+  let client = child_of bridge "run" in
+  (* Back to back: the bridge checks its parent once a second, so it has no
+     time to remove the container itself. *)
+  List.iter (fun p -> Unix.kill p Sys.sigkill) [ client; bridge; pid ];
+  ignore (wait_exit pid : Unix.process_status);
+  let killed = Unix.gettimeofday () in
+  gone ~within:(Bactrian_core.Vm_frame.liveness_timeout +. 20.) name;
+  Printf.printf "the container went %.1f seconds after the kill\n"
+    (Unix.gettimeofday () -. killed)
+
+(* The relay alone, with its input open and silent, as when nothing of
+   bactrian is left but the runtime's client: it stops the agent once
+   [liveness_timeout] has passed without a heartbeat. *)
+let relay_liveness () =
+  gate [ node_image ];
+  let relay =
+    Eio_main.run @@ fun env ->
+    let process_mgr = Eio.Stdenv.process_mgr env
+    and clock = Eio.Stdenv.clock env in
+    match
+      Result.bind (Vm_runtime.detect ~process_mgr ~clock None) (fun r ->
+          Vm_runtime.relay ~process_mgr ~clock r)
+    with
+    | Ok path -> path
+    | Error m -> Alcotest.failf "no relay: %s" m
+  in
+  let name = Printf.sprintf "bactrian-liveness-%d" (Unix.getpid ()) in
+  Fun.protect ~finally:(fun () ->
+      ignore (Sys.command ("docker rm -f " ^ name ^ " > /dev/null 2>&1")))
+  @@ fun () ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+  let started = Unix.gettimeofday () in
+  let pid =
+    Unix.create_process "docker"
+      [|
+        "docker";
+        "run";
+        "--rm";
+        "-i";
+        "--name";
+        name;
+        "--network";
+        "none";
+        "--log-driver";
+        "none";
+        "--entrypoint";
+        "/bactrian/relay";
+        "--mount";
+        Printf.sprintf "type=bind,source=%s,target=/bactrian/relay,readonly"
+          relay;
+        "--";
+        node_image;
+        "--";
+        "sleep";
+        "300";
+      |]
+      r null null
+  in
+  Unix.close r;
+  Unix.close null;
+  Fun.protect ~finally:(fun () -> Unix.close w) @@ fun () ->
+  let status = wait_exit pid in
+  let took = Unix.gettimeofday () -. started in
+  Printf.printf "the relay stopped after %.1f seconds\n" took;
+  (match status with
+  | WEXITED 70 -> ()
+  | WEXITED n -> Alcotest.failf "exit %d" n
+  | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
+  let timeout = Bactrian_core.Vm_frame.liveness_timeout in
+  Alcotest.(check bool) "not before the timeout" true (took >= timeout -. 0.5);
+  Alcotest.(check bool) "soon after it" true (took < timeout +. 20.);
+  gone ~within:10. name
+
+(* A container whose bactrian has gone, as the relay of an older bactrian
+   would leave it, is removed by the next preflight. *)
+let stale_removed () =
+  gate [ node_image ];
+  let dead =
+    Unix.create_process "true" [| "true" |] Unix.stdin Unix.stdout Unix.stderr
+  in
+  ignore (wait_exit dead : Unix.process_status);
+  let name = Printf.sprintf "bactrian-stale-%d" (Unix.getpid ()) in
+  Fun.protect ~finally:(fun () ->
+      ignore (Sys.command ("docker rm -f " ^ name ^ " > /dev/null 2>&1")))
+  @@ fun () ->
+  run_or_fail
+    (String.concat " "
+       (List.map Filename.quote
+          [
+            "docker";
+            "run";
+            "-d";
+            "--name";
+            name;
+            "--label";
+            "bactrian.run=stale";
+            "--label";
+            "bactrian.pid=" ^ string_of_int dead;
+            "--label";
+            "bactrian.host=" ^ Unix.gethostname ();
+            "--network";
+            "none";
+            "--";
+            node_image;
+            "sleep";
+            "300";
+          ])
+    ^ " > /dev/null");
+  Alcotest.(check bool) "the stale container runs" true (container_exists name);
+  with_record ~name:"stale" [ "true" ] @@ fun ~dir:_ ~pid ->
+  ignore (wait_exit pid : Unix.process_status);
+  Alcotest.(check bool) "removed by the preflight" false (container_exists name)
 
 let () =
   Alcotest.run "vm sandbox"
@@ -411,5 +578,9 @@ let () =
         [
           Alcotest.test_case "SIGINT" `Slow (teardown ~signal:Sys.sigint);
           Alcotest.test_case "SIGKILL" `Slow (teardown ~signal:Sys.sigkill);
+          Alcotest.test_case "bactrian, its bridge and the client killed" `Slow
+            all_killed;
+          Alcotest.test_case "the relay without heartbeats" `Slow relay_liveness;
+          Alcotest.test_case "a stale container" `Slow stale_removed;
         ] );
     ]

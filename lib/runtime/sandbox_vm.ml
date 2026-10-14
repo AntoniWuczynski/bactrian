@@ -21,6 +21,7 @@ let prepare ~env requested ~image =
     (Eio.Stdenv.clock env :> float Eio.Time.clock_ty Eio.Resource.t)
   in
   let* runtime = Vm_runtime.detect ~process_mgr ~clock requested in
+  let (_ : string list) = Vm_runtime.remove_stale ~process_mgr ~clock runtime in
   let* image_id = Vm_runtime.image_id ~process_mgr ~clock runtime image in
   let* relay = Vm_runtime.relay ~process_mgr ~clock runtime in
   Ok { runtime; image; image_id; relay; process_mgr; clock }
@@ -87,7 +88,8 @@ let list_dir ~masked dir =
              { name; kind; masked_file })
            (List.sort String.compare (Array.to_list names)))
 
-let args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd ~forwards command =
+let args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards command
+    =
   let masked =
     List.filter_map
       (fun (p, k) ->
@@ -98,7 +100,8 @@ let args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd ~forwards command =
     (Vm_args.argv
        {
          runtime = Vm_runtime.exe t.runtime;
-         name;
+         name = "bactrian-" ^ run_id;
+         labels = Vm_runtime.labels ~run_id;
          uid = Unix.getuid ();
          gid = Unix.getgid ();
          image = t.image_id;
@@ -163,7 +166,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
     match Eio.Net.listening_addr listener with `Tcp (_, p) -> p | `Unix _ -> 0
   in
   let* argv =
-    args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd:state_dir
+    args t layout ~run_id:id ~env_file ~state_dir ~temp_dir ~cwd:state_dir
       ~forwards:[ port ] (Probe paths)
   in
   let out = Buffer.create 256 and err = Buffer.create 256 in
@@ -171,7 +174,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
     match
       Eio.Time.with_timeout t.clock probe_timeout (fun () ->
           Ok
-            (Vm_bridge.run ~net ~process_mgr:t.process_mgr
+            (Vm_bridge.run ~net ~clock:t.clock ~process_mgr:t.process_mgr
                ~env:(Vm_runtime.client_env t.runtime)
                ~forwards:[ port ]
                ~stdin:(Eio.Flow.string_source "")
@@ -240,7 +243,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
       remove t name;
       remove_file env_file);
   let* runtime_argv =
-    args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd ~forwards:[ port ]
+    args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards:[ port ]
       (Agent agent)
   in
   Ok

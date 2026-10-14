@@ -10,10 +10,14 @@
    then close. The last frame the relay writes is exit (payload: the agent's
    status, u32 BE, 128 plus the signal number when a signal ended it). Log
    frames carry one JSON line each, in the shape of the Linux forwarder's
-   relay failures. The agent's standard error is the container's, unframed.
+   relay failures. bactrian sends a heartbeat frame on channel 0 every two
+   seconds. The agent's standard error is the container's, unframed.
 
    The relay is PID 1: it reaps every child, forwards SIGTERM and SIGINT to
-   the agent's process group, and exits with the agent's status. It makes
+   the agent's process group, and exits with the agent's status. When nothing
+   has come from bactrian for LIVENESS_MS while the relay was reading, it
+   takes bactrian for dead (the runtime's client can outlive it and keep the
+   input open), kills the agent's group and exits. It makes
    itself not dumpable, so the agent (the same user) can neither trace it nor
    open its descriptors through /proc/1/fd and write frames of its own. Memory
    is bounded: a destination that does not drain stops the reading of its
@@ -48,7 +52,15 @@
 #include <time.h>
 #include <unistd.h>
 
-enum kind { K_DATA = 0, K_EOF = 1, K_OPEN = 2, K_CLOSE = 3, K_EXIT = 4, K_LOG = 5 };
+enum kind {
+  K_DATA = 0,
+  K_EOF = 1,
+  K_OPEN = 2,
+  K_CLOSE = 3,
+  K_EXIT = 4,
+  K_LOG = 5,
+  K_HEARTBEAT = 6
+};
 
 #define HEADER 9
 #define MAX_PAYLOAD 65536
@@ -63,6 +75,8 @@ enum kind { K_DATA = 0, K_EOF = 1, K_OPEN = 2, K_CLOSE = 3, K_EXIT = 4, K_LOG = 
 #define MAX_CONNS 64
 #define DRAIN_MS 2000
 #define EXIT_PROTOCOL 70
+/* Five heartbeats (Vm_frame.heartbeat_interval, 2 s) missed. */
+#define LIVENESS_MS 10000
 
 static const char greeting[] = "bactrian-probe\n";
 
@@ -435,6 +449,9 @@ static void write_conn(struct conn *c) {
 static unsigned char in_frame[HEADER + MAX_PAYLOAD];
 static size_t in_have;     /* bytes of the current frame read so far */
 static int in_pending;     /* a whole frame waits for room at its sink */
+static long last_heard;    /* when a frame last came, or reading resumed */
+
+static long now_ms(void);
 
 __attribute__((noreturn)) static void protocol_error(const char *why) {
   log_failure(0, "relay", why);
@@ -473,6 +490,8 @@ static int deliver(void) {
       case K_EOF:
         agent_in_eof = 1;
         if (buf_used(&to_agent) == 0) close_fd(&agent_in);
+        return 1;
+      case K_HEARTBEAT:
         return 1;
       default:
         protocol_error("unexpected frame kind on channel 0");
@@ -517,10 +536,11 @@ static void read_frames(void) {
   }
   in_have += (size_t)n;
   if (in_have == HEADER) {
-    if (in_frame[4] > K_LOG) protocol_error("unknown frame kind");
+    if (in_frame[4] > K_HEARTBEAT) protocol_error("unknown frame kind");
     if (get_u32(in_frame + 5) > MAX_PAYLOAD) protocol_error("frame too long");
   }
   if (in_have >= HEADER && in_have == in_needed()) {
+    last_heard = now_ms();
     if (deliver())
       in_have = 0;
     else
@@ -528,10 +548,13 @@ static void read_frames(void) {
   }
 }
 
+/* A frame that waits for room is the agent's backpressure, not bactrian's
+   silence, so the wait does not count towards LIVENESS_MS. */
 static void retry_pending(void) {
   if (in_pending && deliver()) {
     in_pending = 0;
     in_have = 0;
+    last_heard = now_ms();
   }
 }
 
@@ -647,11 +670,20 @@ static int run_loop(void) {
       ix_conn[i] = nf;
       fds[nf++] = (struct pollfd){c->fd, ev, 0};
     }
-    int timeout = -1;
-    if (drain_until >= 0) {
-      long left = drain_until - now_ms();
-      timeout = left < 0 ? 0 : (int)left;
+    long now = now_ms();
+    if (in_pending) last_heard = now;
+    if (now - last_heard >= LIVENESS_MS) {
+      log_failure(0, "relay", "nothing from bactrian for 10 seconds");
+      fprintf(stderr,
+              "bactrian relay: nothing from bactrian for %d seconds, so the "
+              "agent is stopped\n",
+              LIVENESS_MS / 1000);
+      signal_agent(SIGKILL);
+      exit(EXIT_PROTOCOL);
     }
+    long left = last_heard + LIVENESS_MS - now;
+    if (drain_until >= 0 && drain_until - now < left) left = drain_until - now;
+    int timeout = left < 0 ? 0 : (int)left;
     int r = poll(fds, (nfds_t)nf, timeout);
     if (r < 0) {
       if (errno == EINTR) continue;
@@ -891,6 +923,7 @@ int main(int argc, char **argv) {
     buf_init(&conns[k].sink, SINK_CAP);
   }
   install_signals();
+  last_heard = now_ms();
   /* Listeners first, so the agent can connect at once. */
   for (int k = 0; k < nports; k++) listen_on(forward_ports[k]);
   start_agent(argv + i, probing ? probe : NULL, nports > 0 ? forward_ports[0] : 0);

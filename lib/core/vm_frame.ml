@@ -1,4 +1,4 @@
-type kind = Data | Eof | Open | Close | Exit | Log
+type kind = Data | Eof | Open | Close | Exit | Log | Heartbeat
 type t = { channel : int; kind : kind; payload : string }
 
 let header_size = 9
@@ -11,6 +11,7 @@ let code = function
   | Close -> 3
   | Exit -> 4
   | Log -> 5
+  | Heartbeat -> 6
 
 let kind_of_code = function
   | 0 -> Some Data
@@ -19,8 +20,11 @@ let kind_of_code = function
   | 3 -> Some Close
   | 4 -> Some Exit
   | 5 -> Some Log
+  | 6 -> Some Heartbeat
   | _ -> None
 
+let heartbeat_interval = 2.
+let liveness_timeout = 10.
 let make channel kind payload = { channel; kind; payload }
 
 let data ~channel s =
@@ -33,6 +37,7 @@ let data ~channel s =
 
 let eof ~channel = make channel Eof ""
 let close ~channel = make channel Close ""
+let heartbeat = make 0 Heartbeat ""
 
 let u16 v =
   let b = Bytes.create 2 in
@@ -56,14 +61,14 @@ let port t =
   match t.kind with
   | Open when String.length t.payload = 2 ->
       Some (String.get_uint16_be t.payload 0)
-  | Open | Data | Eof | Close | Exit | Log -> None
+  | Open | Data | Eof | Close | Exit | Log | Heartbeat -> None
 
 let get_u32 s off = Int32.to_int (String.get_int32_be s off) land 0xFFFF_FFFF
 
 let status t =
   match t.kind with
   | Exit when String.length t.payload = 4 -> Some (get_u32 t.payload 0)
-  | Exit | Data | Eof | Open | Close | Log -> None
+  | Exit | Data | Eof | Open | Close | Log | Heartbeat -> None
 
 let encode t =
   let n = String.length t.payload in

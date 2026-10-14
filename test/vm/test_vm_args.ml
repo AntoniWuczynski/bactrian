@@ -36,6 +36,7 @@ let input ?(allow_write = []) ?(deny = []) ?(listing = default_listing)
   {
     runtime = "/usr/bin/docker";
     name = "bactrian-r1";
+    labels = [ ("bactrian.run", "r1"); ("bactrian.pid", "42") ];
     uid = 501;
     gid = 20;
     image = "node:24@sha256:abc";
@@ -106,6 +107,10 @@ let test_command_line () =
       "-i";
       "--name";
       "bactrian-r1";
+      "--label";
+      "bactrian.run=r1";
+      "--label";
+      "bactrian.pid=42";
       "--network";
       "none";
       "--read-only";

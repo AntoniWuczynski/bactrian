@@ -15,6 +15,9 @@ type kind =
       (** Relay to bactrian, last: the agent's status, u32 BE (128 plus the
           signal number when a signal ended it). *)
   | Log  (** Relay to bactrian: one JSON line of a relay failure. *)
+  | Heartbeat
+      (** bactrian to relay, on channel 0, every {!heartbeat_interval} seconds:
+          bactrian is alive. Empty payload. *)
 
 type t = private { channel : int; kind : kind; payload : string }
 
@@ -28,6 +31,14 @@ val data : channel:int -> string -> t list
 (** The data, split into frames of at most {!max_payload} bytes, none for an
     empty string. *)
 
+val heartbeat_interval : float
+(** 2 seconds. *)
+
+val liveness_timeout : float
+(** 10 seconds: the relay ends the agent when nothing has come from bactrian for
+    this long while it was reading ([LIVENESS_MS] in [vm/relay.c]). *)
+
+val heartbeat : t
 val eof : channel:int -> t
 val close : channel:int -> t
 

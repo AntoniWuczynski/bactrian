@@ -61,6 +61,17 @@ val relay :
     built now in a container of {!build_image} (which needs the network, for
     Alpine's packages) and cached under {!relay_cache_dir}. *)
 
+val labels : run_id:string -> (string * string) list
+(** The labels of a container bactrian starts: [bactrian.run] (the run's ID),
+    [bactrian.pid] (this process) and [bactrian.host] (this host's name). *)
+
+val remove_stale :
+  process_mgr:_ Eio.Process.mgr -> clock:_ Eio.Time.clock -> t -> string list
+(** Removes ([rm -f]) every container named [bactrian-...] that carries
+    {!labels} of this host and a process ID that is no longer alive: one left
+    behind when bactrian and its bridge were both killed. Gives the names
+    removed. A listing that fails removes nothing. *)
+
 val remove :
   process_mgr:_ Eio.Process.mgr -> clock:_ Eio.Time.clock -> t -> string -> unit
 (** [remove t name] is [rm -f NAME], whether or not the container is there.

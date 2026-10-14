@@ -10,6 +10,7 @@ let kind_name : F.kind -> string = function
   | Close -> "close"
   | Exit -> "exit"
   | Log -> "log"
+  | Heartbeat -> "heartbeat"
 
 let show (f : F.t) =
   Printf.sprintf "%d %s %S" f.channel (kind_name f.kind) f.payload
@@ -105,6 +106,7 @@ let gen_frame =
           channel (int_range 1 65535);
         map F.exit (int_range 0 255);
         map F.log (string_size ~gen:printable (int_range 0 100));
+        return F.heartbeat;
       ])
 
 let arb_frames =

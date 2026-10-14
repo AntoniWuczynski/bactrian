@@ -4,6 +4,8 @@
    - connect PORT: opens channel 1 to PORT, sends "ping" and its end, and
      writes what came back on channel 0 before exiting 0;
    - log: one log line, then exit 0;
+   - heartbeat: waits for the bridge's heartbeat, says "beat" on channel 0
+     and exits 0;
    - bad: a frame of an unknown kind;
    - silent: ends without an exit frame. *)
 
@@ -38,7 +40,7 @@ let ended channel =
       &&
       match f.kind with
       | Eof | Close -> true
-      | Data | Open | Exit | Log -> false)
+      | Data | Open | Exit | Log | Heartbeat -> false)
 
 let payloads channel frames =
   String.concat ""
@@ -46,7 +48,7 @@ let payloads channel frames =
        (fun (f : F.t) ->
          match f.kind with
          | Data when f.channel = channel -> Some f.payload
-         | Data | Eof | Open | Close | Exit | Log -> None)
+         | Data | Eof | Open | Close | Exit | Log | Heartbeat -> None)
        frames)
 
 let () =
@@ -62,6 +64,15 @@ let () =
         @ [ F.eof ~channel:1 ]);
       let frames = receive (ended 1) in
       send (F.data ~channel:0 (payloads 1 frames) @ [ F.exit 0 ])
+  | [ "heartbeat" ] ->
+      let (_ : F.t list) =
+        receive
+          (List.exists (fun (f : F.t) ->
+               match f.kind with
+               | Heartbeat -> true
+               | Data | Eof | Open | Close | Exit | Log -> false))
+      in
+      send (F.data ~channel:0 "beat" @ [ F.exit 0 ])
   | [ "log" ] ->
       send
         [

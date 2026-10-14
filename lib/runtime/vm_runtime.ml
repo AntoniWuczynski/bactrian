@@ -215,6 +215,64 @@ let relay ~process_mgr ~clock t =
           (Printf.sprintf "the relay could not be built in %s: %s" dir
              (Printexc.to_string e))
 
+let label_run = "bactrian.run"
+let label_pid = "bactrian.pid"
+let label_host = "bactrian.host"
+
+let labels ~run_id =
+  [
+    (label_run, run_id);
+    (label_pid, string_of_int (Unix.getpid ()));
+    (label_host, Unix.gethostname ());
+  ]
+
+(* By its process ID only, never by a port: a process that cannot be signalled
+   for want of permission is alive. *)
+let alive pid =
+  match Unix.kill pid 0 with
+  | () -> true
+  | exception Unix.Unix_error (ESRCH, _, _) -> false
+  | exception Unix.Unix_error _ -> true
+
+(* "NAME\tPID\tHOST": a container of this host whose bactrian has gone. *)
+let stale line =
+  match String.split_on_char '\t' line with
+  | [ name; pid; host ] when String.starts_with ~prefix:"bactrian-" name -> (
+      match int_of_string_opt pid with
+      | Some pid
+        when pid > 0
+             && String.equal host (Unix.gethostname ())
+             && not (alive pid) ->
+          Some name
+      | Some _ | None -> None)
+  | _ -> None
+
+let remove_stale ~process_mgr ~clock t =
+  match
+    capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
+      [
+        t.exe;
+        "ps";
+        "--all";
+        "--filter";
+        "label=" ^ label_pid;
+        "--format";
+        Printf.sprintf {|{{.Names}}	{{.Label "%s"}}	{{.Label "%s"}}|} label_pid
+          label_host;
+      ]
+  with
+  | Error _ -> []
+  | Ok out ->
+      let names = List.filter_map stale (String.split_on_char '\n' out) in
+      List.iter
+        (fun name ->
+          ignore
+            (capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
+               [ t.exe; "rm"; "-f"; name ]
+              : (string, string) result))
+        names;
+      names
+
 let remove ~process_mgr ~clock t name =
   ignore
     (capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.

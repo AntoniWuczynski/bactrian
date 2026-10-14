@@ -15,7 +15,7 @@ type outcome = {
 let bridge ?(stdin = "") ?(forwards = []) env args =
   let out = Buffer.create 64 and logs = ref [] in
   let result =
-    Vm_bridge.run ~net:(Eio.Stdenv.net env)
+    Vm_bridge.run ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~env:[||] ~forwards
       ~stdin:(Eio.Flow.string_source stdin)
@@ -74,6 +74,14 @@ let test_connection () =
         port;
     ]
     o.logs
+
+(* The relay ends the agent when bactrian falls silent, so the bridge sends a
+   heartbeat from the start. *)
+let test_heartbeat () =
+  Eio_main.run @@ fun env ->
+  let o = bridge env [ "heartbeat" ] in
+  Alcotest.(check int) "status" 0 (code o);
+  Alcotest.(check string) "the relay heard it" "beat" o.out
 
 let test_log () =
   Eio_main.run @@ fun env ->
@@ -139,6 +147,7 @@ let () =
           Alcotest.test_case "channel 0" `Quick test_channel_zero;
           Alcotest.test_case "connections" `Quick test_connection;
           Alcotest.test_case "log lines" `Quick test_log;
+          Alcotest.test_case "heartbeat" `Quick test_heartbeat;
           Alcotest.test_case "relay failures" `Quick test_failures;
           Alcotest.test_case "arguments" `Quick test_parse;
         ] );

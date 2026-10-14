@@ -15,6 +15,7 @@ type entry = { name : string; kind : entry_kind; masked_file : bool }
 type input = {
   runtime : string;
   name : string;
+  labels : (string * string) list;
   uid : int;
   gid : int;
   image : string;
@@ -360,10 +361,13 @@ let argv i =
         Ok ("--probe" :: paths)
   in
   let* () =
-    all check_argument [ i.runtime; i.name; i.image; i.env_file; i.workdir ]
+    all check_argument
+      ([ i.runtime; i.name; i.image; i.env_file; i.workdir ]
+      @ List.concat_map (fun (k, v) -> [ k; v ]) i.labels)
   in
   Ok
     ([ i.runtime; "run"; "--rm"; "-i"; "--name"; i.name ]
+    @ List.concat_map (fun (k, v) -> [ "--label"; k ^ "=" ^ v ]) i.labels
     @ [ "--network"; "none"; "--read-only"; "--cap-drop"; "ALL" ]
     @ [ "--security-opt"; "no-new-privileges" ]
     @ [ "--user"; Printf.sprintf "%d:%d" i.uid i.gid; "--tmpfs"; tmp_mount ]

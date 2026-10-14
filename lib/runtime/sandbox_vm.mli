@@ -20,8 +20,9 @@ val prepare :
   Bactrian_core.Experiment.sandbox_runtime option ->
   image:string ->
   (t, string) result
-(** Finds the runtime, checks that the image is present (it is never pulled) and
-    builds the relay if it is not cached. *)
+(** Finds the runtime, removes the containers that a bactrian killed with its
+    bridge left behind ({!Vm_runtime.remove_stale}), checks that the image is
+    present (it is never pulled) and builds the relay if it is not cached. *)
 
 type layout = {
   project_root : string;
