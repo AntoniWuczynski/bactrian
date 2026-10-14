@@ -26,7 +26,7 @@ let host_backend () : [ `Seatbelt | `Bubblewrap ] =
 type applied_backend =
   | Seatbelt_backend
   | Bubblewrap_backend
-  | Vm_backend of { runtime : string; image : string }
+  | Vm_backend of { runtime : string; image : string; image_id : string }
 
 type label = {
   mode : mode;
@@ -44,11 +44,16 @@ let label_json (l : label) =
     | None -> []
     | Some Seatbelt_backend -> [ ("backend", `String "seatbelt") ]
     | Some Bubblewrap_backend -> [ ("backend", `String "bubblewrap") ]
-    | Some (Vm_backend { runtime; image }) ->
+    | Some (Vm_backend { runtime; image; image_id }) ->
         [
           ("backend", `String "vm");
           ( "vm",
-            `Assoc [ ("runtime", `String runtime); ("image", `String image) ] );
+            `Assoc
+              [
+                ("runtime", `String runtime);
+                ("image", `String image);
+                ("image_id", `String image_id);
+              ] );
         ])
 
 (* How the sandbox is made here: bubblewrap carries the path it was found at.
@@ -89,6 +94,7 @@ let label = function
                   {
                     runtime = Sandbox_vm.runtime_name vm;
                     image = Sandbox_vm.image vm;
+                    image_id = Sandbox_vm.image_id vm;
                   });
       }
   | Unsandboxed l -> l

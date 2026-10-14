@@ -3,6 +3,7 @@ open Bactrian_core
 type t = {
   runtime : Vm_runtime.t;
   image : string;
+  image_id : string;
   relay : string;
   process_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
   clock : float Eio.Time.clock_ty Eio.Resource.t;
@@ -10,6 +11,7 @@ type t = {
 
 let runtime_name t = Vm_runtime.name t.runtime
 let image t = t.image
+let image_id t = t.image_id
 let ( let* ) = Result.bind
 
 let prepare ~env requested ~image =
@@ -19,9 +21,9 @@ let prepare ~env requested ~image =
     (Eio.Stdenv.clock env :> float Eio.Time.clock_ty Eio.Resource.t)
   in
   let* runtime = Vm_runtime.detect ~process_mgr ~clock requested in
-  let* () = Vm_runtime.image_present ~process_mgr ~clock runtime image in
+  let* image_id = Vm_runtime.image_id ~process_mgr ~clock runtime image in
   let* relay = Vm_runtime.relay ~process_mgr ~clock runtime in
-  Ok { runtime; image; relay; process_mgr; clock }
+  Ok { runtime; image; image_id; relay; process_mgr; clock }
 
 type layout = {
   project_root : string;
@@ -58,7 +60,7 @@ let args t layout ~name ~env_file ~empty_file ~state_dir ~temp_dir ~cwd
          name;
          uid = Unix.getuid ();
          gid = Unix.getgid ();
-         image = t.image;
+         image = t.image_id;
          workdir = cwd;
          env_file;
          relay = t.relay;

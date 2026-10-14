@@ -7,7 +7,13 @@ type t
     runtime's architecture. *)
 
 val runtime_name : t -> string
+
 val image : t -> string
+(** The image as configured. *)
+
+val image_id : t -> string
+(** The ID the image had at {!prepare}, which every container runs, so a tag
+    moved since cannot change what the agent runs in. *)
 
 val prepare :
   env:Eio_unix.Stdenv.base ->

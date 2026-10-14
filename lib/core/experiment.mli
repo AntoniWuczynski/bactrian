@@ -104,6 +104,11 @@ val decode : Canon.t -> (t, error list) result
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
 
+val image_problem : string -> string option
+(** What is wrong with a container image reference ([sandbox.image],
+    [--sandbox-image], the MCP argument [sandbox_image]): empty, starting with
+    [-] (an option to the runtime's client), or holding a NUL byte. *)
+
 val reserved_env : string list
 (** The variables bactrian sets in a run's environment: [SIM_NOW], [TZ],
     [BACTRIAN_RUN_ID], [BACTRIAN_STATE_DIR], the four provider base URLs and the

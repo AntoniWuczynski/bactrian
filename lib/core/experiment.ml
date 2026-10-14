@@ -396,9 +396,16 @@ let sandbox_runtime ~path c =
     ->
       fail ~path "expected docker"
 
+let image_problem s =
+  if String.equal s "" then Some "is empty"
+  else if String.starts_with ~prefix:"-" s then
+    Some "starts with -, which the container runtime would take for an option"
+  else if String.contains s '\000' then Some "holds a NUL byte"
+  else None
+
 let image ~path c =
   let* s = non_empty_string ~path c in
-  if String.contains s '\000' then fail ~path "holds a NUL byte" else Ok s
+  match image_problem s with Some m -> fail ~path m | None -> Ok s
 
 let default_sandbox =
   {

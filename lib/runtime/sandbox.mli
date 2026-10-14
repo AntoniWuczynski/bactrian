@@ -30,7 +30,7 @@ val host_backend : unit -> [ `Seatbelt | `Bubblewrap ]
 type applied_backend =
   | Seatbelt_backend
   | Bubblewrap_backend
-  | Vm_backend of { runtime : string; image : string }
+  | Vm_backend of { runtime : string; image : string; image_id : string }
 
 type label = {
   mode : mode;
@@ -43,7 +43,8 @@ type label = {
 val label_json : label -> Yojson.Safe.t
 (** [{"mode": "auto", "applied": false, "reason": "…"}], [reason] only when
     there is one, and for a sandboxed run [backend] ([seatbelt], [bubblewrap] or
-    [vm], with [{"vm": {"runtime", "image"}}]). *)
+    [vm], with [{"vm": {"runtime", "image", "image_id"}}], [image_id] being the
+    image that ran). *)
 
 type t
 (** What the preflight decided for every run of a command or experiment. *)

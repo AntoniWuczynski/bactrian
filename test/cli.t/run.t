@@ -241,6 +241,13 @@ experiment.
   bactrian: no cassette for run "nope"
   [64]
 
+An image reference that the container runtime would read as an option is
+refused before anything starts.
+
+  $ bactrian record --turn hi --sandbox-backend vm --sandbox-image=--privileged -- true
+  bactrian: the sandbox image "--privileged" starts with -, which the container runtime would take for an option
+  [64]
+
 A tab in indentation is reported where it is, with the fix.
 
   $ printf 'version: 1\nid: t\nturns:\n\t- user: hi\n' > tab.yaml

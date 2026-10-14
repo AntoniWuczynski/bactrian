@@ -306,6 +306,11 @@ let test_sandbox_backend () =
       "podman is not supported yet: only docker (Docker Engine, Docker \
        Desktop, OrbStack) has been verified" )
     (one {|, "sandbox": {"backend": "vm", "image": "i", "runtime": "podman"}|});
+  Alcotest.(check (pair string string))
+    "an image that looks like an option"
+    ( "sandbox.image",
+      "starts with -, which the container runtime would take for an option" )
+    (one {|, "sandbox": {"backend": "vm", "image": "--privileged"}|});
   Alcotest.(check string)
     "unknown backend" "sandbox.backend"
     (fst (one {|, "sandbox": {"backend": "firecracker"}|}))

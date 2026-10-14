@@ -97,12 +97,17 @@ let detect ~process_mgr ~clock requested =
           | "" -> Error (exe ^ " version did not name the daemon's architecture")
           | arch -> Ok { name; exe; client_env; arch }))
 
-let image_present ~process_mgr ~clock t image =
+let image_id ~process_mgr ~clock t image =
   match
     capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
-      [ t.exe; "image"; "inspect"; "--format"; "{{.Id}}"; image ]
+      [ t.exe; "image"; "inspect"; "--format"; "{{.Id}}"; "--"; image ]
   with
-  | Ok _ -> Ok ()
+  | Ok out when String.starts_with ~prefix:"sha256:" (String.trim out) ->
+      Ok (String.trim out)
+  | Ok out ->
+      Error
+        (Printf.sprintf "%s image inspect gave %S, not an image ID" t.name
+           (String.trim out))
   | Error _ ->
       Error
         (Printf.sprintf "the image %s is not present locally. Fix: %s pull %s"

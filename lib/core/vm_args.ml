@@ -223,7 +223,7 @@ let argv i =
           relay_path;
       ]
     @ List.concat_map (mount_args ~empty_file:i.empty_file) (mounts i)
-    @ [ i.image ]
+    @ [ "--"; i.image ]
     @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
     @ tail)
 

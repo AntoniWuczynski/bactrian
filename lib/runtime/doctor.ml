@@ -310,7 +310,7 @@ let vm_host ~env : vm_host =
     image_present =
       (fun image ->
         Result.bind (Lazy.force runtime) (fun r ->
-            Vm_runtime.image_present ~process_mgr ~clock r image));
+            Result.map ignore (Vm_runtime.image_id ~process_mgr ~clock r image)));
     relay_cached =
       (fun () ->
         match Lazy.force runtime with

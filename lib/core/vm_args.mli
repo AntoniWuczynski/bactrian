@@ -61,8 +61,8 @@ val argv : input -> (string list, error) result
 (** [RUNTIME run --rm -i --name NAME --network none --read-only --cap-drop ALL
      --security-opt no-new-privileges --user UID:GID --tmpfs /tmp --log-driver
      none --pull never --workdir DIR --env-file FILE --entrypoint
-     /bactrian/relay --mount|--tmpfs... IMAGE --forward PORT... -- AGENT...] (or
-    [--probe OUTSIDE INSIDE DENIED] in place of [-- AGENT...]).
+     /bactrian/relay --mount|--tmpfs... -- IMAGE --forward PORT... -- AGENT...]
+    (or [--probe OUTSIDE INSIDE DENIED] in place of [-- AGENT...]).
 
     Mounts are given in order of depth, as the runtime applies them. A directory
     mask is [--tmpfs PATH:ro,mode=0755], a file mask a read-only bind of

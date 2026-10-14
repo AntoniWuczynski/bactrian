@@ -32,14 +32,15 @@ val detect :
     asks the daemon for its architecture ([version]). The error says what is
     missing and how to get it. *)
 
-val image_present :
+val image_id :
   process_mgr:_ Eio.Process.mgr ->
   clock:_ Eio.Time.clock ->
   t ->
   string ->
-  (unit, string) result
-(** Whether the image is in the runtime's local store ([image inspect]). Never
-    pulls: the error gives the command that does. *)
+  (string, string) result
+(** The ID ([sha256:...]) of the image in the runtime's local store
+    ([image inspect -- IMAGE]). Never pulls: the error gives the command that
+    does. *)
 
 val relay_cache_dir : unit -> string
 (** [$XDG_CACHE_HOME/bactrian/relay], or [~/.cache/bactrian/relay]. *)

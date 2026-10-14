@@ -98,6 +98,7 @@ let test_command_line () =
       "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
       "--mount";
       "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+      "--";
       "node:24@sha256:abc";
       "--forward";
       "4242";

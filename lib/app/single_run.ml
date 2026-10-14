@@ -108,7 +108,11 @@ let sandbox_problem (s : sandbox) =
   match (Sandbox.backend_available s.backend, s.backend, s.image) with
   | Error m, _, _ -> Some m
   | Ok (), `Vm, None -> Some "the sandbox backend vm needs an image"
-  | Ok (), (`Vm | `Auto | `Seatbelt | `Bubblewrap), _ -> None
+  | Ok (), (`Vm | `Auto | `Seatbelt | `Bubblewrap), Some image ->
+      Option.map
+        (fun m -> Printf.sprintf "the sandbox image %S %s" image m)
+        (Bactrian_core.Experiment.image_problem image)
+  | Ok (), (`Auto | `Seatbelt | `Bubblewrap), None -> None
 
 let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   let warn w = on_progress (Progress.Warning w) in
