@@ -138,9 +138,7 @@ let relay_name t =
 let build_image =
   "alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 
-(* The versions in Alpine 3.24's main repository when the image was pinned,
-   so two machines build the same relay. *)
-let build_packages = [ "gcc=15.2.0-r5"; "musl-dev=1.2.6-r2" ]
+let build_packages = [ "gcc"; "musl-dev" ]
 let build_timeout = 600.
 
 let rec remove_tree path =

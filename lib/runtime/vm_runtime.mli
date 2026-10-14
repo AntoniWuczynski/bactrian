@@ -53,7 +53,7 @@ val build_image : string
 (** The Alpine image, pinned by digest, that builds the relay. *)
 
 val build_packages : string list
-(** The Alpine packages the build installs, each pinned to a version. *)
+(** The Alpine packages the build installs. *)
 
 val relay :
   process_mgr:_ Eio.Process.mgr ->
