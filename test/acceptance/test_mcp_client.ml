@@ -776,6 +776,14 @@ let upstream_port up =
         (int_of_string_opt (String.sub url (i + 1) (String.length url - i - 1)))
   | None -> Alcotest.fail "the upstream URL has no port"
 
+(* On macOS the experiment names Seatbelt, so that no image is needed, and the
+   server allows Seatbelt only with --allow-unsandboxed: there the flag is
+   given and strict asked for by argument, which keeps the checkers inside. *)
+let seatbelt_args =
+  match Bactrian_runtime.Sandbox.host_backend () with
+  | `Seatbelt -> [ "--allow-unsandboxed" ]
+  | `Bubblewrap -> []
+
 let sandboxed_checkers era () =
   if not sandbox_available then Alcotest.skip ();
   let agent = List.hd agents in
@@ -787,11 +795,15 @@ let sandboxed_checkers era () =
     (Filename.concat project "scenarios/weather.json")
     (judge_scenario ~port ~golden:None);
   let env = (upstream_variable, upstream_url up) :: key_env in
-  let conn = connect ~args:[] ~env ~dir:project era in
+  let conn = connect ~args:seatbelt_args ~env ~dir:project era in
   Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
   let job =
     string_field "job_id"
-      (ok_call conn "run_start" [ ("experiment", Canon.string "exp.json") ])
+      (ok_call conn "run_start"
+         [
+           ("experiment", Canon.string "exp.json");
+           ("sandbox", Canon.string "strict");
+         ])
   in
   let status = C.poll_job conn.c job in
   Alcotest.(check string)
@@ -812,7 +824,11 @@ let sandboxed_checkers era () =
     (Filename.concat project "checks/weather.json")
     (judge_scenario ~port ~golden:(Some "golden/pass.jsonl"));
   let checked =
-    ok_call conn "check" [ ("scenarios", strings [ "checks/weather.json" ]) ]
+    ok_call conn "check"
+      [
+        ("scenarios", strings [ "checks/weather.json" ]);
+        ("sandbox", Canon.string "strict");
+      ]
   in
   check_exit "the server exits at end of input" 0 (C.close conn.c);
   no_secret conn;
