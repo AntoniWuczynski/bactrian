@@ -51,6 +51,9 @@ val scenario_text : string
 val terse : string
 (** The system prompt of the [terse] variant. *)
 
+val host_backend : string
+(** The name of the host's own sandbox backend: [seatbelt] or [bubblewrap]. *)
+
 val experiment_text : ?extra:string -> ?model:string -> string list -> string
 (** The experiment for an agent command: scenarios [scenarios/*.json], variants
     [base] and [terse], two repeats, a cap of 100 USD on OpenAI and no sandbox.

@@ -126,16 +126,31 @@ let () =
     print_endline
       "no sandbox-exec or bwrap on this host: runs are not sandboxed"
 
-let sandbox_flag = if sandbox_available then "strict" else "off"
+(* The host's own sandbox is named, so macOS does not ask for an image. *)
+let sandbox_flag =
+  if sandbox_available then
+    "strict --sandbox-backend "
+    ^
+    match Sandbox.host_backend () with
+    | `Seatbelt -> "seatbelt"
+    | `Bubblewrap -> "bubblewrap"
+  else "off"
 
-let sandbox ~env ~dir ~deny_read =
-  if not sandbox_available then Sandbox.off
+(* With [vm], the virtual machine sandbox running that image. *)
+let sandbox ?vm ~env ~dir ~deny_read () =
+  if Option.is_none vm && not sandbox_available then Sandbox.off
   else
     match
       Sandbox.preflight ~env
         ~warn:(fun w -> Alcotest.failf "warning: %s" w)
         {
           mode = `Strict;
+          backend =
+            (match vm with
+            | Some _ -> `Vm
+            | None -> (Sandbox.host_backend () :> Sandbox.backend));
+          image = vm;
+          runtime = None;
           allow_write = [];
           deny_read;
           bactrian_exe = executable "BACTRIAN_EXE";
@@ -145,13 +160,11 @@ let sandbox ~env ~dir ~deny_read =
     | Ok t -> t
     | Error m -> Alcotest.failf "sandbox preflight: %s" m
 
-let check_sandboxed (r : Run.result) =
-  Alcotest.(check bool) "sandboxed" sandbox_available r.sandbox.applied
-
 type world = {
   env : Eio_unix.Stdenv.base;
   up : F.t;
   dir : string;  (** The world's directory, with its [.bactrian] store. *)
+  vm : bool;
   execute :
     agent:Run.agent ->
     ?replay:Run.replay ->
@@ -164,7 +177,18 @@ type world = {
 (* [deny_read] names directories to create in the world and deny to the agent.
    The fake upstream answers [rounds] times the two replies of the weather
    conversation. *)
-let with_world ?(deny_read = []) ?(rounds = 1) name f =
+let check_sandboxed w (r : Run.result) =
+  Alcotest.(check bool)
+    "sandboxed"
+    (w.vm || sandbox_available)
+    r.sandbox.applied;
+  if w.vm then
+    match r.sandbox.backend with
+    | Some (Vm_backend _) -> ()
+    | Some (Seatbelt_backend | Bubblewrap_backend) | None ->
+        Alcotest.fail "the run was not in the virtual machine"
+
+let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
   Eio_main.run @@ fun env ->
   let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
@@ -199,8 +223,9 @@ let with_world ?(deny_read = []) ?(rounds = 1) name f =
     (fun name -> Eio.Path.mkdirs ~perm:0o700 Eio.Path.(dir / name))
     deny_read;
   let sandbox =
-    sandbox ~env ~dir:abs_dir
+    sandbox ?vm ~env ~dir:abs_dir
       ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
+      ()
   in
   let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) () =
     incr counter;
@@ -212,7 +237,9 @@ let with_world ?(deny_read = []) ?(rounds = 1) name f =
     let config : Run.config =
       {
         agent;
-        cwd = ".";
+        (* The virtual machine shows the project alone, so the agent runs
+           there. *)
+        cwd = (if Option.is_some vm then abs_dir else ".");
         turns = (if replay = None then [ first_turn ] else []);
         scenario = "weather";
         variant = "base";
@@ -243,7 +270,14 @@ let with_world ?(deny_read = []) ?(rounds = 1) name f =
          ~upstream:(fun _ -> Uri.of_string (F.base_url up))
          ~env ~proxy ~store ~ledger config)
   in
-  f { env; up; dir = Filename.concat (Sys.getcwd ()) (snd dir); execute }
+  f
+    {
+      env;
+      up;
+      dir = Filename.concat (Sys.getcwd ()) (snd dir);
+      vm = Option.is_some vm;
+      execute;
+    }
 
 let strict from : Run.replay =
   { from; matcher = Strict; allow_reorder = false; timing = P.Fast }

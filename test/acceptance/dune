@@ -8,7 +8,8 @@
   test_acceptance
   test_launch_env_outside
   test_mcp_client
-  test_upstream_override)
+  test_upstream_override
+  test_vm)
  (libraries
   bactrian.core
   mcp_client
@@ -67,3 +68,24 @@
    BACTRIAN_EXE
    %{exe:../../bin/main.exe}
    (run %{exe:test_launch_env_outside.exe}))))
+
+; The virtual machine sandbox, on a Docker-compatible runtime. Skipped without
+; one, unless BACTRIAN_REQUIRE_VM is 1. Needs the network once, for the images,
+; the relay's build and the Python agent's packages.
+
+(rule
+ (alias acceptance)
+ (deps
+  ../../examples/agents/typescript/dist/agent.js
+  ../../examples/agents/python/agent.py
+  ../../examples/agents/python/pyproject.toml
+  ../../examples/agents/python/uv.lock
+  ../sandbox/escape.mts
+  ../sandbox/escape.py
+  (source_tree ../fixtures/protocols/openai_chat)
+  (env_var BACTRIAN_REQUIRE_VM))
+ (action
+  (setenv
+   BACTRIAN_EXE
+   %{exe:../../bin/main.exe}
+   (run %{exe:test_vm.exe}))))

@@ -37,12 +37,12 @@ val executable : string -> string
 
 val sandbox_available : bool
 val sandbox_flag : string
-val check_sandboxed : Run.result -> unit
 
 type world = {
   env : Eio_unix.Stdenv.base;
   up : F.t;
   dir : string;  (** The world's directory, with its [.bactrian] store. *)
+  vm : bool;  (** Whether agents run in the virtual machine sandbox. *)
   execute :
     agent:Run.agent ->
     ?replay:Run.replay ->
@@ -52,11 +52,21 @@ type world = {
     Run.result;
 }
 
+val check_sandboxed : world -> Run.result -> unit
+(** The run was sandboxed where the host has a sandbox, and in the virtual
+    machine when the world runs one. *)
+
 val with_world :
-  ?deny_read:string list -> ?rounds:int -> string -> (world -> 'a) -> 'a
+  ?vm:string ->
+  ?deny_read:string list ->
+  ?rounds:int ->
+  string ->
+  (world -> 'a) ->
+  'a
 (** [deny_read] names directories to create in the world and deny to the agent.
     The fake upstream answers [rounds] (default 1) times the two replies of the
-    weather conversation. *)
+    weather conversation. With [vm] the agents run in the virtual machine
+    sandbox with that image, in the world's directory. *)
 
 val strict : string -> Run.replay
 val contains : string -> string -> bool

@@ -46,7 +46,11 @@ jobs:
           dpkg -L libfaketime | grep libfaketimeMT.so.1
       - run: opam exec -- dune build
       - run: opam exec -- dune test
+      # The virtual machine sandbox's tests need a container runtime. Ubuntu's
+      # runner has Docker, so there they must run rather than skip.
       - run: opam exec -- dune build @acceptance
+        env:
+          BACTRIAN_REQUIRE_VM: ${{ runner.os == 'Linux' && '1' || '0' }}
   lint-fmt:
     runs-on: ubuntu-latest
     steps:

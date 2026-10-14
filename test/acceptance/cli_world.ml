@@ -100,6 +100,13 @@ let scenario_text =
 
 let terse = "You are a terse assistant."
 
+(* The host's own sandbox is named, so the server's strict mode on macOS does
+   not ask for a virtual machine image. *)
+let host_backend =
+  match Bactrian_runtime.Sandbox.host_backend () with
+  | `Seatbelt -> "seatbelt"
+  | `Bubblewrap -> "bubblewrap"
+
 let experiment_text ?(extra = "") ?model argv =
   let model_env =
     match model with Some m -> [ ("AGENT_MODEL", `String m) ] | None -> []
@@ -120,12 +127,13 @@ let experiment_text ?(extra = "") ?model argv =
  "agent": {"protocol": "command", "command": %s},
  "scenarios": ["scenarios/*.json"],
  "variants": %s,
- "repeats": 2, "concurrency": 1, "seed": 3, "sandbox": "off",
+ "repeats": 2, "concurrency": 1, "seed": 3,
+ "sandbox": {"mode": "off", "backend": "%s"},
  "caps_usd": {"openai": 100},
  "compare": {"baseline": "base", "thresholds": {"pass_rate": 0.1}}%s}|}
     (Yojson.Safe.to_string (`List (List.map (fun s -> `String s) argv)))
     (Yojson.Safe.to_string variants)
-    extra
+    host_backend extra
 
 let write_experiment ?extra ?model dir argv =
   write (Filename.concat dir "scenarios/weather.json") scenario_text;

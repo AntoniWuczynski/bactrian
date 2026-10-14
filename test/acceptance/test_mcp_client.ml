@@ -827,7 +827,12 @@ let sandboxed_checkers era () =
   Alcotest.(check int) "check: the exit status" 0 code;
   Alcotest.check json "check equals the CLI's" printed checked;
   Alcotest.check json "the checkers ran in the strict sandbox"
-    (obj [ ("mode", Canon.string "strict"); ("applied", Canon.bool true) ])
+    (obj
+       [
+         ("mode", Canon.string "strict");
+         ("applied", Canon.bool true);
+         ("backend", Canon.string host_backend);
+       ])
     (field "sandbox" checked);
   let conn = connect ~args:[ "--allow-unsandboxed" ] ~env ~dir:project era in
   Fun.protect ~finally:(fun () -> C.dispose conn.c) @@ fun () ->
