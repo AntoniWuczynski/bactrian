@@ -24,3 +24,11 @@ val signal_name : int -> string
 
 val describe_exit : Eio.Process.exit_status -> string
 (** ["exit status N"] or ["killed by SIGKILL"] (see {!signal_name}). *)
+
+val path_var : unit -> string
+(** [PATH=...] as bactrian has it, or [/usr/bin:/bin]. *)
+
+val tool_env : unit -> string array
+(** The whole environment of a helper command bactrian runs: {!path_var} alone,
+    so that no provider key reaches a launch environment another process of the
+    user can read (decision 0010). *)

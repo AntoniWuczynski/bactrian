@@ -74,3 +74,12 @@ let signal_name n =
 let describe_exit : Eio.Process.exit_status -> string = function
   | `Exited n -> Printf.sprintf "exit status %d" n
   | `Signaled n -> "killed by " ^ signal_name n
+
+(* The helper commands bactrian runs (bwrap --version, the end marker, log
+   show) get only PATH: after the launch environment is restored, inheriting
+   bactrian's would put the provider keys in their launch environment, where
+   another process of the user can read them (decision 0010). *)
+let path_var () =
+  "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin"
+
+let tool_env () = [| path_var () |]

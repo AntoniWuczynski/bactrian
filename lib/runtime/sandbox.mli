@@ -171,7 +171,7 @@ type session = {
 }
 
 (** What kinds of denial a run's violations can include. *)
-type coverage =
+type coverage = Sandbox_violations.coverage =
   | Seatbelt_log
       (** macOS: every kind Seatbelt logs, read from the system log, which can
           drop denials under load. *)
@@ -184,7 +184,7 @@ val coverage_name : coverage -> string
 
 val coverage_of_name : string -> coverage option
 
-type violations =
+type violations = Sandbox_violations.violations =
   | Collected of {
       items : Bactrian_core.Sandbox_log.violation list;
       coverage : coverage;
