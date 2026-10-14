@@ -184,7 +184,12 @@ let check_sandboxed w (r : Run.result) =
     r.sandbox.applied;
   if w.vm then
     match r.sandbox.backend with
-    | Some (Vm_backend _) -> ()
+    | Some (Vm_backend { image_id; _ }) ->
+        (* The image that ran, not the reference it was named by. *)
+        Alcotest.(check bool)
+          "labelled with the image's ID" true
+          (String.starts_with ~prefix:"sha256:" image_id
+          && String.length image_id = 71)
     | Some (Seatbelt_backend | Bubblewrap_backend) | None ->
         Alcotest.fail "the run was not in the virtual machine"
 
