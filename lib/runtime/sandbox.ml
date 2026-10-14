@@ -779,11 +779,10 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
   | Sandboxed { host = { engine = Seatbelt; _ }; _ }, _ :: _ ->
       Some
         (Printf.sprintf
-           "the sandboxed agent can read the command line and environment \
-            of             the MCP stdio server%s %s, as it can any process of \
-            this user that             is not an Apple binary: give them no \
-            credential you would not give             the agent, or run \
-            bactrian as a separate user or in a virtual             machine"
+           "the sandboxed agent can read the command line and environment of \
+            the MCP stdio server%s %s, as it can any process of this user that \
+            is not an Apple binary: give them no credential you would not give \
+            the agent, or use the vm backend"
            (match exposed with [ _ ] -> "" | _ -> "s")
            (String.concat ", " exposed))
   | Sandboxed { host = { engine = Seatbelt | Bubblewrap _ | Vm _; _ }; _ }, _
