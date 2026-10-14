@@ -49,6 +49,17 @@ let describe_error = function
         d
 
 let relay_path = "/bactrian/relay"
+
+(* Fixed limits, so an agent that forks without end or fills memory or /tmp
+   starves neither the virtual machine's other containers nor, on Linux, the
+   host. 1024 processes is far above what a Node or Python agent starts, 4 GiB
+   covers a large agent's heap, and swap is set equal to memory so there is
+   none. *)
+let limits = [ "--pids-limit"; "1024"; "--memory"; "4g"; "--memory-swap"; "4g" ]
+
+(* Written out, rather than left to the daemon, so they hold whatever its
+   defaults are. *)
+let tmp_mount = "/tmp:rw,noexec,nosuid,nodev,size=1g"
 let ( let* ) = Result.bind
 
 let rec all f = function
@@ -214,7 +225,8 @@ let argv i =
     ([ i.runtime; "run"; "--rm"; "-i"; "--name"; i.name ]
     @ [ "--network"; "none"; "--read-only"; "--cap-drop"; "ALL" ]
     @ [ "--security-opt"; "no-new-privileges" ]
-    @ [ "--user"; Printf.sprintf "%d:%d" i.uid i.gid; "--tmpfs"; "/tmp" ]
+    @ [ "--user"; Printf.sprintf "%d:%d" i.uid i.gid; "--tmpfs"; tmp_mount ]
+    @ limits
     @ [ "--log-driver"; "none"; "--pull"; "never"; "--workdir"; i.workdir ]
     @ [ "--env-file"; i.env_file; "--entrypoint"; relay_path ]
     @ [

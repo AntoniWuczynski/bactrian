@@ -40,7 +40,7 @@ let error i =
 (* The values of every --mount and of every --tmpfs but /tmp, in order. *)
 let mounts i =
   let rec go = function
-    | "--tmpfs" :: "/tmp" :: rest -> go rest
+    | "--tmpfs" :: "/tmp:rw,noexec,nosuid,nodev,size=1g" :: rest -> go rest
     | ("--mount" | "--tmpfs") :: m :: rest -> m :: go rest
     | _ :: rest -> go rest
     | [] -> []
@@ -79,7 +79,13 @@ let test_command_line () =
       "--user";
       "501:20";
       "--tmpfs";
-      "/tmp";
+      "/tmp:rw,noexec,nosuid,nodev,size=1g";
+      "--pids-limit";
+      "1024";
+      "--memory";
+      "4g";
+      "--memory-swap";
+      "4g";
       "--log-driver";
       "none";
       "--pull";
