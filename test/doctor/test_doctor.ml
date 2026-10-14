@@ -108,8 +108,8 @@ let test_sandbox () =
     incr calls;
     result
   in
-  let run ?(http_agent = false) mode result =
-    Doctor.sandbox_check ~mode ~http_agent ~probe:(probe result)
+  let run ?(http_agent = false) ?(relay_pending = false) mode result =
+    Doctor.sandbox_check ~mode ~http_agent ~relay_pending ~probe:(probe result)
   in
   check_status "works" Pass (run `Strict (Ok ()));
   check_status "unavailable under auto" Warn (run `Auto (Error "no bwrap"));
@@ -118,7 +118,9 @@ let test_sandbox () =
   calls := 0;
   check_status "off" Skip (run `Off (Error "no bwrap"));
   check_status "http agent" Skip (run ~http_agent:true `Strict (Error "x"));
-  Alcotest.(check int) "neither probes" 0 !calls;
+  check_status "a relay not built yet" Skip
+    (run ~relay_pending:true `Strict (Error "x"));
+  Alcotest.(check int) "none probes" 0 !calls;
   let fix = "Fix it once as root:\n  sudo sysctl -w a=0\n  sudo systemctl x" in
   let c = run `Strict (Error fix) in
   Alcotest.(check bool)
@@ -129,7 +131,7 @@ let test_sandbox () =
 
 let test_vm () =
   let host ?(macos = true) ?(runtime = Ok "docker (arm64)") ?(image = Ok ())
-      ?(cached = true) () : Doctor.vm_host =
+      ?(cached = Ok true) () : Doctor.vm_host =
     {
       macos;
       detect = (fun () -> runtime);
@@ -142,10 +144,16 @@ let test_vm () =
   in
   let run ?(host = host ()) t = Doctor.vm_check ~host t in
   check_status "works" Pass (run (Some (vm_target ~image:"i" ())));
-  let c = run ~host:(host ~cached:false ()) (Some (vm_target ~image:"i" ())) in
+  let c =
+    run ~host:(host ~cached:(Ok false) ()) (Some (vm_target ~image:"i" ()))
+  in
   Alcotest.(check bool)
     "the relay is built on first use" true
     (contains ~sub:"first use" c.message);
+  check_status "an untrusted relay cache under strict" Fail
+    (run
+       ~host:(host ~cached:(Error "writable by others") ())
+       (Some (vm_target ~image:"i" ())));
   check_status "missing image under strict" Fail
     (run
        ~host:(host ~image:(Error "absent") ())

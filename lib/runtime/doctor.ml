@@ -170,12 +170,17 @@ let loopback_check () =
 
 (* The sandbox *)
 
-let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~probe =
+let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~relay_pending ~probe =
   if http_agent then
     check "sandbox" Skip "an HTTP-mode agent is not started by bactrian"
   else
     match mode with
     | `Off -> check "sandbox" Skip "sandbox: off"
+    | (`Auto | `Strict) when relay_pending ->
+        check "sandbox" Skip
+          "the agent runs in the virtual machine, whose relay is not built \
+           yet: the first run builds it (it needs the network once) and probes \
+           the sandbox then"
     | (`Auto | `Strict) as mode -> (
         match probe () with
         | Ok () -> check "sandbox" Pass "the sandbox works on this host"
@@ -227,7 +232,7 @@ type vm_host = {
   detect : unit -> (string, string) result;
       (** The runtime's name and architecture, or why it does not work. *)
   image_present : string -> (unit, string) result;
-  relay_cached : unit -> bool;
+  relay_cached : unit -> (bool, string) result;
 }
 
 let no_runtime_fix =
@@ -272,28 +277,32 @@ let vm_check ~host target =
                why no_runtime_fix)
       | Error _ -> check "vm" Skip "no container runtime (bubblewrap is used)"
       | Ok runtime -> (
-          let relay =
-            if host.relay_cached () then "the relay is built"
-            else "the relay is built on first use (it needs the network once)"
-          in
-          match image with
-          | None when host.macos && needed -> failed "no sandbox.image"
-          | None when host.macos && Option.is_some target ->
-              check "vm" Warn
-                (Printf.sprintf
-                   "%s works, but sandbox.image is not set, so the agent runs \
-                    under Seatbelt and can read the launch environment of this \
-                    user's other processes"
-                   runtime)
-          | None ->
-              check "vm" Pass (Printf.sprintf "%s works, %s" runtime relay)
-          | Some image -> (
-              match host.image_present image with
-              | Error why -> failed why
-              | Ok () ->
-                  check "vm" Pass
-                    (Printf.sprintf "%s works, %s is present, %s" runtime image
-                       relay))))
+          match host.relay_cached () with
+          | Error why -> failed why
+          | Ok cached -> (
+              let relay =
+                if cached then "the relay is built"
+                else
+                  "the relay is built on first use (it needs the network once)"
+              in
+              match image with
+              | None when host.macos && needed -> failed "no sandbox.image"
+              | None when host.macos && Option.is_some target ->
+                  check "vm" Warn
+                    (Printf.sprintf
+                       "%s works, but sandbox.image is not set, so the agent \
+                        runs under Seatbelt and can read the launch \
+                        environment of this user's other processes"
+                       runtime)
+              | None ->
+                  check "vm" Pass (Printf.sprintf "%s works, %s" runtime relay)
+              | Some image -> (
+                  match host.image_present image with
+                  | Error why -> failed why
+                  | Ok () ->
+                      check "vm" Pass
+                        (Printf.sprintf "%s works, %s is present, %s" runtime
+                           image relay)))))
 
 let vm_host ~env : vm_host =
   let process_mgr = Eio.Stdenv.process_mgr env
@@ -312,14 +321,7 @@ let vm_host ~env : vm_host =
         Result.bind (Lazy.force runtime) (fun r ->
             Result.map ignore (Vm_runtime.image_id ~process_mgr ~clock r image)));
     relay_cached =
-      (fun () ->
-        match Lazy.force runtime with
-        | Ok r ->
-            Proc_util.regular_file
-              (Filename.concat
-                 (Vm_runtime.relay_cache_dir ())
-                 (Vm_runtime.relay_name r))
-        | Error _ -> false);
+      (fun () -> Result.bind (Lazy.force runtime) Vm_runtime.relay_cached);
   }
 
 (* The clock *)
@@ -428,12 +430,22 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
     | Some { agent = Command _; _ } | None -> false
   in
   let mode = match target with Some t -> t.sandbox | None -> `Auto in
+  let macos = Sys.file_exists "/usr/bin/sandbox-exec" and vm = vm_host ~env in
+  (* The probe would build the relay, which is more than a check. *)
+  let relay_pending =
+    match target with
+    | Some t when uses_vm ~macos t -> (
+        match vm.relay_cached () with
+        | Ok false -> true
+        | Ok true | Error _ -> false)
+    | Some _ | None -> false
+  in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
   @ (match target with Some t -> [ caps_check t ] | None -> [])
   @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with
-    | Some t when uses_vm ~macos:(Sys.file_exists "/usr/bin/sandbox-exec") t ->
+    | Some t when uses_vm ~macos t ->
         [
           check "agent" Skip
             (Printf.sprintf
@@ -443,9 +455,9 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
     | Some t -> [ agent_check ~path ~cwd t.agent ]
     | None -> [])
   @ [
-      sandbox_check ~mode ~http_agent
+      sandbox_check ~mode ~http_agent ~relay_pending
         ~probe:(sandbox_probe ~env ~bactrian_exe target);
-      vm_check ~host:(vm_host ~env) target;
+      vm_check ~host:vm target;
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;

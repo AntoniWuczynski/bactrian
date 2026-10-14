@@ -69,18 +69,23 @@ val loopback_check : unit -> check
 val sandbox_check :
   mode:Sandbox.mode ->
   http_agent:bool ->
+  relay_pending:bool ->
   probe:(unit -> (unit, string) result) ->
   check
 (** [probe] runs only when the sandbox would apply. An unavailable sandbox is
     [Fail] under [`Strict] and [Warn] under [`Auto]. [`Off] and an HTTP agent
-    are [Skip]. *)
+    are [Skip], and so is an agent in the virtual machine whose relay is not
+    built yet ([relay_pending]): the probe would build it, which [doctor] does
+    not do. *)
 
 type vm_host = {
   macos : bool;
   detect : unit -> (string, string) result;
       (** The runtime's name and architecture, or why it does not work. *)
   image_present : string -> (unit, string) result;
-  relay_cached : unit -> bool;
+  relay_cached : unit -> (bool, string) result;
+      (** Whether the relay is cached ({!Vm_runtime.relay_cached}), or why the
+          cache cannot be used. *)
 }
 (** What the [vm] check asks of this host. *)
 
@@ -89,13 +94,15 @@ val vm_host : env:Eio_unix.Stdenv.base -> vm_host
 
 val vm_check : host:vm_host -> target option -> check
 (** The virtual machine sandbox: the runtime works ([info]), the experiment's
-    image is present locally (never pulled), and whether the relay is built yet.
-    [Fail] under [strict] (and [Warn] under [auto]) when the experiment's agent
-    would run in the virtual machine and something is missing. On macOS without
-    one it is [Warn], because the agent then runs under Seatbelt, which leaves
-    the launch environments of the user's other processes readable; the message
-    names OrbStack and Docker Desktop. [Skip] when the experiment's agent is not
-    sandboxed, or the experiment names [seatbelt] or [bubblewrap]. *)
+    image is present locally (never pulled), and whether the relay is built yet
+    (it is not built here). A relay cache that cannot be trusted counts as
+    missing. [Fail] under [strict] (and [Warn] under [auto]) when the
+    experiment's agent would run in the virtual machine and something is
+    missing. On macOS without one it is [Warn], because the agent then runs
+    under Seatbelt, which leaves the launch environments of the user's other
+    processes readable; the message names OrbStack and Docker Desktop. [Skip]
+    when the experiment's agent is not sandboxed, or the experiment names
+    [seatbelt] or [bubblewrap]. *)
 
 val clock_check :
   linux:bool ->
