@@ -21,6 +21,9 @@ let checker_sandbox ~on_progress ~bactrian_exe ~env ~mode scenarios =
             ~warn:(fun w -> on_progress (Progress.Warning w))
             {
               mode;
+              backend = (Sandbox.host_backend () :> Sandbox.backend);
+              image = None;
+              runtime = None;
               allow_write = [];
               deny_read = [];
               bactrian_exe;

@@ -32,6 +32,9 @@ let strict ?(deny_read = []) ctx =
       ~warn:(fun w -> Alcotest.failf "unexpected warning: %s" w)
       {
         mode = `Strict;
+        backend = (Sandbox.host_backend () :> Sandbox.backend);
+        image = None;
+        runtime = None;
         allow_write = [];
         deny_read;
         bactrian_exe = bactrian_bin;
@@ -49,7 +52,9 @@ let test_record_and_replay =
   let recorded = ok (execute ctx { (config ()) with sandbox }) in
   Alcotest.(check string) "record outcome" "passed" (outcome_name recorded);
   Alcotest.(check string)
-    "labelled" {|{"mode":"strict","applied":true}|}
+    "labelled"
+    (Printf.sprintf {|{"mode":"strict","applied":true,"backend":"%s"}|}
+       host_backend)
     (Yojson.Safe.to_string (Yojson.Safe.Util.member "sandbox" (meta recorded)));
   let env = read (file recorded "state/env.json") in
   Alcotest.(check bool)
@@ -460,10 +465,12 @@ let test_interrupt =
       [|
         "sh";
         "-c";
-        Printf.sprintf "cd %s && exec %s replay %s --sandbox strict -- %s"
+        Printf.sprintf
+          "cd %s && exec %s replay %s --sandbox strict --sandbox-backend %s -- \
+           %s"
           (Filename.quote cwd)
           (Filename.quote bactrian_bin)
-          recorded.run_id agent;
+          recorded.run_id host_backend agent;
       |]
       devnull devnull devnull
   in
@@ -519,6 +526,9 @@ let preflight ctx mode ~warn =
   Sandbox.preflight ~env:ctx.env ~warn
     {
       mode;
+      backend = (Sandbox.host_backend () :> Sandbox.backend);
+      image = None;
+      runtime = None;
       allow_write = [];
       deny_read = [];
       bactrian_exe = "/usr/bin/false";

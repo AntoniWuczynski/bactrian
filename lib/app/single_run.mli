@@ -3,6 +3,13 @@
 
 open Bactrian_runtime
 
+type sandbox = {
+  mode : Sandbox.mode;
+  backend : Sandbox.backend;
+  image : string option;  (** Required for [`Vm]. *)
+}
+(** The sandbox of a command-line run (design §5.3). *)
+
 type common = {
   agent : string list;  (** The agent's command and arguments. *)
   cwd : string;  (** Working directory of the agent. *)
@@ -16,7 +23,7 @@ type common = {
       (** Variables passed from bactrian's environment to the agent. *)
   turn_timeout : float;  (** Seconds. *)
   total_timeout : float;  (** Seconds. *)
-  sandbox : Sandbox.mode;
+  sandbox : sandbox;
 }
 (** The arguments [record] and [replay] share. *)
 
@@ -24,7 +31,7 @@ val defaults : common
 (** What a run gets for an argument it is not given: no agent, the current
     directory, scenario [adhoc], variant [default], [""] for the time, [UTC], no
     passthrough variable, timeouts of 120 seconds per turn and 600 in total, and
-    sandbox mode [auto]. *)
+    sandbox mode and backend [auto] with no image. *)
 
 val positive_timeouts : common -> (unit, string) result
 (** [Error] unless both timeouts are finite and positive. *)
@@ -45,17 +52,18 @@ val execute :
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
   live:bool ->
-  sandbox:Sandbox.mode ->
+  sandbox:sandbox ->
   (Store.t -> Sandbox.t -> (Run.config, string) result) ->
   (Run.result, Command_error.t) result
 (** Reads the spend caps from [BACTRIAN_CAP_<PROVIDER>] and the upstreams from
     [BACTRIAN_UPSTREAM_<PROVIDER>] ({!Upstream_env}; an invalid one is [Usage]),
     and when [live] checks that a provider has a cap above 0, its key and, if
     its upstream is an [https] URL, TLS support, then opens the ledger and the
-    store under [./.bactrian], preflights the sandbox in mode [sandbox], starts
-    the model proxy and runs the configuration the function builds from the
-    store and the preflight's decision. [bactrian_exe] is the executable the
-    sandbox re-runs as its probe.
+    store under [./.bactrian], preflights the [sandbox] (a backend this host
+    lacks, or [vm] without an image, is [Usage]), starts the model proxy and
+    runs the configuration the function builds from the store and the
+    preflight's decision. [bactrian_exe] is the executable the sandbox re-runs
+    as its probe.
 
     Seeds the random generator, and must be called inside [Eio_main.run]. A
     command that starts agents needs a launch environment free of secrets, so

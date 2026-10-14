@@ -3,6 +3,12 @@ module P = Model_proxy
 
 let ( let* ) = Result.bind
 
+type sandbox = {
+  mode : Sandbox.mode;
+  backend : Sandbox.backend;
+  image : string option;
+}
+
 type common = {
   agent : string list;
   cwd : string;
@@ -13,7 +19,7 @@ type common = {
   env_passthrough : string list;
   turn_timeout : float;
   total_timeout : float;
-  sandbox : Sandbox.mode;
+  sandbox : sandbox;
 }
 
 let defaults =
@@ -27,7 +33,7 @@ let defaults =
     env_passthrough = [];
     turn_timeout = 120.;
     total_timeout = 600.;
-    sandbox = `Auto;
+    sandbox = { mode = `Auto; backend = `Auto; image = None };
   }
 
 let positive name v =
@@ -98,11 +104,20 @@ let live_problem ~upstream caps =
          | Some _ -> true)
        ~upstream ~tls_available:Features.tls_available)
 
+let sandbox_problem (s : sandbox) =
+  match (Sandbox.backend_available s.backend, s.backend, s.image) with
+  | Error m, _, _ -> Some m
+  | Ok (), `Vm, None -> Some "the sandbox backend vm needs an image"
+  | Ok (), (`Vm | `Auto | `Seatbelt | `Bubblewrap), _ -> None
+
 let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   let warn w = on_progress (Progress.Warning w) in
-  match (read_caps (), Upstream_env.from_environment ()) with
-  | Error m, _ | _, Error m -> Error (Command_error.Usage m)
-  | Ok caps, Ok upstream -> (
+  match
+    (read_caps (), Upstream_env.from_environment (), sandbox_problem sandbox)
+  with
+  | Error m, _, _ | _, Error m, _ | _, _, Some m ->
+      Error (Command_error.Usage m)
+  | Ok caps, Ok upstream, None -> (
       match if live then live_problem ~upstream caps else None with
       | Some m -> Error (Command_error.Environment m)
       | None -> (
@@ -123,7 +138,10 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                 let* sandbox =
                   Sandbox.preflight ~env ~warn
                     {
-                      mode = sandbox;
+                      mode = sandbox.mode;
+                      backend = sandbox.backend;
+                      image = sandbox.image;
+                      runtime = None;
                       allow_write = [];
                       deny_read = [];
                       bactrian_exe;

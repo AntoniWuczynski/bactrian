@@ -146,6 +146,11 @@ let test_decide () =
   check "go" "contract-only go-binary" (decide "go");
   check "unreadable" "contract-only unreadable-executable" (decide "absent");
   check "not Linux" "contract-only macos" (decide ~linux:false "dyn");
+  check "the virtual machine, first of all" "contract-only vm"
+    (Agent_clock.decide ~vm:true ~candidates:[ lib ] ~linux:false ~faketime:true
+       ~library_override:None
+       ~env:[ ("PATH", dir) ]
+       ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
   check "faketime off" "contract-only faketime-off"
     (decide ~faketime:false "dyn");
   check "no library" "contract-only library-not-found"
@@ -203,6 +208,7 @@ let test_labels () =
       "go-binary";
       "unreadable-executable";
       "http-mode";
+      "vm";
     ]
     (List.map L.reason_name
        [
@@ -216,6 +222,7 @@ let test_labels () =
          Go_binary;
          Unreadable_executable;
          Http_mode;
+         Vm;
        ]);
   Alcotest.(check bool)
     "the trace records enforced" true

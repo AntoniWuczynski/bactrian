@@ -1,7 +1,7 @@
 The doctor runs in a controlled environment: only PATH, and key variables set
-to sentinels whose text must never be printed. The sandbox and clock lines
-depend on the host (macOS or Linux), so they are filtered out here, and the
-unit tests cover them with the host stated.
+to sentinels whose text must never be printed. The sandbox, vm and clock lines
+depend on the host (macOS or Linux, and whether a container runtime runs), so
+they are filtered out here, and the unit tests cover them with the host stated.
 
   $ run() { env -i PATH="$PATH" "$@"; }
 
@@ -10,7 +10,7 @@ warning. Only the variable name is printed.
 
   $ run OPENAI_API_KEY=sk-SENTINEL-one ANTHROPIC_API_KEY=sk-SENTINEL-two bactrian doctor > out.txt; echo "exit $?"
   exit 0
-  $ grep -v -e ' sandbox:' -e ' clock:' out.txt
+  $ grep -v -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt
   ok    key-openai: OPENAI_API_KEY is set
   ok    key-anthropic: ANTHROPIC_API_KEY is set
   warn  key-gemini: GEMINI_API_KEY is not set
@@ -19,8 +19,8 @@ warning. Only the variable name is printed.
   skip  tls: HTTPS support is not built in
   skip  ca: egress interception is not built yet
   skip  node: egress interception is not built yet
-  $ grep -c -e ' sandbox:' -e ' clock:' out.txt
-  2
+  $ grep -c -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt
+  3
   $ grep -c SENTINEL out.txt
   0
   [1]
@@ -32,7 +32,7 @@ The same as JSON, with the same shape every time.
   $ grep -c SENTINEL out.json
   0
   [1]
-  $ sed -e 's/{"name"/\n&/g' out.json | grep -v -e '"name":"sandbox"' -e '"name":"clock"'
+  $ sed -e 's/{"name"/\n&/g' out.json | grep -v -e '"name":"sandbox"' -e '"name":"vm"' -e '"name":"clock"'
   {"checks":[
   {"name":"key-openai","status":"ok","message":"OPENAI_API_KEY is set"},
   {"name":"key-anthropic","status":"warn","message":"ANTHROPIC_API_KEY is not set"},
@@ -72,6 +72,7 @@ experiment, so the caps check fails.
   ok    loopback: a port on 127.0.0.1 can be bound
   ok    agent: sh resolves to FILE
   skip  sandbox: sandbox: off
+  skip  vm: the agent is not sandboxed
   skip  tls: HTTPS support is not built in
   skip  ca: egress interception is not built yet
   skip  node: egress interception is not built yet

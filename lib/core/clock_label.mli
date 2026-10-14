@@ -22,13 +22,16 @@ type reason =
   | Http_mode
       (** An [http] agent is not started by bactrian, so there is no process to
           inject [libfaketime] into and no executable to probe. *)
+  | Vm
+      (** The agent runs in a virtual machine sandbox, whose image has no
+          [libfaketime] that bactrian knows of. *)
 
 type t = Enforced | Contract_only of reason
 
 val reason_name : reason -> string
 (** [macos], [faketime-off], [library-not-found], [library-hidden],
     [setuid-sandbox], [invalid-sim-now], [static-binary], [go-binary],
-    [unreadable-executable] or [http-mode]. *)
+    [unreadable-executable], [http-mode] or [vm]. *)
 
 val of_kind : Elf_probe.kind -> t
 (** The label of a run that injected the library, given the kind of the agent's

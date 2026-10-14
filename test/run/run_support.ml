@@ -153,6 +153,13 @@ let record ctx = ok (execute ctx (config ()))
 
 let bactrian_bin = Filename.concat (Sys.getcwd ()) (Sys.getenv "BACTRIAN_BIN")
 
+(* The host's own sandbox, named, so a run on macOS is not sent to the virtual
+   machine or warned about it. *)
+let host_backend =
+  match Bactrian_runtime.Sandbox.host_backend () with
+  | `Seatbelt -> "seatbelt"
+  | `Bubblewrap -> "bubblewrap"
+
 let cli ctx args =
   let out = Filename.concat (Sys.getcwd ()) "cli-out.txt" in
   let cmd =

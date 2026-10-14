@@ -207,6 +207,9 @@ let sandbox ~env ~dir =
       ~warn:(fun w -> Alcotest.failf "warning: %s" w)
       {
         mode = `Strict;
+        backend = (Sandbox.host_backend () :> Sandbox.backend);
+        image = None;
+        runtime = None;
         allow_write = [];
         deny_read = [];
         bactrian_exe = executable "BACTRIAN_EXE";
@@ -337,6 +340,10 @@ let test_bactrian () =
          recorded.run_id;
          "--sandbox";
          "strict";
+         "--sandbox-backend";
+         (match Sandbox.host_backend () with
+         | `Seatbelt -> "seatbelt"
+         | `Bubblewrap -> "bubblewrap");
          "--env";
          "GO_FILE";
          "--";

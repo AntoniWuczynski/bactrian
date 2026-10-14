@@ -289,8 +289,8 @@ let test_cli_replay =
   Out_channel.with_open_bin script (fun oc -> output_string oc python_agent);
   Fun.protect ~finally:(fun () -> Sys.remove script) @@ fun () ->
   let args extra =
-    Printf.sprintf "replay %s --json -- python3 -I %s%s" recorded.run_id
-      (Filename.quote script) extra
+    Printf.sprintf "replay %s --sandbox-backend %s --json -- python3 -I %s%s"
+      recorded.run_id host_backend (Filename.quote script) extra
   in
   let code, text = cli ctx (args "") in
   if code <> 0 then Alcotest.failf "exit %d: %s" code text;

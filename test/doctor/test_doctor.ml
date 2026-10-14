@@ -34,9 +34,9 @@ let http url : Experiment.agent =
   Http
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
-let target ?(sandbox = `Off) ?(faketime = true) ?(funded = []) ~dir agent :
-    Doctor.target =
-  { agent; dir; sandbox; faketime; funded }
+let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
+    ?(funded = []) ~dir agent : Doctor.target =
+  { agent; dir; sandbox; backend; image; runtime = None; faketime; funded }
 
 (* Keys *)
 
@@ -124,6 +124,52 @@ let test_sandbox () =
   Alcotest.(check bool)
     "the cause and its fix commands are kept" true
     (contains ~sub:"sudo sysctl -w a=0" c.message)
+
+(* The virtual machine *)
+
+let test_vm () =
+  let host ?(macos = true) ?(runtime = Ok "docker (arm64)") ?(image = Ok ())
+      ?(cached = true) () : Doctor.vm_host =
+    {
+      macos;
+      detect = (fun () -> runtime);
+      image_present = (fun (_ : string) -> image);
+      relay_cached = (fun () -> cached);
+    }
+  in
+  let vm_target ?(sandbox = `Strict) ?(backend = `Auto) ?image () =
+    target ~sandbox ~backend ?image ~dir:"." (command ())
+  in
+  let run ?(host = host ()) t = Doctor.vm_check ~host t in
+  check_status "works" Pass (run (Some (vm_target ~image:"i" ())));
+  let c = run ~host:(host ~cached:false ()) (Some (vm_target ~image:"i" ())) in
+  Alcotest.(check bool)
+    "the relay is built on first use" true
+    (contains ~sub:"first use" c.message);
+  check_status "missing image under strict" Fail
+    (run
+       ~host:(host ~image:(Error "absent") ())
+       (Some (vm_target ~image:"i" ())));
+  check_status "missing image under auto" Warn
+    (run
+       ~host:(host ~image:(Error "absent") ())
+       (Some (vm_target ~sandbox:`Auto ~image:"i" ())));
+  check_status "no runtime for backend vm" Fail
+    (run
+       ~host:(host ~runtime:(Error "no docker") ())
+       (Some (vm_target ~backend:`Vm ~image:"i" ())));
+  let c = run ~host:(host ~runtime:(Error "docker is not on PATH") ()) None in
+  check_status "no runtime on macOS" Warn c;
+  Alcotest.(check bool)
+    "names the runtimes" true
+    (contains ~sub:"OrbStack or Docker Desktop" c.message);
+  check_status "no runtime on Linux" Skip
+    (run ~host:(host ~macos:false ~runtime:(Error "no docker") ()) None);
+  check_status "no image on macOS: Seatbelt" Warn
+    (run (Some (vm_target ~sandbox:`Auto ())));
+  check_status "off" Skip (run (Some (vm_target ~sandbox:`Off ())));
+  check_status "the host's own sandbox named" Skip
+    (run (Some (vm_target ~backend:`Seatbelt ())))
 
 (* The clock *)
 
@@ -302,6 +348,7 @@ let () =
             test_keys_with_experiment;
           Alcotest.test_case "agent" `Quick test_agent;
           Alcotest.test_case "sandbox" `Quick test_sandbox;
+          Alcotest.test_case "virtual machine" `Quick test_vm;
           Alcotest.test_case "clock" `Quick test_clock;
           Alcotest.test_case "tls and egress" `Quick test_tls;
           Alcotest.test_case "upstream overrides" `Quick test_upstream_checks;

@@ -237,6 +237,8 @@ type common_args = {
   turn_timeout : float; [@default Single_run.defaults.turn_timeout]
   total_timeout : float; [@default Single_run.defaults.total_timeout]
   sandbox : string option; [@default None]
+  sandbox_backend : string option; [@default None]
+  sandbox_image : string option; [@default None]
 }
 [@@deriving of_yojson { strict = false }]
 
@@ -262,10 +264,24 @@ let common_properties =
     prop "total_timeout" Number
       "Longest the whole run may take, in seconds (default 600).";
     sandbox_property "the agent";
+    prop "sandbox_backend"
+      (Enum (names Sandbox.backends))
+      "Where the sandboxed agent runs: auto (default: a virtual machine on \
+       macOS when sandbox_image is set, otherwise the host's own sandbox), vm \
+       (a Linux container with no network, through Docker), seatbelt (macOS) \
+       or bubblewrap (Linux). On macOS, strict with auto needs sandbox_image \
+       or seatbelt, under which the agent can read the launch environment of \
+       the user's other processes.";
+    prop "sandbox_image" String
+      "The container image the vm backend runs the agent in, holding its \
+       runtime. Pin it by digest. It must be present locally.";
   ]
+
+let sandbox_backend = enum ~field:"sandbox_backend" Sandbox.backends
 
 let common context (c : common_args) =
   let* cwd = Confine.path context.root ~field:"cwd" c.cwd in
+  let* backend = sandbox_backend c.sandbox_backend in
   let* sandbox = sandbox_mode c.sandbox in
   let* sandbox = Policy.sandbox context.policy sandbox in
   let* () = Policy.env context.policy c.env in
@@ -280,7 +296,13 @@ let common context (c : common_args) =
       env_passthrough = c.env;
       turn_timeout = c.turn_timeout;
       total_timeout = c.total_timeout;
-      sandbox = Option.value sandbox ~default:Single_run.defaults.sandbox;
+      sandbox =
+        {
+          mode = Option.value sandbox ~default:Single_run.defaults.sandbox.mode;
+          backend =
+            Option.value backend ~default:Single_run.defaults.sandbox.backend;
+          image = c.sandbox_image;
+        };
     }
 
 let with_common own json =
@@ -669,7 +691,9 @@ let check =
       in
       let* sandbox = usage (sandbox_mode a.sandbox) in
       let* sandbox = usage (Policy.sandbox context.policy sandbox) in
-      let sandbox = Option.value sandbox ~default:Single_run.defaults.sandbox in
+      let sandbox =
+        Option.value sandbox ~default:Single_run.defaults.sandbox.mode
+      in
       let* reports =
         Check_command.run ~files:(files context)
           ~vet:(Policy.scenario context.policy ~sandbox)

@@ -71,7 +71,7 @@ caller's own caps and keys must not leak into these checks.
 
 Replaying a run that does not exist is a configuration error.
 
-  $ bactrian replay no-such-run -- true
+  $ bactrian replay no-such-run --sandbox off -- true
   bactrian: no cassette for run "no-such-run"
   [64]
 
@@ -149,11 +149,11 @@ one without the field replays as before (here it only lacks a cassette).
 
   $ mkdir -p .bactrian/runs/r1
   $ echo '{"mcp": 3}' > .bactrian/runs/r1/meta.json
-  $ bactrian replay r1 -- true
+  $ bactrian replay r1 --sandbox off -- true
   bactrian: recording r1: meta.json mcp: not a list
   [64]
   $ echo '{"outcome": "passed"}' > .bactrian/runs/r1/meta.json
-  $ bactrian replay r1 -- true
+  $ bactrian replay r1 --sandbox off -- true
   bactrian: no cassette for run "r1"
   [64]
 

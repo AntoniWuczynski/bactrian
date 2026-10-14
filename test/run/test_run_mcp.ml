@@ -155,8 +155,8 @@ let test_cli_replay_serves_recorded_servers =
   Fun.protect ~finally:(fun () -> Sys.remove script) @@ fun () ->
   let code, text =
     cli ctx
-      (Printf.sprintf "replay %s --json -- python3 -I %s" r.run_id
-         (Filename.quote script))
+      (Printf.sprintf "replay %s --sandbox-backend %s --json -- python3 -I %s"
+         r.run_id host_backend (Filename.quote script))
   in
   if code <> 0 then Alcotest.failf "exit %d: %s" code text;
   let json = Yojson.Safe.from_string text in
@@ -188,7 +188,11 @@ let test_cli_replay_of_a_bad_field =
   let r = recorded_with ctx servers in
   rewrite_meta r (fun fields ->
       ("mcp", `Int 3) :: List.remove_assoc "mcp" fields);
-  let code, text = cli ctx (Printf.sprintf "replay %s -- true" r.run_id) in
+  let code, text =
+    cli ctx
+      (Printf.sprintf "replay %s --sandbox-backend %s -- true" r.run_id
+         host_backend)
+  in
   Alcotest.(check int) "usage error" 64 code;
   Alcotest.(check string)
     "message"

@@ -10,15 +10,50 @@ let mode_name : mode -> string = function
   | `Strict -> "strict"
   | `Off -> "off"
 
-type label = { mode : mode; applied : bool; reason : string option }
+type backend = Experiment.sandbox_backend
+
+let backends =
+  [
+    ("auto", `Auto);
+    ("vm", `Vm);
+    ("seatbelt", `Seatbelt);
+    ("bubblewrap", `Bubblewrap);
+  ]
+
+let host_backend () : [ `Seatbelt | `Bubblewrap ] =
+  if Sys.file_exists "/usr/bin/sandbox-exec" then `Seatbelt else `Bubblewrap
+
+type applied_backend =
+  | Seatbelt_backend
+  | Bubblewrap_backend
+  | Vm_backend of { runtime : string; image : string }
+
+type label = {
+  mode : mode;
+  applied : bool;
+  reason : string option;
+  backend : applied_backend option;
+}
 
 let label_json (l : label) =
   `Assoc
     ([ ("mode", `String (mode_name l.mode)); ("applied", `Bool l.applied) ]
-    @ match l.reason with Some r -> [ ("reason", `String r) ] | None -> [])
+    @ (match l.reason with Some r -> [ ("reason", `String r) ] | None -> [])
+    @
+    match l.backend with
+    | None -> []
+    | Some Seatbelt_backend -> [ ("backend", `String "seatbelt") ]
+    | Some Bubblewrap_backend -> [ ("backend", `String "bubblewrap") ]
+    | Some (Vm_backend { runtime; image }) ->
+        [
+          ("backend", `String "vm");
+          ( "vm",
+            `Assoc [ ("runtime", `String runtime); ("image", `String image) ] );
+        ])
 
-(* How the sandbox is made here: bubblewrap carries the path it was found at. *)
-type engine = Seatbelt | Bubblewrap of string
+(* How the sandbox is made here: bubblewrap carries the path it was found at.
+   The virtual machine runs the agent only: checkers use the host's own. *)
+type engine = Seatbelt | Bubblewrap of string | Vm of Sandbox_vm.t
 
 type host = {
   engine : engine;
@@ -32,18 +67,43 @@ type host = {
 
 type t = Sandboxed of { mode : mode; host : host } | Unsandboxed of label
 
-let off =
-  Unsandboxed { mode = `Off; applied = false; reason = Some "sandbox: off" }
+let unsandboxed mode reason =
+  Unsandboxed { mode; applied = false; reason = Some reason; backend = None }
 
-let http_mode mode =
-  Unsandboxed { mode; applied = false; reason = Some "http mode" }
+let off = unsandboxed `Off "sandbox: off"
+let http_mode mode = unsandboxed mode "http mode"
 
 let label = function
-  | Sandboxed { mode; host = _ } -> { mode; applied = true; reason = None }
+  | Sandboxed { mode; host } ->
+      {
+        mode;
+        applied = true;
+        reason = None;
+        backend =
+          Some
+            (match host.engine with
+            | Seatbelt -> Seatbelt_backend
+            | Bubblewrap _ -> Bubblewrap_backend
+            | Vm vm ->
+                Vm_backend
+                  {
+                    runtime = Sandbox_vm.runtime_name vm;
+                    image = Sandbox_vm.image vm;
+                  });
+      }
   | Unsandboxed l -> l
+
+let vm = function
+  | Sandboxed { host = { engine = Vm _; _ }; _ } -> true
+  | Sandboxed { host = { engine = Seatbelt | Bubblewrap _; _ }; _ }
+  | Unsandboxed _ ->
+      false
 
 type settings = {
   mode : mode;
+  backend : backend;
+  image : string option;
+  runtime : Experiment.sandbox_runtime option;
   allow_write : string list;
   deny_read : string list;
   bactrian_exe : string;
@@ -103,7 +163,9 @@ let socket_dir ~sw =
 
 (* The command *)
 
-let platform = function Seatbelt -> Policy.Macos | Bubblewrap _ -> Linux
+let platform = function
+  | Seatbelt -> Policy.Macos
+  | Bubblewrap _ | Vm _ -> Linux
 
 let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
     Policy.input =
@@ -133,7 +195,7 @@ let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
   | Ok (Bwrap argv) -> (
       match (host.engine, argv) with
       | Bubblewrap path, _ :: args -> Ok (path :: args)
-      | Bubblewrap _, [] | Seatbelt, ([] | _ :: _) -> Ok argv)
+      | Bubblewrap _, [] | (Seatbelt | Vm _), ([] | _ :: _) -> Ok argv)
 
 (* The helper commands bactrian runs (bwrap --version, the end marker, log
    show) get only PATH: after the launch environment is restored, inheriting
@@ -295,7 +357,7 @@ let probe ~env (host : host) =
   in
   let* socket =
     match host.engine with
-    | Seatbelt -> Ok None
+    | Seatbelt | Vm _ -> Ok None
     | Bubblewrap _ ->
         let* dir = socket_dir ~sw in
         let path = Filename.concat dir "probe.sock" in
@@ -345,63 +407,172 @@ let probe ~env (host : host) =
       Error
         ("the sandbox does not enforce its policy: " ^ String.concat "; " wrong)
 
-let check ~env settings =
-  let* engine =
-    if Sys.file_exists "/usr/bin/sandbox-exec" then Ok Seatbelt
-    else if Sys.file_exists "/proc/self/ns/net" then bubblewrap ~env
-    else
-      Error
-        "this operating system has no supported sandbox (macOS sandbox-exec or \
-         Linux bubblewrap)"
-  in
+let host_engine ~env : [ `Seatbelt | `Bubblewrap ] -> (engine, string) result =
+  function
+  | `Seatbelt ->
+      if Sys.file_exists "/usr/bin/sandbox-exec" then Ok Seatbelt
+      else Error "backend seatbelt needs macOS (/usr/bin/sandbox-exec)"
+  | `Bubblewrap ->
+      if Sys.file_exists "/proc/self/ns/net" then bubblewrap ~env
+      else Error "backend bubblewrap needs Linux"
+
+let make_host ~env settings engine =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700
     Eio.Path.(Eio.Stdenv.fs env / Proc_util.absolute settings.bactrian_dir);
   let bactrian_dir = resolved settings.bactrian_dir in
-  let host =
-    {
-      engine;
-      bactrian_exe = resolved settings.bactrian_exe;
-      home = resolved (home ());
-      project_root = Filename.dirname bactrian_dir;
-      bactrian_dir;
-      allow_write = List.map resolved settings.allow_write;
-      deny_read = List.map resolved settings.deny_read;
-    }
-  in
+  {
+    engine;
+    bactrian_exe = resolved settings.bactrian_exe;
+    home = resolved (home ());
+    project_root = Filename.dirname bactrian_dir;
+    bactrian_dir;
+    allow_write = List.map resolved settings.allow_write;
+    deny_read = List.map resolved settings.deny_read;
+  }
+
+let check_host ~env settings backend =
+  let* engine = host_engine ~env backend in
+  let host = make_host ~env settings engine in
   match probe ~env host with
   | Ok () -> Ok host
   | Error cause -> (
       match engine with
       | Bubblewrap path when apparmor_restricted () ->
           Error (cause ^ ". " ^ apparmor_fix path)
-      | Bubblewrap _ | Seatbelt -> Error cause)
+      | Bubblewrap _ | Seatbelt | Vm _ -> Error cause)
+
+(* The deny-list with what is at each path, as the virtual machine masks it. *)
+let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
+  let input =
+    input_of host ~state_dir:None ~temp_dir:host.bactrian_dir ~listeners:[]
+      ~tag:"" ~preload:None [ "agent" ]
+  in
+  {
+    project_root = host.project_root;
+    bactrian_dir = host.bactrian_dir;
+    allow_write = host.allow_write;
+    deny =
+      List.map
+        (fun p -> (p, kind p))
+        (Policy.deny_list ~resolve:resolved
+           { input with deny_read = input.deny_read @ extra });
+  }
+
+let check_vm ~env settings =
+  let* image =
+    Option.to_result settings.image
+      ~none:
+        "sandbox.image is not set (the image the agent runs in, holding its \
+         runtime, such as node:24-alpine@sha256:...)"
+  in
+  let* vm = Sandbox_vm.prepare ~env settings.runtime ~image in
+  let host = make_host ~env settings (Vm vm) in
+  let dir =
+    Filename.concat host.bactrian_dir
+      ("sandbox-probe-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6))
+  in
+  let denied_dir = Filename.concat dir "denied" in
+  let denied = Filename.concat denied_dir "secret" in
+  Fun.protect ~finally:(fun () -> remove_tree ~env dir) @@ fun () ->
+  List.iter (fun d -> Unix.mkdir d 0o700) [ dir; denied_dir ];
+  Out_channel.with_open_bin denied (fun oc -> output_string oc "secret");
+  let* () =
+    Sandbox_vm.probe ~env vm
+      (vm_layout ~extra:[ resolved denied_dir ] host)
+      ~dir ~denied
+  in
+  Ok host
+
+let exposure =
+  "the agent can read the launch environment of every process of this user \
+   that is not an Apple binary (decision record 0010)"
 
 let preflight ~env ~warn settings =
   match settings.mode with
   | `Off -> Ok off
   | (`Auto | `Strict) as mode -> (
-      match
-        try check ~env settings
+      let guard f =
+        try f ()
         with (Unix.Unix_error _ | Eio.Io _ | Sys_error _) as e ->
           Error (Printexc.to_string e)
-      with
-      | Ok host -> Ok (Sandboxed { mode; host })
-      | Error cause -> (
-          match mode with
-          | `Auto ->
+      in
+      let sandboxed = function
+        | Ok host -> Ok (Sandboxed { mode; host })
+        | Error cause -> (
+            match mode with
+            | `Auto ->
+                warn
+                  ("sandbox: auto: running unsandboxed, because the sandbox is \
+                    unavailable: " ^ cause);
+                Ok (unsandboxed mode ("unavailable: " ^ cause))
+            | `Strict ->
+                Error
+                  ("sandbox: strict, but the sandbox is unavailable: " ^ cause))
+      in
+      let on_host backend =
+        sandboxed (guard (fun () -> check_host ~env settings backend))
+      in
+      (* Under auto a virtual machine that does not work gives way to the
+         host's own sandbox. *)
+      let in_vm ~fix =
+        match guard (fun () -> check_vm ~env settings) with
+        | Ok host -> Ok (Sandboxed { mode; host })
+        | Error cause -> (
+            match mode with
+            | `Strict ->
+                Error
+                  ("sandbox: strict, but the virtual machine sandbox is \
+                    unavailable: " ^ cause ^ fix)
+            | `Auto ->
+                warn
+                  ("sandbox: auto: the virtual machine sandbox is unavailable ("
+                 ^ cause ^ "), so the host's own sandbox is used");
+                on_host (host_backend ()))
+      in
+      match (settings.backend, host_backend ()) with
+      | ((`Seatbelt | `Bubblewrap) as b), _ -> on_host b
+      | `Vm, _ -> in_vm ~fix:""
+      | `Auto, `Bubblewrap -> on_host `Bubblewrap
+      | `Auto, `Seatbelt -> (
+          let seatbelt_fix =
+            ". Or set sandbox.backend: seatbelt to accept that " ^ exposure
+          in
+          match (settings.image, mode) with
+          | Some _, (`Auto | `Strict) -> in_vm ~fix:seatbelt_fix
+          | None, `Strict ->
+              Error
+                ("sandbox: strict on macOS runs the agent in a virtual \
+                  machine, and sandbox.image is not set. Fix: set \
+                  sandbox.image to an image that holds the agent's runtime and \
+                  run OrbStack or Docker Desktop" ^ seatbelt_fix)
+          | None, `Auto ->
               warn
-                ("sandbox: auto: running unsandboxed, because the sandbox is \
-                  unavailable: " ^ cause);
-              Ok
-                (Unsandboxed
-                   {
-                     mode;
-                     applied = false;
-                     reason = Some ("unavailable: " ^ cause);
-                   })
-          | `Strict ->
-              Error ("sandbox: strict, but the sandbox is unavailable: " ^ cause)
-          ))
+                ("sandbox: auto: the agent runs under Seatbelt, where "
+               ^ exposure
+               ^ ". Fix: set sandbox.image and run OrbStack or Docker Desktop \
+                  to run it in a virtual machine, or set sandbox.backend: \
+                  seatbelt to accept this");
+              on_host `Seatbelt))
+
+let backend_available : backend -> (unit, string) result = function
+  | `Auto | `Vm -> Ok ()
+  | `Seatbelt -> (
+      match host_backend () with
+      | `Seatbelt -> Ok ()
+      | `Bubblewrap -> Error "backend seatbelt is only available on macOS")
+  | `Bubblewrap -> (
+      match host_backend () with
+      | `Bubblewrap -> Ok ()
+      | `Seatbelt -> Error "backend bubblewrap is only available on Linux")
+
+let checker_settings settings =
+  {
+    settings with
+    backend =
+      (match settings.backend with
+      | (`Seatbelt | `Bubblewrap) as b -> b
+      | `Auto | `Vm -> (host_backend () :> backend));
+  }
 
 (* One run *)
 
@@ -413,11 +584,14 @@ type run = {
   port : int;
   listen_unix : string -> (unit, string) result;
   preload : string option;
+  cwd : string;
+  agent_env : (string * string) list;
 }
 
 type session = {
   argv : string list;
   env : (string * string) list;
+  replaces_env : bool;
   fds : (int * Eio_unix.Fd.t) list;
 }
 
@@ -523,9 +697,39 @@ let drain reader fd =
   in
   copy 0 false
 
+(* The forwarder's or the bridge's violation log: they get the write end of a
+   pipe, not the file, so a process that reopens its descriptor through /proc
+   can at most add lines, never truncate or rewrite them. *)
+let relay_log ~sw run ~argv ~env ~replaces_env =
+  let path = Filename.concat run.run_dir "sandbox.log" in
+  let* fd =
+    match
+      Unix.openfile path [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ] 0o600
+    with
+    | fd -> Ok fd
+    | exception Unix.Unix_error (e, _, _) ->
+        Error (path ^ ": " ^ Unix.error_message e)
+  in
+  let reader, writer = Eio_unix.pipe sw in
+  let drained =
+    Eio.Fiber.fork_promise ~sw (fun () ->
+        Fun.protect
+          ~finally:(fun () -> Unix.close fd)
+          (fun () -> drain reader fd))
+  in
+  Ok
+    ( {
+        argv;
+        env = env @ [ (Sandbox_init.log_variable, "3") ];
+        replaces_env;
+        fds = [ (3, Eio_unix.Resource.fd writer) ];
+      },
+      Relay_log { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } )
+
 let start ~sw t run agent =
   match t with
-  | Unsandboxed _ -> Ok ({ argv = agent; env = []; fds = [] }, Nothing)
+  | Unsandboxed _ ->
+      Ok ({ argv = agent; env = []; replaces_env = false; fds = [] }, Nothing)
   | Sandboxed { host; mode = _ } -> (
       let tag = Sandbox_log.tag run.run_id in
       match host.engine with
@@ -537,52 +741,39 @@ let start ~sw t run agent =
               ~tag ~preload:run.preload agent
           in
           let marker = Filename.concat run.temp_dir "sandbox-end-marker" in
-          Ok ({ argv; env = []; fds = [] }, Seatbelt_log { tag; since; marker })
+          Ok
+            ( { argv; env = []; replaces_env = false; fds = [] },
+              Seatbelt_log { tag; since; marker } )
       | Bubblewrap _ ->
           let* dir = socket_dir ~sw in
           let socket = Filename.concat dir "model.sock" in
           let* () = run.listen_unix socket in
-          let path = Filename.concat run.run_dir "sandbox.log" in
           let* argv =
             command host ~state_dir:(Some run.state_dir) ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = Some socket } ]
               ~tag ~preload:run.preload agent
           in
-          let* fd =
-            match
-              Unix.openfile path
-                [ O_WRONLY; O_CREAT; O_APPEND; O_CLOEXEC ]
-                0o600
-            with
-            | fd -> Ok fd
-            | exception Unix.Unix_error (e, _, _) ->
-                Error (path ^ ": " ^ Unix.error_message e)
+          relay_log ~sw run ~argv ~env:[] ~replaces_env:false
+      | Vm vm ->
+          let* bridge =
+            Sandbox_vm.start ~sw vm (vm_layout host)
+              ~bactrian_exe:host.bactrian_exe ~run_id:run.run_id
+              ~run_dir:run.run_dir ~state_dir:(resolved run.state_dir)
+              ~temp_dir:(resolved run.temp_dir) ~cwd:(resolved run.cwd)
+              ~port:run.port ~agent_env:run.agent_env agent
           in
-          (* The forwarder gets the write end of a pipe, not the file: a
-             process that reopens its descriptor through /proc can then at
-             most add lines, never truncate or rewrite them. *)
-          let reader, writer = Eio_unix.pipe sw in
-          let drained =
-            Eio.Fiber.fork_promise ~sw (fun () ->
-                Fun.protect
-                  ~finally:(fun () -> Unix.close fd)
-                  (fun () -> drain reader fd))
-          in
-          Ok
-            ( {
-                argv;
-                env = [ (Sandbox_init.log_variable, "3") ];
-                fds = [ (3, Eio_unix.Resource.fd writer) ];
-              },
-              Relay_log
-                { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } ))
+          relay_log ~sw run ~argv:bridge.argv ~env:bridge.env ~replaces_env:true
+      )
 
 (* A checker reaches nothing (no listener), writes only to its temporary
    directory ([allow_write] does not apply) and reads nothing of any run. *)
 let checker t ~temp_dir argv =
   match t with
   | Unsandboxed _ -> Ok argv
-  | Sandboxed { host; mode = _ } ->
+  | Sandboxed { host = { engine = Vm _; _ }; _ } ->
+      Error "checkers run in the host's own sandbox, never the virtual machine"
+  | Sandboxed ({ host = { engine = Seatbelt | Bubblewrap _; _ }; _ } as s) ->
+      let host = s.host in
       command
         { host with allow_write = [] }
         ~state_dir:None ~temp_dir ~listeners:[]
@@ -594,11 +785,13 @@ let strips_preload = function
       match Unix.stat path with
       | st -> st.st_perm land 0o4000 <> 0
       | exception Unix.Unix_error _ -> false)
-  | Sandboxed { host = { engine = Seatbelt; _ }; _ } | Unsandboxed _ -> false
+  | Sandboxed { host = { engine = Seatbelt | Vm _; _ }; _ } | Unsandboxed _ ->
+      false
 
 let own_port = function
   | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> true
-  | Sandboxed { host = { engine = Bubblewrap _; _ }; _ } | Unsandboxed _ ->
+  | Sandboxed { host = { engine = Bubblewrap _ | Vm _; _ }; _ } | Unsandboxed _
+    ->
       false
 
 let mcp_warning t (servers : Mcp_proxy.config list) =
@@ -625,7 +818,7 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
             bactrian as a separate user or in a virtual             machine"
            (match exposed with [ _ ] -> "" | _ -> "s")
            (String.concat ", " exposed))
-  | Sandboxed { host = { engine = Seatbelt | Bubblewrap _; _ }; _ }, _
+  | Sandboxed { host = { engine = Seatbelt | Bubblewrap _ | Vm _; _ }; _ }, _
   | Unsandboxed _, _ ->
       None
 
@@ -634,7 +827,7 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
 let preload_hidden t library =
   match t with
   | Unsandboxed _ -> false
-  | Sandboxed { host = { engine = Seatbelt; _ }; _ } -> false
+  | Sandboxed { host = { engine = Seatbelt | Vm _; _ }; _ } -> false
   | Sandboxed { host = { engine = Bubblewrap _; _ } as host; _ } ->
       let dir = host.bactrian_dir in
       let input =

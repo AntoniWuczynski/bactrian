@@ -628,33 +628,48 @@ let run_experiment ?root ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     if Filename.is_relative path then Filename.concat l.dir path else path
   in
   let mode = Option.value sandbox ~default:experiment.sandbox in
-  let preflight () =
+  let* () =
+    Result.map_error
+      (fun m -> Usage ("sandbox.backend: " ^ m))
+      (Sandbox.backend_available experiment.sandbox_backend)
+  in
+  let settings : Sandbox.settings =
+    {
+      mode;
+      backend = experiment.sandbox_backend;
+      image = experiment.sandbox_image;
+      runtime = experiment.sandbox_runtime;
+      allow_write = List.map in_dir experiment.sandbox_allow_write;
+      deny_read = List.map in_dir experiment.sandbox_deny_read;
+      bactrian_exe;
+      bactrian_dir = Eio.Path.native_exn root;
+    }
+  in
+  let preflight settings =
     Result.map_error
       (fun m -> Environment m)
-      (Sandbox.preflight ~env ~warn
-         {
-           mode;
-           allow_write = List.map in_dir experiment.sandbox_allow_write;
-           deny_read = List.map in_dir experiment.sandbox_deny_read;
-           bactrian_exe;
-           bactrian_dir = Eio.Path.native_exn root;
-         })
+      (Sandbox.preflight ~env ~warn settings)
   in
-  (* The checkers run in the agent's sandbox. bactrian does not start an HTTP
-     agent, so the probe is run for its checkers alone, when there are any. *)
+  let has_checkers =
+    List.exists
+      (fun (_, (s : Scenario.t)) -> not (List.is_empty s.checkers))
+      l.scenarios
+  in
+  (* The checkers run in the agent's sandbox, or the host's own when the agent
+     runs in the virtual machine. bactrian does not start an HTTP agent, so the
+     probe is run for its checkers alone, when there are any. *)
   let* sandbox, checker_sandbox =
     match l.agent with
     | Command _ ->
-        let* s = preflight () in
-        Ok (s, s)
+        let* s = preflight settings in
+        if Sandbox.vm s && has_checkers then
+          let* checkers = preflight (Sandbox.checker_settings settings) in
+          Ok (s, checkers)
+        else Ok (s, s)
     | Http _ ->
         let agent = Sandbox.http_mode mode in
-        if
-          List.exists
-            (fun (_, (s : Scenario.t)) -> not (List.is_empty s.checkers))
-            l.scenarios
-        then
-          let* checkers = preflight () in
+        if has_checkers then
+          let* checkers = preflight (Sandbox.checker_settings settings) in
           Ok (agent, checkers)
         else Ok (agent, agent)
   in

@@ -43,6 +43,9 @@ type target = {
   agent : Experiment.agent;
   dir : string;
   sandbox : Sandbox.mode;
+  backend : Sandbox.backend;
+  image : string option;
+  runtime : Experiment.sandbox_runtime option;
   faketime : bool;
   funded : (P.provider * string) list;
 }
@@ -52,6 +55,9 @@ let target ~dir (e : Experiment.t) =
     agent = e.agent;
     dir;
     sandbox = e.sandbox;
+    backend = e.sandbox_backend;
+    image = e.sandbox_image;
+    runtime = e.sandbox_runtime;
     faketime = e.faketime;
     funded = Live_preflight.funded e.caps_usd;
   }
@@ -180,7 +186,12 @@ let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~probe =
 
 (* Runs the preflight probe in a directory of its own, so the check leaves no
    [.bactrian] behind. *)
-let sandbox_probe ~env ~bactrian_exe () =
+let sandbox_probe ~env ~bactrian_exe (target : target option) () =
+  let mode, backend, image, runtime =
+    match target with
+    | Some t -> (t.sandbox, t.backend, t.image, t.runtime)
+    | None -> (`Auto, `Auto, None, None)
+  in
   match Filename.temp_dir ~perms:0o700 "bactrian-doctor-" "" with
   | exception Sys_error m -> Error m
   | dir -> (
@@ -191,7 +202,11 @@ let sandbox_probe ~env ~bactrian_exe () =
         Sandbox.preflight ~env
           ~warn:(fun (_ : string) -> ())
           {
-            mode = `Auto;
+            mode =
+              (match mode with `Strict -> `Strict | `Auto | `Off -> `Auto);
+            backend;
+            image;
+            runtime;
             allow_write = [];
             deny_read = [];
             bactrian_exe;
@@ -205,13 +220,115 @@ let sandbox_probe ~env ~bactrian_exe () =
           | { reason; _ } -> Error (Option.value reason ~default:"unavailable"))
       )
 
+(* The virtual machine *)
+
+type vm_host = {
+  macos : bool;
+  detect : unit -> (string, string) result;
+      (** The runtime's name and architecture, or why it does not work. *)
+  image_present : string -> (unit, string) result;
+  relay_cached : unit -> bool;
+}
+
+let no_runtime_fix =
+  "install OrbStack or Docker Desktop (Podman is not supported yet)"
+
+(* Whether the experiment's agent would run in the virtual machine. *)
+let uses_vm ~macos (t : target) =
+  match (t.agent, t.sandbox, t.backend) with
+  | Http _, _, _ | Command _, `Off, _ -> false
+  | Command _, (`Auto | `Strict), `Vm -> true
+  | Command _, (`Auto | `Strict), `Auto -> macos && Option.is_some t.image
+  | Command _, (`Auto | `Strict), (`Seatbelt | `Bubblewrap) -> false
+
+let vm_check ~host target =
+  let needed, mode, image =
+    match target with
+    | None -> (false, `Auto, None)
+    | Some { agent = Http _; _ } | Some { sandbox = `Off; _ } ->
+        (false, `Off, None)
+    | Some ({ agent = Command _; _ } as t) ->
+        (uses_vm ~macos:host.macos t, t.sandbox, t.image)
+  in
+  let failed what =
+    let status =
+      match mode with `Strict -> Fail | `Auto -> Warn | `Off -> Skip
+    in
+    check "vm" status what
+  in
+  match (mode, target) with
+  | `Off, _ -> check "vm" Skip "the agent is not sandboxed"
+  | (`Auto | `Strict), Some { backend = `Seatbelt | `Bubblewrap; _ } ->
+      check "vm" Skip "the experiment names the host's own sandbox"
+  | (`Auto | `Strict), (Some _ | None) -> (
+      match host.detect () with
+      | Error why when needed -> failed why
+      | Error why when host.macos ->
+          check "vm" Warn
+            (Printf.sprintf
+               "no virtual machine sandbox, so an agent under Seatbelt can \
+                read the launch environment of this user's other processes: \
+                %s. Fix: %s"
+               why no_runtime_fix)
+      | Error _ -> check "vm" Skip "no container runtime (bubblewrap is used)"
+      | Ok runtime -> (
+          let relay =
+            if host.relay_cached () then "the relay is built"
+            else "the relay is built on first use (it needs the network once)"
+          in
+          match image with
+          | None when host.macos && needed -> failed "no sandbox.image"
+          | None when host.macos && Option.is_some target ->
+              check "vm" Warn
+                (Printf.sprintf
+                   "%s works, but sandbox.image is not set, so the agent runs \
+                    under Seatbelt and can read the launch environment of this \
+                    user's other processes"
+                   runtime)
+          | None ->
+              check "vm" Pass (Printf.sprintf "%s works, %s" runtime relay)
+          | Some image -> (
+              match host.image_present image with
+              | Error why -> failed why
+              | Ok () ->
+                  check "vm" Pass
+                    (Printf.sprintf "%s works, %s is present, %s" runtime image
+                       relay))))
+
+let vm_host ~env : vm_host =
+  let process_mgr = Eio.Stdenv.process_mgr env
+  and clock = Eio.Stdenv.clock env in
+  let runtime = lazy (Vm_runtime.detect ~process_mgr ~clock None) in
+  {
+    macos = Sys.file_exists "/usr/bin/sandbox-exec";
+    detect =
+      (fun () ->
+        Result.map
+          (fun r ->
+            Printf.sprintf "%s (%s)" (Vm_runtime.name r) (Vm_runtime.arch r))
+          (Lazy.force runtime));
+    image_present =
+      (fun image ->
+        Result.bind (Lazy.force runtime) (fun r ->
+            Vm_runtime.image_present ~process_mgr ~clock r image));
+    relay_cached =
+      (fun () ->
+        match Lazy.force runtime with
+        | Ok r ->
+            Proc_util.regular_file
+              (Filename.concat
+                 (Vm_runtime.relay_cache_dir ())
+                 (Vm_runtime.relay_name r))
+        | Error _ -> false);
+  }
+
 (* The clock *)
 
 (* A time every [decide] accepts: the label does not depend on the value. *)
 let any_sim_now = "2000-01-01T00:00:00Z"
 
 let reason_status : Clock_label.reason -> status = function
-  | Macos -> Pass
+  | Macos | Vm -> Pass
   | Faketime_off | Http_mode -> Skip
   | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
   | Static_binary | Go_binary | Unreadable_executable ->
@@ -232,6 +349,7 @@ let reason_text : Clock_label.reason -> string = function
       "the agent's executable is missing, unreadable or not a little-endian \
        ELF file"
   | Http_mode -> "bactrian does not start an HTTP-mode agent"
+  | Vm -> "the agent runs in the virtual machine sandbox"
 
 let clock_check ~linux ~library_override ~path target =
   let contract_only reason =
@@ -242,10 +360,12 @@ let clock_check ~linux ~library_override ~path target =
   in
   match target with
   | Some { agent = Http _; _ } -> contract_only Http_mode
-  | Some { agent = Command { argv; _ }; dir; faketime; _ } -> (
+  | Some ({ agent = Command { argv; _ }; dir; faketime; _ } as t) -> (
       let label =
         Agent_clock.label
-          (Agent_clock.decide ~linux ~faketime ~library_override
+          (Agent_clock.decide
+             ~vm:(uses_vm ~macos:(not linux) t)
+             ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
@@ -313,10 +433,19 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
   @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with
+    | Some t when uses_vm ~macos:(Sys.file_exists "/usr/bin/sandbox-exec") t ->
+        [
+          check "agent" Skip
+            (Printf.sprintf
+               "runs in the image %s, so it is not looked up on this host"
+               (Option.value t.image ~default:"(none)"));
+        ]
     | Some t -> [ agent_check ~path ~cwd t.agent ]
     | None -> [])
   @ [
-      sandbox_check ~mode ~http_agent ~probe:(sandbox_probe ~env ~bactrian_exe);
+      sandbox_check ~mode ~http_agent
+        ~probe:(sandbox_probe ~env ~bactrian_exe target);
+      vm_check ~host:(vm_host ~env) target;
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;

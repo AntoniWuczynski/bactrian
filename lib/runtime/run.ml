@@ -571,6 +571,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     match config.agent with
     | Command argv ->
         Agent_clock.decide
+          ~vm:(Sandbox.vm config.sandbox)
           ~hidden:(Sandbox.preload_hidden config.sandbox)
           ~stripped:(Sandbox.strips_preload config.sandbox)
           ~linux:(Agent_clock.linux ()) ~faketime:config.faketime
@@ -679,6 +680,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                    temp_dir = temp_dir_path;
                    port;
                    preload = Agent_clock.library agent_clock;
+                   cwd = Proc_util.absolute config.cwd;
+                   agent_env = agent_process_env;
                    listen_unix =
                      (fun path ->
                        P.listen_unix proxy ~sw ~net:(Eio.Stdenv.net env) ~token
@@ -692,8 +695,10 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                 {
                   argv = sandboxed.argv;
                   env =
-                    Agent_clock.inject agent_clock agent_process_env
-                    @ sandboxed.env;
+                    (if sandboxed.replaces_env then sandboxed.env
+                     else
+                       Agent_clock.inject agent_clock agent_process_env
+                       @ sandboxed.env);
                   cwd = Some Eio.Path.(Eio.Stdenv.fs env / config.cwd);
                   stderr_path = Eio.Path.(run_dir / "agent.stderr");
                   turn_timeout = config.turn_timeout;

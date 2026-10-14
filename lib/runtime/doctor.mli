@@ -27,6 +27,9 @@ type target = {
   agent : Experiment.agent;
   dir : string;  (** The experiment file's directory, where the agent runs. *)
   sandbox : Sandbox.mode;
+  backend : Sandbox.backend;
+  image : string option;
+  runtime : Experiment.sandbox_runtime option;
   faketime : bool;
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
@@ -72,6 +75,28 @@ val sandbox_check :
     [Fail] under [`Strict] and [Warn] under [`Auto]. [`Off] and an HTTP agent
     are [Skip]. *)
 
+type vm_host = {
+  macos : bool;
+  detect : unit -> (string, string) result;
+      (** The runtime's name and architecture, or why it does not work. *)
+  image_present : string -> (unit, string) result;
+  relay_cached : unit -> bool;
+}
+(** What the [vm] check asks of this host. *)
+
+val vm_host : env:Eio_unix.Stdenv.base -> vm_host
+(** This host, through {!Vm_runtime}. Nothing is pulled or built. *)
+
+val vm_check : host:vm_host -> target option -> check
+(** The virtual machine sandbox: the runtime works ([info]), the experiment's
+    image is present locally (never pulled), and whether the relay is built yet.
+    [Fail] under [strict] (and [Warn] under [auto]) when the experiment's agent
+    would run in the virtual machine and something is missing. On macOS without
+    one it is [Warn], because the agent then runs under Seatbelt, which leaves
+    the launch environments of the user's other processes readable; the message
+    names OrbStack and Docker Desktop. [Skip] when the experiment's agent is not
+    sandboxed, or the experiment names [seatbelt] or [bubblewrap]. *)
+
 val clock_check :
   linux:bool ->
   library_override:string option ->
@@ -104,5 +129,6 @@ val run :
   path:string option ->
   target option ->
   check list
-(** Every check, in the order they are reported. [keys] is
+(** Every check, in the order they are reported. An agent that would run in the
+    virtual machine is not looked up on this host ([agent] is [Skip]). [keys] is
     {!Run.keys_from_environment}: only which providers appear in it is used. *)

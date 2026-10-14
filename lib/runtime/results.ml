@@ -38,15 +38,23 @@ let read_opt dir file =
 (* The sandbox label (design §5.3) of a run's agent, and of its checkers. Runs
    from before the sandbox existed have the string "unsandboxed" instead in
    meta.json. *)
+(* [backend] and [vm] are only decoded, so the strict decoding accepts them
+   (hence warning 69 off). Runs from before the backends existed have
+   neither. *)
+type vm_label = { runtime : string; image : string }
+[@@deriving of_yojson] [@@warning "-69"]
+
 type label = {
   mode : string;
   applied : bool;
   reason : string option; [@default None]
+  backend : string option; [@default None]
+  vm : vm_label option; [@default None]
 }
-[@@deriving of_yojson]
+[@@deriving of_yojson] [@@warning "-69"]
 
 (* Why a label says the sandbox was not applied. *)
-let unapplied { mode; applied; reason } =
+let unapplied { mode; applied; reason; _ } =
   if applied then None
   else Some (Option.value reason ~default:("sandbox: " ^ mode))
 

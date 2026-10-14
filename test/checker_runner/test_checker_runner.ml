@@ -277,6 +277,9 @@ let strict env dir =
       ~warn:(fun w -> Alcotest.failf "unexpected warning: %s" w)
       {
         mode = `Strict;
+        backend = (Sandbox.host_backend () :> Sandbox.backend);
+        image = None;
+        runtime = None;
         allow_write = [];
         deny_read = [ Filename.concat dir "denied" ];
         bactrian_exe = bactrian_bin;

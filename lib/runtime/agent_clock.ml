@@ -72,10 +72,12 @@ let label t = t.label
 let http_mode = { label = Contract_only Http_mode; injection = None }
 let library t = Option.map (fun i -> i.library) t.injection
 
-let decide ?candidates ?(hidden = fun (_ : string) -> false) ?(stripped = false)
-    ~linux ~faketime ~library_override ~env ~cwd ~agent ~sim_now () =
+let decide ?candidates ?(vm = false) ?(hidden = fun (_ : string) -> false)
+    ?(stripped = false) ~linux ~faketime ~library_override ~env ~cwd ~agent
+    ~sim_now () =
   let ( let* ) = Result.bind in
   let checked =
+    let* () = if vm then Error Clock_label.Vm else Ok () in
     let* () = if linux then Ok () else Error Clock_label.Macos in
     let* () = if faketime then Ok () else Error Clock_label.Faketime_off in
     let* library =

@@ -44,6 +44,7 @@ val library : t -> string option
 
 val decide :
   ?candidates:string list ->
+  ?vm:bool ->
   ?hidden:(string -> bool) ->
   ?stripped:bool ->
   linux:bool ->
@@ -56,7 +57,8 @@ val decide :
   unit ->
   t
 (** For a command agent, whose argv is [agent]: the first reason that applies,
-    in this order: not Linux, [faketime] off, no library, [hidden] says the
+    in this order: [vm] says the agent runs in the virtual machine sandbox
+    (default: no), not Linux, [faketime] off, no library, [hidden] says the
     sandbox would hide the library (default: never), [stripped] says the sandbox
     drops [LD_PRELOAD] (default: no), [sim_now] not RFC 3339, then the agent's
     executable. [env] is the agent's environment, whose [PATH] finds the

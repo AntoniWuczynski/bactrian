@@ -257,7 +257,17 @@ let test_lock_in_process =
 
 let test_sandbox_strict =
   with_ctx "strict" @@ fun ctx ->
-  write ctx "exp.json" (experiment_json ctx ~extra:{|, "sandbox": "strict"|} ());
+  let backend =
+    match Bactrian_runtime.Sandbox.host_backend () with
+    | `Seatbelt -> "seatbelt"
+    | `Bubblewrap -> "bubblewrap"
+  in
+  write ctx "exp.json"
+    (experiment_json ctx
+       ~extra:
+         (Printf.sprintf {|, "sandbox": {"mode": "strict", "backend": "%s"}|}
+            backend)
+       ());
   match go ~sandbox:None ctx with
   | Error (E.Environment m) -> mentions "the sandbox is unavailable" m
   | Ok _ | Error (E.Configuration _ | E.Usage _) ->
