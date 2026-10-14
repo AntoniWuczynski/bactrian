@@ -14,10 +14,20 @@
     Nothing outside those mounts is there at all, so the deny-list entries under
     the user's home need no mask unless a mount shows them. *)
 
+type probe = {
+  outside : string;  (** To create, outside every writable mount. *)
+  inside : string;  (** To create, in the state directory. *)
+  denied : string;  (** To read, under a masked directory. *)
+  masked : string;  (** To read, a masked file. *)
+  masked_case : string;  (** To read, [masked] with its name's case changed. *)
+  root : string;  (** To create, directly under [/]. *)
+  other_run : string;  (** To create, in another run's directory. *)
+}
+(** The paths the relay's probe tries (see {!Vm_probe}). *)
+
 type command =
   | Agent of string list  (** The agent's command and arguments. Non-empty. *)
-  | Probe of { outside : string; inside : string; denied : string }
-      (** The relay's own probe (see {!Vm_probe}) instead of an agent. *)
+  | Probe of probe  (** The relay's own probe instead of an agent. *)
 
 type entry_kind =
   | Plain  (** Not a symbolic link. *)
@@ -91,8 +101,9 @@ val argv : input -> (string list, error) result
      /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
      --memory-swap 4g --log-driver none --pull never --workdir DIR --env-file
      FILE --entrypoint /bactrian/relay --mount|--tmpfs... -- IMAGE --forward
-     PORT... -- AGENT...] (or [--probe OUTSIDE INSIDE DENIED] in place of
-    [-- AGENT...]).
+     PORT... -- AGENT...] (or
+    [--probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN] in place
+    of [-- AGENT...]).
 
     Mounts are given in order of depth, as the runtime applies them, then of
     path. A directory mask is [--tmpfs PATH:ro,mode=0755]. For a file mask the

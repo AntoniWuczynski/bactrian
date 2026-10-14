@@ -15,6 +15,12 @@ type report = {
   denied_read : outcome;
       (** Reading a file under a denied directory. [Error "empty"] when it read
           nothing. *)
+  masked_read : outcome;  (** Reading a masked file. *)
+  masked_case_read : outcome;
+      (** Reading the masked file under its name in another case. *)
+  root_write : outcome;  (** Creating a file in [/]. *)
+  other_run_write : outcome;  (** Creating a file in another run's directory. *)
+  interfaces_listed : outcome;  (** Listing [/sys/class/net]. *)
   interfaces : string list;  (** The container's network interfaces. *)
 }
 
@@ -31,6 +37,9 @@ val checks :
     read must fail. *)
 
 val judge : report -> (unit, string list) result
-(** Every check with the wrong result, described. The container must have no
-    network interface but [lo], and the public connection must fail at once
-    rather than time out, which would mean a route that drops packets. *)
+(** Every check with the wrong result, described. The interfaces must have been
+    listed and be [lo] alone, and the public connection must fail at once rather
+    than time out, which would mean a route that drops packets. Reads of the
+    masked file under either name and the write into another run must fail with
+    [ENOENT], the writes to [/] and outside the state directory with [EROFS]:
+    another error is a surprise, so it fails the probe too. *)

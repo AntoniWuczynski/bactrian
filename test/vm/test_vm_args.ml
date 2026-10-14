@@ -156,7 +156,16 @@ let test_probe () =
     argv
       (input
          ~command:
-           (Probe { outside = "/p/o"; inside = "/p/i"; denied = "/p/d/s" })
+           (Probe
+              {
+                outside = "/p/o";
+                inside = "/p/i";
+                denied = "/p/d/s";
+                masked = "/p/m/secret";
+                masked_case = "/p/m/SECRET";
+                root = "/probe";
+                other_run = "/p/.bactrian/runs/x/w";
+              })
          ())
   in
   Alcotest.check strings "the probe instead of an agent"
@@ -168,8 +177,12 @@ let test_probe () =
       "/p/o";
       "/p/i";
       "/p/d/s";
+      "/p/m/secret";
+      "/p/m/SECRET";
+      "/probe";
+      "/p/.bactrian/runs/x/w";
     ]
-    (List.filteri (fun i _ -> i >= List.length a - 7) a)
+    (List.filteri (fun i _ -> i >= List.length a - 11) a)
 
 let test_masks () =
   Alcotest.check strings "masks where the mounts show the path, by depth"

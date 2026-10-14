@@ -38,12 +38,14 @@ val probe :
   t ->
   layout ->
   dir:string ->
-  denied:string ->
+  Bactrian_core.Vm_args.probe ->
   (unit, string) result
-(** Runs the relay's probe in a container built like a run's, in [dir] (its
-    [state] and [tmp] made here, under the project), with a probe listener of
-    its own, and judges the report ({!Bactrian_core.Vm_probe.judge}). [denied]
-    is a file under a directory in [layout.deny]. The container is removed
+(** Runs the relay's probe in a container built like a run's, for a run whose
+    directory is [dir] under [.bactrian/runs] (its [state] and [tmp] already
+    made), with a probe listener of its own, and judges the report
+    ({!Bactrian_core.Vm_probe.judge}) and that neither file it tried to write
+    outside appeared on the host. The paths' [denied] is a file under a
+    directory, and [masked] a file, of [layout.deny]. The container is removed
     after. *)
 
 type session = {

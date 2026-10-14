@@ -1,7 +1,14 @@
-type command =
-  | Agent of string list
-  | Probe of { outside : string; inside : string; denied : string }
+type probe = {
+  outside : string;
+  inside : string;
+  denied : string;
+  masked : string;
+  masked_case : string;
+  root : string;
+  other_run : string;
+}
 
+type command = Agent of string list | Probe of probe
 type entry_kind = Plain | Link_to_file of string | Other_link
 type entry = { name : string; kind : entry_kind; masked_file : bool }
 
@@ -337,9 +344,20 @@ let argv i =
     | Agent agent ->
         let* () = all check_argument agent in
         Ok ("--" :: agent)
-    | Probe { outside; inside; denied } ->
-        let* () = all check_argument [ outside; inside; denied ] in
-        Ok [ "--probe"; outside; inside; denied ]
+    | Probe p ->
+        let paths =
+          [
+            p.outside;
+            p.inside;
+            p.denied;
+            p.masked;
+            p.masked_case;
+            p.root;
+            p.other_run;
+          ]
+        in
+        let* () = all check_argument paths in
+        Ok ("--probe" :: paths)
   in
   let* () =
     all check_argument [ i.runtime; i.name; i.image; i.env_file; i.workdir ]

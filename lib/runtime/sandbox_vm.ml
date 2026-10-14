@@ -145,13 +145,11 @@ let last_line text =
   |> List.filter (fun l -> not (String.equal (String.trim l) ""))
   |> List.fold_left (fun _ l -> Some l) None
 
-let probe ~env t layout ~dir ~denied =
+let probe ~env t layout ~dir (paths : Vm_args.probe) =
   let id = Filename.basename dir in
   let name = "bactrian-" ^ id in
   let state_dir = Filename.concat dir "state"
-  and temp_dir = Filename.concat dir "tmp"
-  and outside = Filename.concat dir "outside" in
-  List.iter (fun d -> Unix.mkdir d 0o700) [ state_dir; temp_dir ];
+  and temp_dir = Filename.concat dir "tmp" in
   Fun.protect ~finally:(fun () -> remove t name) @@ fun () ->
   let* env_file = write_env_file ~dir [] in
   Eio.Switch.run @@ fun sw ->
@@ -166,8 +164,7 @@ let probe ~env t layout ~dir ~denied =
   in
   let* argv =
     args t layout ~name ~env_file ~state_dir ~temp_dir ~cwd:state_dir
-      ~forwards:[ port ]
-      (Probe { outside; inside = Filename.concat state_dir "inside"; denied })
+      ~forwards:[ port ] (Probe paths)
   in
   let out = Buffer.create 256 and err = Buffer.create 256 in
   let* code =
@@ -213,10 +210,13 @@ let probe ~env t layout ~dir ~denied =
   in
   let wrong =
     (match Vm_probe.judge report with Ok () -> [] | Error w -> w)
-    @
-    if Sys.file_exists outside then
-      [ "the file written outside the state directory exists" ]
-    else []
+    @ List.filter_map
+        (fun (path, what) ->
+          if Sys.file_exists path then Some (what ^ " exists") else None)
+        [
+          (paths.outside, "the file written outside the state directory");
+          (paths.other_run, "the file written into another run");
+        ]
   in
   match wrong with
   | [] -> Ok ()

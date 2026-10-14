@@ -467,6 +467,9 @@ let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
              { input with deny_read = input.deny_read @ extra });
   }
 
+(* The probe runs as a run would, with its directories under .bactrian/runs,
+   a masked directory and a masked file in its state directory, and another
+   run beside it. *)
 let check_vm ~env settings =
   let* image =
     Option.to_result settings.image
@@ -476,19 +479,44 @@ let check_vm ~env settings =
   in
   let* vm = Sandbox_vm.prepare ~env settings.runtime ~image in
   let host = make_host ~env settings (Vm vm) in
-  let dir =
-    Filename.concat host.bactrian_dir
-      ("sandbox-probe-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6))
-  in
-  let denied_dir = Filename.concat dir "denied" in
-  let denied = Filename.concat denied_dir "secret" in
-  Fun.protect ~finally:(fun () -> remove_tree ~env dir) @@ fun () ->
-  List.iter (fun d -> Unix.mkdir d 0o700) [ dir; denied_dir ];
-  Out_channel.with_open_bin denied (fun oc -> output_string oc "secret");
+  let runs = Filename.concat host.bactrian_dir "runs" in
+  let id = "sandbox-probe-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6) in
+  let dir = Filename.concat runs id
+  and other = Filename.concat runs (id ^ "-other") in
+  let state_dir = Filename.concat dir "state" in
+  let denied_dir = Filename.concat state_dir "denied"
+  and mask_dir = Filename.concat state_dir "masked" in
+  let masked = Filename.concat mask_dir "secret" in
+  Eio.Path.mkdirs ~exists_ok:true ~perm:0o700
+    Eio.Path.(Eio.Stdenv.fs env / runs);
+  Fun.protect ~finally:(fun () ->
+      remove_tree ~env dir;
+      remove_tree ~env other)
+  @@ fun () ->
+  List.iter
+    (fun d -> Unix.mkdir d 0o700)
+    [ dir; state_dir; Filename.concat dir "tmp"; denied_dir; mask_dir; other ];
+  List.iter
+    (fun f -> Out_channel.with_open_bin f (fun oc -> output_string oc "secret"))
+    [
+      Filename.concat denied_dir "secret";
+      masked;
+      Filename.concat mask_dir "beside";
+      Filename.concat other "data";
+    ];
   let* () =
     Sandbox_vm.probe ~env vm
-      (vm_layout ~extra:[ resolved denied_dir ] host)
-      ~dir ~denied
+      (vm_layout ~extra:[ resolved denied_dir; resolved masked ] host)
+      ~dir
+      {
+        outside = Filename.concat dir "outside";
+        inside = Filename.concat state_dir "inside";
+        denied = Filename.concat denied_dir "secret";
+        masked;
+        masked_case = Filename.concat mask_dir "SECRET";
+        root = "/" ^ id;
+        other_run = Filename.concat other "written";
+      }
   in
   Ok host
 

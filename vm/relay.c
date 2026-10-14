@@ -20,10 +20,13 @@
    source.
 
    relay --forward PORT... -- AGENT ARGV...
-   relay --forward PORT --probe OUTSIDE INSIDE DENIED
+   relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT
+         OTHER_RUN
 
    The probe form runs the sandbox checks instead of an agent and writes one
-   JSON line on channel 0. */
+   JSON line on channel 0: the outcome of a connection to a public address and
+   to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
+   reading DENIED, MASKED and MASKED_CASE, and the network interfaces. */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -294,8 +297,9 @@ static void reset_child_signals(void) {
   sigaction(SIGPIPE, &sa, NULL);
 }
 
-static int run_probe(int port, const char *outside, const char *inside,
-                     const char *denied);
+#define PROBE_ARGS 7
+
+static int run_probe(int port, const char **paths);
 
 /* Starts the agent (or the probe) in a process group of its own, with pipes
    for its standard input and output and nothing else open above 2. */
@@ -309,7 +313,7 @@ static void start_agent(char **argv, const char **probe, int probe_port) {
     if (setpgid(0, 0) < 0) _exit(126);
     if (dup2(in_pipe[0], 0) < 0 || dup2(out_pipe[1], 1) < 0) _exit(126);
     close_from(3);
-    if (probe != NULL) _exit(run_probe(probe_port, probe[0], probe[1], probe[2]));
+    if (probe != NULL) _exit(run_probe(probe_port, probe));
     execvp(argv[0], argv);
     fprintf(stderr, "bactrian relay: cannot start %s: %s\n", argv[0],
             strerror(errno));
@@ -794,13 +798,17 @@ static void put_outcome(FILE *f, const char *name, const char *res, int comma) {
           comma ? "," : "");
 }
 
-static int run_probe(int port, const char *outside, const char *inside,
-                     const char *denied) {
+/* paths: OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN */
+static int run_probe(int port, const char **paths) {
   const char *public_ = probe_connect("1.1.1.1", 443, NULL);
   const char *listener = probe_listener(port);
-  const char *outside_w = probe_create(outside);
-  const char *inside_w = probe_create(inside);
-  const char *denied_r = probe_read(denied);
+  const char *outside_w = probe_create(paths[0]);
+  const char *inside_w = probe_create(paths[1]);
+  const char *denied_r = probe_read(paths[2]);
+  const char *masked_r = probe_read(paths[3]);
+  const char *masked_case_r = probe_read(paths[4]);
+  const char *root_w = probe_create(paths[5]);
+  const char *other_run_w = probe_create(paths[6]);
   FILE *f = stdout;
   fputc('{', f);
   put_outcome(f, "public", public_, 1);
@@ -808,8 +816,13 @@ static int run_probe(int port, const char *outside, const char *inside,
   put_outcome(f, "outside_write", outside_w, 1);
   put_outcome(f, "inside_write", inside_w, 1);
   put_outcome(f, "denied_read", denied_r, 1);
-  fputs("\"interfaces\":[", f);
+  put_outcome(f, "masked_read", masked_r, 1);
+  put_outcome(f, "masked_case_read", masked_case_r, 1);
+  put_outcome(f, "root_write", root_w, 1);
+  put_outcome(f, "other_run_write", other_run_w, 1);
   DIR *d = opendir("/sys/class/net");
+  put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
+  fputs("\"interfaces\":[", f);
   int first = 1;
   if (d != NULL) {
     struct dirent *e;
@@ -839,13 +852,14 @@ static int parse_port(const char *s) {
 static void usage(void) {
   fprintf(stderr,
           "usage: relay --forward PORT... -- AGENT ARGV...\n"
-          "       relay --forward PORT --probe OUTSIDE INSIDE DENIED\n");
+          "       relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED "
+          "MASKED_CASE ROOT OTHER_RUN\n");
   exit(EXIT_PROTOCOL);
 }
 
 int main(int argc, char **argv) {
   int i = 1;
-  const char *probe[3];
+  const char *probe[PROBE_ARGS];
   int probing = 0;
   int forward_ports[MAX_FORWARDS], nports = 0;
   while (i < argc) {
@@ -854,12 +868,10 @@ int main(int argc, char **argv) {
       if (p < 0 || nports == MAX_FORWARDS) usage();
       forward_ports[nports++] = p;
       i += 2;
-    } else if (strcmp(argv[i], "--probe") == 0 && i + 3 < argc) {
+    } else if (strcmp(argv[i], "--probe") == 0 && i + PROBE_ARGS < argc) {
       probing = 1;
-      probe[0] = argv[i + 1];
-      probe[1] = argv[i + 2];
-      probe[2] = argv[i + 3];
-      i += 4;
+      for (int k = 0; k < PROBE_ARGS; k++) probe[k] = argv[i + 1 + k];
+      i += 1 + PROBE_ARGS;
     } else if (strcmp(argv[i], "--") == 0) {
       i++;
       break;
