@@ -1,0 +1,76 @@
+# 0014: A virtual machine sandbox
+
+Date: 2026-10-14
+
+## Context
+
+On macOS a sandboxed agent can read the launch-time arguments and environment of every process of the same user that is not an Apple platform binary, through the process-arguments `sysctl` that `ps -E` uses (decision 0010). bactrian keeps provider keys out of its own launch environment and its children's, but the user's other processes (a shell, `tmux`, `direnv`, the `uv run --env-file` that started bactrian) can hold keys in theirs. Seatbelt cannot stop the read. A test program holding a fake secret was still read under each of these profiles: a denial of that `sysctl` by name and by prefix, a denial of every `sysctl-read`, `(deny process-info*)` with and without `(target others)`, a `(deny default)` profile that allowed only exec, file reads, one Mach lookup and one `sysctl` name, and a target signed with the hardened runtime (`codesign -o runtime`). Seatbelt does not mediate that `sysctl` at all.
+
+A dedicated macOS user would hide the other processes, but it means a permanent second account on the user's machine. A Linux virtual machine hides them too, because an agent in a container sees only the container's processes. On macOS every Docker-compatible runtime (OrbStack, Docker Desktop, Podman's machine) and Apple's `container` runs containers in a virtual machine.
+
+The agent must still reach bactrian's model proxy and nothing else. A spike against OrbStack 2.2.1 (Docker 29.4.0) ruled out the obvious ways:
+
+- A host Unix socket bind-mounted into a `--network none` container is visible, but `connect` fails with `ECONNREFUSED`. Host sockets do not cross the virtual machine's boundary through a plain mount.
+- On the default bridge network the container reaches a host server on 127.0.0.1 through `host.docker.internal`, and it also reaches `1.1.1.1`, so egress is open.
+- On a network made with `docker network create --internal` it reaches neither.
+
+No network mode gives "bactrian's proxy only". The container's standard input and output, which every runtime has, does.
+
+## Decision
+
+A new sandbox backend, `vm`, runs the agent in a Linux container with no network. Its standard input and output carry frames between bactrian and a relay that is the container's entrypoint.
+
+**Configuration.** `sandbox: {mode, backend, image, runtime, allow_write, deny_read}`. `backend` is `auto` (the default), `vm`, `seatbelt` (macOS only) or `bubblewrap` (Linux only). `image` names the image the agent runs in, which must hold the agent's runtime (Node, Python), and is required for `vm`. `runtime` is `docker`, and by default the `docker` on `PATH`. `record` and `replay` take `--sandbox-backend` and `--sandbox-image`, and the MCP tools `record_start` and `replay_start` take `sandbox_backend` and `sandbox_image`. `auto` resolves as follows. On Linux it is bubblewrap, as before, and `vm` is used only when named (continuous integration tests it so). On macOS under `strict` it is the virtual machine, and a missing image or runtime stops the command with exit status 69, naming `backend: seatbelt` and what it exposes as the alternative. On macOS under `auto` it is the virtual machine when an image is set and the runtime works, and Seatbelt otherwise, with a warning that names the exposure and how to get the virtual machine. Under `auto` a `vm` that does not work gives way to the host's own sandbox, with a warning. The MCP server's `strict` default therefore needs an image, or `backend: seatbelt`, on macOS.
+
+**The container.** bactrian runs
+
+`docker run --rm -i --name bactrian-RUN --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user UID:GID --tmpfs /tmp --log-driver none --pull never --workdir DIR --env-file agent.env --entrypoint /bactrian/relay --mount ... IMAGE --forward PORT -- AGENT...`
+
+Each flag was checked against Docker's reference, and the behaviour that matters was checked on OrbStack:
+
+- `--rm`, `-i` ("Keep STDIN open even if not attached"), `--name`, `--read-only` ("Mount the container's root filesystem as read only"), `--cap-drop`, `--security-opt no-new-privileges=true` ("Disable container processes from gaining new privileges"), `-u`/`--user` ("Username or UID (format: <name|uid>[:<group|gid>])"), `--tmpfs` (its options are those of `mount -t tmpfs -o`), `-w`/`--workdir`, `--env-file`, `--entrypoint`, `--mount`, `--sig-proxy` (default `true`, "Proxy received signals to the process"), `--pull never` ("produce an error if the image does not exist in the image cache") and `--log-driver none`: [docker container run](https://docs.docker.com/reference/cli/docker/container/run/).
+- `--network none`: "Within the container, only the loopback device is created" ([none network driver](https://docs.docker.com/engine/network/drivers/none/)). Checked: only `lo`, an empty route table, and a connection to `1.1.1.1` fails at once with `ENETUNREACH`.
+- `--mount type=bind,...,readonly`, and `--mount` refusing a source that does not exist where `-v` would create it ([bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)).
+- `--tmpfs PATH:ro,mode=0755` for a directory mask: `ro` "Creates a read-only tmpfs mount" ([tmpfs mounts](https://docs.docker.com/engine/storage/tmpfs/)). That page gives `1777` as a tmpfs's default mode, but on OrbStack a tmpfs mounted over a `0700` directory was `0700` and owned by root, so the agent could not reach its own directories beneath the mask over the runs. The mode is therefore always given.
+- Exit status 125 means the daemon failed, 126 and 127 that the command could not be invoked or found, and the default user is root ([running containers](https://docs.docker.com/engine/containers/run/)). The relay reports the agent's status in a frame of its own, so bactrian does not have to tell those apart from an agent's own exit code.
+- The `--env-file` format is not specified in the reference, so it was read from the client's source ([docker/cli `pkg/kvfile/kvfile.go`](https://github.com/docker/cli/blob/master/pkg/kvfile/kvfile.go)). Each line is `KEY=VALUE` taken as written, with no quoting or escaping. A key holds no whitespace, a value holds no newline, a trailing carriage return is dropped, the file must be valid UTF-8 and a line is at most 64 KiB. bactrian refuses a variable that the format cannot carry.
+
+Docker applies mounts in order of depth, so a mount inside another one is placed after it whatever the order on the command line. Every path is mounted at the same absolute path as on the host, so the agent's command, its arguments and the paths in its environment work unchanged:
+
+- the project root (the directory holding `.bactrian`) read-only
+- the run's state and temporary directories, and the `allow_write` paths, read-write
+- the deny-list, where a mount shows it: `--tmpfs PATH:ro,mode=0755` over a directory (`.bactrian/runs`, then the run's own directories again beneath it, `.bactrian/ca`, each `deny_read` directory) and an empty read-only file over a file (the project's `.env` files, each `deny_read` file)
+
+Nothing else of the host is there. The credential paths under the user's home need no mask unless a mount shows them. A writable path inside a masked directory is left out, so a path inside another run stays hidden. The agent's working directory must lie in one of the mounts. A path holding a comma, a colon or a double quote is refused rather than quoted, because `--mount` values are comma-separated and a `--tmpfs` value ends at its first colon.
+
+The agent's environment is the one bactrian builds for every run, with placeholder keys and never real ones (decision 0010), except `PATH`, so that the image's own applies. It is written to `agent.env` in the run's directory, with mode 0600, and removed when the run ends.
+
+**The relay** (`vm/relay.c`) is a static Linux program and the container's process 1. Frames are `[channel u32 BE][kind u8][length u32 BE][payload]`, at most 64 KiB of payload. Channel 0 carries the agent's standard input and output (`data`, `eof`). For each `--forward PORT` the relay listens on 127.0.0.1:PORT inside the container, which is where the agent's base URLs already point, and each connection it accepts gets a new odd channel: `open` with the port, `data` and `eof` both ways, then `close`. `log` frames carry relay failures in the Linux forwarder's JSON shape, so `Sandbox_log.of_relay_log` reads them and the coverage is `relay-failures-only`. `exit` carries the agent's status (128 plus the signal number after a signal) and is the last frame. The agent's standard error is the container's, unframed. The relay reaps every child, passes SIGTERM and SIGINT to the agent's process group, closes every descriptor above 2 before it starts the agent, and makes itself not dumpable, so the agent, which runs as the same user, can neither trace it nor open its standard output through `/proc/1/fd` to forge frames. Buffers are bounded: a destination that does not drain stops the reading of its source, and room is kept for control frames. A bad frame from bactrian ends the run, and so does the end of the relay's input, which only comes when bactrian is gone.
+
+`--probe OUTSIDE INSIDE DENIED` runs the preflight checks in place of an agent and writes a JSON line on channel 0. A connection to `1.1.1.1:443` must fail at once (a timeout would mean a route that drops packets), a connection through the relay to bactrian's probe listener must succeed, a write outside the writable mounts must fail, a write inside the state directory must succeed, a file under a denied directory must not be readable, and `lo` must be the only network interface.
+
+The relay is built on first use in a container of `alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6` (pushed 2026-09-18) with `gcc -static -O2 -Wall -Wextra -Werror`. That build needs the network once, for Alpine's packages. The binary is cached as `$XDG_CACHE_HOME/bactrian/relay/relay-HASH-ARCH` (default `~/.cache/bactrian/relay/`), where the hash is BLAKE2b of the source and the architecture is the daemon's, so a changed relay is built again. The source is compiled into bactrian, so an installed copy needs no source tree.
+
+**The host side.** The agent driver starts `bactrian __vm-bridge forward=PORT container=NAME -- docker run ...` in place of the agent, as it starts `bwrap` on Linux, so the driver, its process group and its signals are unchanged. The bridge copies the driver's pipes to channel 0, opens each forwarded connection to the same port on the host's loopback (the model proxy, which also serves MCP), and writes `log` frames to the violation log through the same inherited pipe as the Linux forwarder. Its environment is the runtime client's (`PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME` and the `DOCKER_*` variables), never the agent's or bactrian's own. It outlives a SIGTERM to its group: the `docker` client in the same group passes the signal to the relay, which passes it to the agent, and the bridge relays the agent's last output and its status.
+
+Two checks on OrbStack decided the teardown. SIGTERM to `docker run -i` without a terminal reaches the container's process 1, and the client exits with the container's status. SIGKILL to the client leaves the container running, with its standard input still open thirteen seconds later. So when the run's switch ends bactrian always runs `docker rm -f bactrian-RUN` (whose "no such container" is ignored), and the bridge watches its parent and runs the same command when bactrian dies, since a bactrian killed with SIGKILL runs nothing. A `--rm` container that has already gone makes `rm -f` fail harmlessly.
+
+**Other changes.** The label in `meta.json` gains `backend` (`seatbelt`, `bubblewrap` or `vm`) and, for `vm`, `vm: {runtime, image}`. The clock is contract-only with the reason `vm`, because the macOS `libfaketime` cannot load in Linux and bactrian cannot know where an image keeps its own. Each run gets no port of its own (`own_port` is false), because the container reaches nothing but what the relay forwards. The MCP stdio warning does not apply. `doctor` gains a `vm` check (the runtime answers, the experiment's image is present, the relay is built or will be), and it does not look an agent that runs in the image up on the host.
+
+**Checkers** stay on the host's own sandbox, Seatbelt or bubblewrap, because they hold no keys and have no network. An experiment whose agent runs in the virtual machine probes the host's sandbox for its checkers too.
+
+**Not in this phase.**
+
+- Podman. There is no Podman on the machine this was built on, so neither its flags nor its signal proxying, its rootless user mapping and its mounts through `podman machine` were checked. `runtime: podman` is refused as not supported yet.
+- Apple's `container`. Its documentation names no `--network none`, and it is not installed here. `runtime: container` is refused the same way.
+- `libfaketime` inside the image, and `sandbox.allow_read` for paths outside the project. The project is all the container shows.
+
+## Consequences
+
+An agent in the virtual machine sees no host process at all, so the launch-environment read of decision 0010 finds nothing. An acceptance test reads every `/proc/PID/environ` it can see and calls the `sysctl` on a host process holding a sentinel. It sees two processes, both the container's, and finds the sentinel in none of them. The same test under Seatbelt reads the sentinel, and stays as the record of the hole that this backend closes.
+
+Each run is a container. On OrbStack a whole `record` with a small Node agent took about 0.7 seconds in the virtual machine, against 2.7 under Seatbelt, which waits for the system log to settle. The first run builds the relay. The agent must run in an image that holds its runtime and its packages, and its command and files must be inside the project. A Python agent's virtual environment built on macOS cannot run in Linux, so it has to be built for the image (the acceptance test runs `uv sync --locked` in the uv image for that).
+
+What a denied write or read looks like is the agent's own error (`EROFS`, `ENOENT`, `ENETUNREACH`), as on Linux, and the violations are relay failures only.
+
+On macOS the checkers still run under Seatbelt, so a checker can read the launch environment of the user's other processes. A checker gets no network and no keys, so what it reads can only reach its own output, which goes into the run's results. A checker is a command the project names, so this is the trust the project already has.
