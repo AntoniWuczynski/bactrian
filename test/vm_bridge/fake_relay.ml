@@ -4,6 +4,8 @@
    - connect PORT: opens channel 1 to PORT, sends "ping" and its end, and
      writes what came back on channel 0 before exiting 0;
    - log: one log line, then exit 0;
+   - flood PORT N: opens N connections to PORT at once, waits for the bridge
+     to close the last, and exits 0;
    - heartbeat: waits for the bridge's heartbeat, says "beat" on channel 0
      and exits 0;
    - bad: a frame of an unknown kind;
@@ -73,6 +75,16 @@ let () =
                | Data | Eof | Open | Close | Exit | Log -> false))
       in
       send (F.data ~channel:0 "beat" @ [ F.exit 0 ])
+  | [ "flood"; port; n ] ->
+      (* Killed by the alarm, so a bridge that never closes fails the test
+         rather than hanging it. *)
+      ignore (Unix.alarm 10 : int);
+      let n = int_of_string n in
+      send
+        (List.init n (fun i ->
+             F.open_ ~channel:((2 * i) + 1) ~port:(int_of_string port)));
+      let (_ : F.t list) = receive (ended ((2 * n) - 1)) in
+      send [ F.exit 0 ]
   | [ "log" ] ->
       send
         [

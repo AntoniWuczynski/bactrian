@@ -83,6 +83,32 @@ let test_heartbeat () =
   Alcotest.(check int) "status" 0 (code o);
   Alcotest.(check string) "the relay heard it" "beat" o.out
 
+(* No more connections at once than the relay's own limit. *)
+let test_channel_cap () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let listener =
+    Eio.Net.listen ~sw ~backlog:128 ~reuse_addr:true (Eio.Stdenv.net env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port =
+    match Eio.Net.listening_addr listener with `Tcp (_, p) -> p | `Unix _ -> 0
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+      Eio.Net.run_server listener
+        ~on_error:(fun (_ : exn) -> ())
+        (fun _ _ -> Eio.Fiber.await_cancel ()));
+  let o = bridge env ~forwards:[ port ] [ "flood"; string_of_int port; "65" ] in
+  Alcotest.(check int) "status" 0 (code o);
+  Alcotest.(check (list string))
+    "the 65th is refused"
+    [
+      Printf.sprintf
+        {|{"kind":"relay_failed","port":%d,"socket":"host loopback","reason":"too many open connections"}|}
+        port;
+    ]
+    o.logs
+
 let test_log () =
   Eio_main.run @@ fun env ->
   let o = bridge env [ "log" ] in
@@ -148,6 +174,7 @@ let () =
           Alcotest.test_case "connections" `Quick test_connection;
           Alcotest.test_case "log lines" `Quick test_log;
           Alcotest.test_case "heartbeat" `Quick test_heartbeat;
+          Alcotest.test_case "at most 64 connections" `Quick test_channel_cap;
           Alcotest.test_case "relay failures" `Quick test_failures;
           Alcotest.test_case "arguments" `Quick test_parse;
         ] );

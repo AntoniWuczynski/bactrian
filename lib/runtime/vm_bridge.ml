@@ -28,6 +28,10 @@ type conn = {
 
 let queue_limit = 1024 * 1024
 
+(* The relay's MAX_CONNS: a relay that opens more is not the one bactrian
+   built, and each would hold a host connection to the model proxy. *)
+let max_channels = 64
+
 let push c item =
   let n = match item with `Data s -> String.length s | `End -> 0 in
   while c.alive && c.queued > 0 && c.queued + n > queue_limit do
@@ -151,6 +155,10 @@ let demux ~net ~send ~log ~forwards ~stdout source =
             Error (Printf.sprintf "channel %d opened twice" channel)
         | Some port when not (List.mem port forwards) ->
             log (failure_line ~port "the port is not forwarded");
+            send [ Frame.close ~channel ];
+            Ok ()
+        | Some port when Hashtbl.length conns >= max_channels ->
+            log (failure_line ~port "too many open connections");
             send [ Frame.close ~channel ];
             Ok ()
         | Some port ->

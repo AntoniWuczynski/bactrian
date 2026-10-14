@@ -517,6 +517,46 @@ let relay_liveness () =
   Alcotest.(check bool) "soon after it" true (took < timeout +. 20.);
   gone ~within:10. name
 
+(* A relay cache that someone else could have written to is refused, before
+   anything is built. *)
+let relay_cache () =
+  gate [];
+  let base = Filename.concat (Sys.getcwd ()) "tmp-vm-relay-cache" in
+  ignore (Sys.command ("rm -rf " ^ Filename.quote base));
+  let previous = Sys.getenv_opt "XDG_CACHE_HOME" in
+  Unix.putenv "XDG_CACHE_HOME" base;
+  Fun.protect ~finally:(fun () ->
+      Unix.putenv "XDG_CACHE_HOME" (Option.value previous ~default:"");
+      ignore (Sys.command ("rm -rf " ^ Filename.quote base)))
+  @@ fun () ->
+  Eio_main.run @@ fun env ->
+  let process_mgr = Eio.Stdenv.process_mgr env
+  and clock = Eio.Stdenv.clock env in
+  let runtime =
+    match Vm_runtime.detect ~process_mgr ~clock None with
+    | Ok r -> r
+    | Error m -> Alcotest.failf "no runtime: %s" m
+  in
+  let dir = Vm_runtime.relay_cache_dir () in
+  let binary = Filename.concat dir (Vm_runtime.relay_name runtime) in
+  let refused what needle =
+    match Vm_runtime.relay ~process_mgr ~clock runtime with
+    | Ok _ -> Alcotest.failf "%s: the relay was used" what
+    | Error m ->
+        Printf.printf "%s: %s\n" what m;
+        Alcotest.(check bool) what true (contains m needle)
+  in
+  run_or_fail (Printf.sprintf "mkdir -p %s" (Filename.quote dir));
+  Unix.chmod dir 0o777;
+  refused "a directory others can write to" "writable by its group or by others";
+  Unix.chmod dir 0o700;
+  Unix.symlink "/bin/sh" binary;
+  refused "a symbolic link" "is not a regular file";
+  Unix.unlink binary;
+  Out_channel.with_open_gen [ Open_wronly; Open_creat ] 0o600 binary ignore;
+  Unix.chmod binary 0o775;
+  refused "a binary its group can write to" "writable by its group or by others"
+
 (* A container whose bactrian has gone, as the relay of an older bactrian
    would leave it, is removed by the next preflight. *)
 let stale_removed () =
@@ -583,4 +623,6 @@ let () =
           Alcotest.test_case "the relay without heartbeats" `Slow relay_liveness;
           Alcotest.test_case "a stale container" `Slow stale_removed;
         ] );
+      ( "relay cache",
+        [ Alcotest.test_case "an untrusted one" `Slow relay_cache ] );
     ]

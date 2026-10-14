@@ -45,7 +45,8 @@ val run :
     reading of every frame until it does. A host connection that cannot be made
     is closed in the container and reported to [log] as a line
     [{"kind":"relay_failed","port":P,"socket":"host loopback","reason":"R"}],
-    the shape of the Linux forwarder's. *)
+    the shape of the Linux forwarder's. So is an [open] beyond 64 connections at
+    once, the relay's own limit, which is closed at once. *)
 
 type config = {
   forwards : int list;

@@ -200,20 +200,55 @@ let build ~process_mgr ~clock t ~dir ~target =
   Unix.rename (Filename.concat out "relay") target;
   Ok target
 
+(* The relay becomes the container's process 1, so the cache is trusted only as
+   far as this user's own files are: [path] must be what [kind] says (not a
+   symbolic link), owned by this user and writable by no one else. Any process
+   of the user could replace the bactrian executable itself, so a hash of the
+   binary would add nothing. *)
+let owned ~kind ~what path =
+  match Unix.lstat path with
+  | exception Unix.Unix_error (ENOENT, _, _) -> Ok false
+  | st ->
+      if st.st_kind <> kind then
+        Error (Printf.sprintf "%s is not %s (a symbolic link?)" path what)
+      else if st.st_uid <> Unix.getuid () then
+        Error
+          (Printf.sprintf "%s belongs to user %d, not to this user" path
+             st.st_uid)
+      else if st.st_perm land 0o022 <> 0 then
+        Error
+          (Printf.sprintf "%s is writable by its group or by others (mode %o)"
+             path st.st_perm)
+      else Ok true
+
 let relay ~process_mgr ~clock t =
   let dir = relay_cache_dir () in
   let target = Filename.concat dir (relay_name t) in
-  if Proc_util.regular_file target then Ok target
-  else
-    match
-      mkdirs dir;
-      build ~process_mgr ~clock t ~dir ~target
-    with
-    | result -> result
-    | exception ((Unix.Unix_error _ | Sys_error _) as e) ->
-        Error
-          (Printf.sprintf "the relay could not be built in %s: %s" dir
-             (Printexc.to_string e))
+  let untrusted why =
+    Error
+      (Printf.sprintf "the cached relay cannot be trusted: %s. Fix: remove %s"
+         why dir)
+  in
+  match
+    mkdirs dir;
+    match owned ~kind:S_DIR ~what:"a directory" dir with
+    | Error why -> untrusted why
+    | Ok (_ : bool) -> (
+        match owned ~kind:S_REG ~what:"a regular file" target with
+        | Error why -> untrusted why
+        | Ok true -> Ok target
+        | Ok false -> (
+            let* built = build ~process_mgr ~clock t ~dir ~target in
+            match owned ~kind:S_REG ~what:"a regular file" built with
+            | Ok true -> Ok built
+            | Ok false -> untrusted (built ^ " is missing after the build")
+            | Error why -> untrusted why))
+  with
+  | result -> result
+  | exception ((Unix.Unix_error _ | Sys_error _) as e) ->
+      Error
+        (Printf.sprintf "the relay could not be built in %s: %s" dir
+           (Printexc.to_string e))
 
 let label_run = "bactrian.run"
 let label_pid = "bactrian.pid"
@@ -272,6 +307,16 @@ let remove_stale ~process_mgr ~clock t =
               : (string, string) result))
         names;
       names
+
+let relay_cached t =
+  let dir = relay_cache_dir () in
+  match owned ~kind:S_DIR ~what:"a directory" dir with
+  | Error why -> Error why
+  | Ok false -> Ok false
+  | Ok true ->
+      owned ~kind:S_REG ~what:"a regular file"
+        (Filename.concat dir (relay_name t))
+  | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
 
 let remove ~process_mgr ~clock t name =
   ignore

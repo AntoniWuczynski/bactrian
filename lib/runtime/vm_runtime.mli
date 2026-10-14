@@ -59,7 +59,14 @@ val relay :
   (string, string) result
 (** The relay binary for the runtime's architecture: the cached one, or one
     built now in a container of {!build_image} (which needs the network, for
-    Alpine's packages) and cached under {!relay_cache_dir}. *)
+    Alpine's packages) and cached under {!relay_cache_dir}, which is made with
+    mode 0700. The directory and the binary must not be symbolic links, must
+    belong to this user and must not be writable by its group or others
+    ([lstat]): otherwise the relay is refused. *)
+
+val relay_cached : t -> (bool, string) result
+(** Whether the relay for the runtime's architecture is cached, and passes the
+    checks of {!relay}, without building it. *)
 
 val labels : run_id:string -> (string * string) list
 (** The labels of a container bactrian starts: [bactrian.run] (the run's ID),
