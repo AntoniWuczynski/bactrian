@@ -65,12 +65,17 @@ let failure_line ~port reason =
          ("reason", `String reason);
        ])
 
-(* Writes to the relay. The runtime may be gone, which ends every sender. *)
+(* Writes to the relay. The runtime may be gone, and then the frames are
+   dropped: the failed write is caught inside the lock, because an exception
+   out of [use_rw] poisons the mutex for every later sender (the heartbeat
+   among them). *)
 let sender sink =
   let lock = Eio.Mutex.create () in
   fun frames ->
     Eio.Mutex.use_rw ~protect:true lock (fun () ->
-        List.iter (fun f -> Eio.Flow.copy_string (Frame.encode f) sink) frames)
+        try
+          List.iter (fun f -> Eio.Flow.copy_string (Frame.encode f) sink) frames
+        with Eio.Io _ -> ())
 
 let chunk = 16384
 
@@ -103,7 +108,7 @@ let serve_conn ~net ~send ~log ~port ~channel ~forget c =
       in
       try Eio.Fiber.both to_host from_host with Eio.Io _ -> ()));
   forget ();
-  try send [ Frame.close ~channel ] with Eio.Io _ -> ()
+  send [ Frame.close ~channel ]
 
 let serve_conn ~net ~send ~log ~port ~channel ~forget c =
   try serve_conn ~net ~send ~log ~port ~channel ~forget c
@@ -238,7 +243,6 @@ let run ?stderr ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv
       Eio.Resource.close to_relay_r;
       Eio.Resource.close from_relay_w;
       let send = sender to_relay_w in
-      let send frames = try send frames with Eio.Io _ -> () in
       let outcome =
         Eio.Fiber.first
           (fun () -> demux ~net ~send ~log ~forwards ~stdout from_relay_r)
