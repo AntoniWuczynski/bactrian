@@ -321,22 +321,36 @@ let rec watch_parent ~clock parent =
   Eio.Time.sleep clock 1.;
   if Unix.getppid () = parent then watch_parent ~clock parent
 
-(* [RUNTIME ARGS... NAME], whatever its outcome, for at most 30 seconds. *)
+(* [RUNTIME ARGS... NAME] for at most 30 seconds: whether it exited with 0. *)
 let to_container ~clock ~process_mgr ~env config args =
   match config.argv with
   | runtime :: _ -> (
       match
         Eio.Time.with_timeout clock 30. (fun () ->
+            Eio.Switch.run @@ fun sw ->
             Ok
-              (Eio.Process.run process_mgr ~env
-                 ~is_success:(fun (_ : int) -> true)
-                 ~stdout:(Eio.Flow.buffer_sink (Buffer.create 64))
-                 ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
-                 ((runtime :: args) @ [ config.container ])))
+              (Eio.Process.await
+                 (Eio.Process.spawn ~sw process_mgr ~env
+                    ~stdout:(Eio.Flow.buffer_sink (Buffer.create 64))
+                    ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
+                    ((runtime :: args) @ [ config.container ]))))
       with
-      | Ok () | Error `Timeout -> ()
-      | exception Eio.Io _ -> ())
-  | [] -> ()
+      | Ok (`Exited 0) -> true
+      | Ok (`Exited _ | `Signaled _) | Error `Timeout -> false
+      | exception Eio.Io _ -> false)
+  | [] -> false
+
+(* container refuses a signal for a container that has not started yet, as
+   when SIGINT comes while [start] is still attaching. So a refused signal is
+   sent again, every 50 milliseconds for at most half a second. *)
+let rec kill_soon ~clock ~to_container ~tries signal =
+  if
+    (not (to_container [ "kill"; "--signal"; Proc_util.signal_name signal ]))
+    && tries > 1
+  then begin
+    Eio.Time.sleep clock 0.05;
+    kill_soon ~clock ~to_container ~tries:(tries - 1) signal
+  end
 
 let main ~env ~log config =
   (* The bridge outlives a SIGTERM to its group, because the agent's last
@@ -377,7 +391,7 @@ let main ~env ~log config =
           List.iter
             (fun (s, flag) ->
               if Atomic.exchange flag false then
-                to_container [ "kill"; "--signal"; Proc_util.signal_name s ])
+                kill_soon ~clock ~to_container ~tries:10 s)
             flags;
           None)
     else Eio.Fiber.await_cancel ()
@@ -398,7 +412,7 @@ let main ~env ~log config =
   | `Done (Ok code) -> Ok code
   | `Done (Error e) -> Error (describe_error e)
   | `Orphaned ->
-      to_container [ "rm"; "-f" ];
+      let (_ : bool) = to_container [ "rm"; "-f" ] in
       Option.iter
         (fun dir ->
           try Proc_util.remove_tree dir
