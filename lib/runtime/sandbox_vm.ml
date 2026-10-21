@@ -105,6 +105,30 @@ let allow_write_kinds paths =
 
 let staging_dir ~run_dir = Filename.concat run_dir "staging"
 
+(* Who made a staging directory, "PID\tHOST", in a file beside the numbered
+   directories, which no mount shows. *)
+let owner_file ~run_dir = Filename.concat (staging_dir ~run_dir) "owner"
+
+let remove_stale_staging ~runs_dir =
+  match Sys.readdir runs_dir with
+  | exception Sys_error _ -> []
+  | runs ->
+      List.filter_map
+        (fun run ->
+          let run_dir = Filename.concat runs_dir run in
+          match
+            In_channel.with_open_bin (owner_file ~run_dir) In_channel.input_all
+          with
+          | exception Sys_error _ -> None
+          | text -> (
+              match String.split_on_char '\t' (String.trim text) with
+              | [ pid; host ] when Vm_runtime.owner_gone ~pid ~host -> (
+                  match Proc_util.remove_tree (staging_dir ~run_dir) with
+                  | () -> Some (staging_dir ~run_dir)
+                  | exception (Unix.Unix_error _ | Sys_error _) -> None)
+              | _ -> None))
+        (Array.to_list runs)
+
 let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
     ~forwards command =
   let masked =
@@ -200,11 +224,15 @@ let make_stages ~run_dir (stages : Vm_args.stage list) =
   match stages with
   | [] -> Ok ()
   | _ :: _ -> (
-      match Unix.mkdir (staging_dir ~run_dir) 0o700 with
-      | exception Unix.Unix_error (e, _, _) ->
+      match
+        Unix.mkdir (staging_dir ~run_dir) 0o700;
+        write_file ~perm:0o600 (owner_file ~run_dir)
+          (Printf.sprintf "%d\t%s\n" (Unix.getpid ()) (Unix.gethostname ()))
+      with
+      | exception (Unix.Unix_error (_, _, _) | Sys_error _) ->
           Error
-            (Printf.sprintf "the staging directory %s cannot be made: %s"
-               (staging_dir ~run_dir) (Unix.error_message e))
+            (Printf.sprintf "the staging directory %s cannot be made"
+               (staging_dir ~run_dir))
       | () ->
           List.fold_left
             (fun acc s ->
@@ -384,7 +412,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
         ]
         @ (match Vm_runtime.kind t.runtime with
           | `Docker -> []
-          | `Container -> [ "signals=kill" ])
+          | `Container -> [ "signals=kill"; "staging=" ^ staging_dir ~run_dir ])
         @ ("--" :: runtime_argv);
       env = client_env t;
     }

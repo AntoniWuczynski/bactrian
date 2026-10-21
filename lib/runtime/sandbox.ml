@@ -483,6 +483,7 @@ let check_vm ~env settings =
   let* vm = Sandbox_vm.prepare ~env settings.runtime ~image in
   let host = make_host ~env settings (Vm vm) in
   let runs = Filename.concat host.bactrian_dir "runs" in
+  let (_ : string list) = Sandbox_vm.remove_stale_staging ~runs_dir:runs in
   let id = "sandbox-probe-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6) in
   let dir = Filename.concat runs id
   and other = Filename.concat runs (id ^ "-other") in

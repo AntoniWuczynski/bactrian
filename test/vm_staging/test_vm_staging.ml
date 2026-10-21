@@ -78,6 +78,37 @@ let swapped what swap () =
         ((Unix.stat env).st_nlink
         = if String.equal what "a hard link" then 2 else 1)
 
+(* A staging directory whose bactrian has gone is removed by the next
+   preflight, and one of a live bactrian or of another host is kept. *)
+let test_stale () =
+  let runs = Filename.temp_dir "bactrian-runs" "" in
+  Fun.protect ~finally:(fun () -> Proc_util.remove_tree runs) @@ fun () ->
+  let dead =
+    Unix.create_process "true" [| "true" |] Unix.stdin Unix.stdout Unix.stderr
+  in
+  ignore (Unix.waitpid [] dead : int * Unix.process_status);
+  let host = Unix.gethostname () in
+  let owned run text =
+    let staging = Filename.concat (Filename.concat runs run) "staging" in
+    Unix.mkdir (Filename.concat runs run) 0o700;
+    Unix.mkdir staging 0o700;
+    Unix.mkdir (Filename.concat staging "0") 0o755;
+    write (Filename.concat staging "owner") text;
+    staging
+  in
+  let gone = owned "gone" (Printf.sprintf "%d\t%s\n" dead host)
+  and live = owned "live" (Printf.sprintf "%d\t%s\n" (Unix.getpid ()) host)
+  and elsewhere =
+    owned "elsewhere" (Printf.sprintf "%d\t%s-other\n" dead host)
+  in
+  Unix.mkdir (Filename.concat runs "plain") 0o700;
+  Alcotest.(check (list string))
+    "removed" [ gone ]
+    (Sandbox_vm.remove_stale_staging ~runs_dir:runs);
+  Alcotest.(check (list bool))
+    "what is left" [ false; true; true ]
+    (List.map Sys.file_exists [ gone; live; elsewhere ])
+
 let () =
   Alcotest.run "vm_staging"
     [
@@ -89,5 +120,6 @@ let () =
                  Unix.symlink env notes));
           Alcotest.test_case "swapped for a hard link" `Quick
             (swapped "a hard link" (fun ~env ~notes -> Unix.link env notes));
+          Alcotest.test_case "stale staging" `Quick test_stale;
         ] );
     ]

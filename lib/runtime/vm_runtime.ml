@@ -369,14 +369,15 @@ let alive pid =
   | exception Unix.Unix_error (ESRCH, _, _) -> false
   | exception Unix.Unix_error _ -> true
 
-(* A container of this host whose bactrian has gone. *)
-let stale ~name ~pid ~host =
-  String.starts_with ~prefix:"bactrian-" name
-  &&
+let owner_gone ~pid ~host =
   match int_of_string_opt pid with
   | Some pid ->
       pid > 0 && String.equal host (Unix.gethostname ()) && not (alive pid)
   | None -> false
+
+(* A container of this host whose bactrian has gone. *)
+let stale ~name ~pid ~host =
+  String.starts_with ~prefix:"bactrian-" name && owner_gone ~pid ~host
 
 (* Each container that carries the labels, as (name, pid, host). *)
 let labelled ~process_mgr ~clock t =

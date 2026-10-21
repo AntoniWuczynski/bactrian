@@ -450,6 +450,9 @@ let with_record ~name agent f =
   Fun.protect ~finally:(fun () ->
       ignore (Sys.command ("rm -rf " ^ Filename.quote dir)))
   @@ fun () ->
+  (* A hidden file, so that container stages the project's directory. *)
+  Out_channel.with_open_bin (Filename.concat dir ".env") (fun oc ->
+      output_string oc "OPENAI_API_KEY=sk-masked-file\n");
   let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
   let pid =
     Fun.protect ~finally:(fun () -> Unix.close null) @@ fun () ->
@@ -517,6 +520,19 @@ let teardown ~signal () =
     [ "sh"; "-c"; hung_agent ]
   @@ fun ~dir ~pid ->
   let name = started ~dir in
+  (* bactrian removes container's staging directory itself, or after a
+     SIGKILL the bridge does. *)
+  let staging =
+    String.concat "/"
+      [
+        dir;
+        ".bactrian/runs";
+        String.sub name 9 (String.length name - 9);
+        "staging";
+      ]
+  in
+  Alcotest.(check bool)
+    "staged" (vm_runtime = `Container) (Sys.file_exists staging);
   Unix.kill pid signal;
   (match wait_exit pid with
   | WEXITED n when signal = Sys.sigint ->
@@ -524,7 +540,11 @@ let teardown ~signal () =
   | WEXITED n -> Alcotest.failf "exit %d" n
   | WSIGNALED n when n = signal -> ()
   | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
-  gone ~within:30. name
+  gone ~within:30. name;
+  until
+    ~deadline:(Unix.gettimeofday () +. 10.)
+    "the staging directory is gone"
+    (fun () -> not (Sys.file_exists staging))
 
 (* The process ID of [pid]'s one child whose command holds [word]. *)
 let child_of pid word =

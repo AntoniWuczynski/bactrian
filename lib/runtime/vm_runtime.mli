@@ -101,6 +101,11 @@ val labels : run_id:string -> (string * string) list
 (** The labels of a container bactrian starts: [bactrian.run] (the run's ID),
     [bactrian.pid] (this process) and [bactrian.host] (this host's name). *)
 
+val owner_gone : pid:string -> host:string -> bool
+(** Whether [pid] (a process ID, as {!labels} write it) is of this host ([host])
+    and no longer alive, checked by the process ID alone ([kill -0]). A process
+    ID reused since is taken for alive. *)
+
 val remove_stale :
   process_mgr:_ Eio.Process.mgr -> clock:_ Eio.Time.clock -> t -> string list
 (** Removes every container named [bactrian-...] that carries {!labels} of this

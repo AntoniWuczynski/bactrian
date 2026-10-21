@@ -55,13 +55,16 @@ type config = {
       (** Whether the bridge sends SIGTERM and SIGINT to the container itself,
           with [RUNTIME kill --signal SIGNAL NAME], because the runtime's client
           does not pass them on (container 1.5.0). *)
+  staging : string option;
+      (** The run's staging directory (an absolute path ending in [staging]),
+          removed with the container when bactrian has gone. *)
   argv : string list;  (** The runtime's [run] command. Non-empty. *)
 }
 
 val parse : string list -> (config, string) result
 (** The arguments of [__vm-bridge]: [forward=PORT]..., [container=NAME],
-    [signals=kill] for {!field-kill_signals}, then [--] and the runtime's
-    command. *)
+    [signals=kill] for {!field-kill_signals}, [staging=DIR] for
+    {!field-staging}, then [--] and the runtime's command. *)
 
 val main :
   env:Eio_unix.Stdenv.base ->
@@ -78,4 +81,4 @@ val main :
     with [kill_signals] the bridge sends them to the container), and the bridge
     relays until the agent has gone. When its parent dies (bactrian killed with
     SIGKILL) it stops the container with [rm -f], which the runtime's client
-    alone would leave running. *)
+    alone would leave running, and removes [staging]. *)

@@ -136,10 +136,11 @@ let test_parse () =
     match Vm_bridge.parse args with
     | Ok c ->
         Ok
-          (Printf.sprintf "%s %s%s %s"
+          (Printf.sprintf "%s %s%s%s %s"
              (String.concat "," (List.map string_of_int c.forwards))
              c.container
              (if c.kill_signals then " (kill)" else "")
+             (Option.fold ~none:"" ~some:(fun d -> " (" ^ d ^ ")") c.staging)
              (String.concat " " c.argv))
     | Error m -> Error m
   in
@@ -159,12 +160,15 @@ let test_parse () =
        ]);
   Alcotest.(check (result string string))
     "signals sent by the bridge"
-    (Ok "4242 bactrian-r1 (kill) container start -a -i bactrian-r1")
+    (Ok
+       "4242 bactrian-r1 (kill) (/p/.bactrian/runs/r1/staging) container start \
+        -a -i bactrian-r1")
     (parsed
        [
          "forward=4242";
          "container=bactrian-r1";
          "signals=kill";
+         "staging=/p/.bactrian/runs/r1/staging";
          "--";
          "container";
          "start";
@@ -172,6 +176,10 @@ let test_parse () =
          "-i";
          "bactrian-r1";
        ]);
+  Alcotest.(check (result string string))
+    "a staging directory that is not one"
+    (Error {|unexpected argument "staging=/p/notes"|})
+    (parsed [ "staging=/p/notes"; "container=c"; "--"; "container" ]);
   Alcotest.(check (result string string))
     "another signals word" (Error {|unexpected argument "signals=pass"|})
     (parsed [ "signals=pass"; "container=c"; "--"; "container" ]);

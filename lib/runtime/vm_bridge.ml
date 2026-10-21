@@ -265,6 +265,7 @@ type config = {
   forwards : int list;
   container : string;
   kill_signals : bool;
+  staging : string option;
   argv : string list;
 }
 
@@ -278,27 +279,43 @@ let parse args =
            (String.length a - String.length prefix))
     else None
   in
-  let rec go forwards container kill_signals = function
-    | "--" :: (_ :: _ as argv) -> (
-        match container with
-        | Some container ->
-            Ok { forwards = List.rev forwards; container; kill_signals; argv }
-        | None -> Error "missing container=NAME")
+  (* [c.container] stays empty until a container= word names it. *)
+  let rec go c = function
+    | "--" :: (_ :: _ as argv) ->
+        if String.equal c.container "" then Error "missing container=NAME"
+        else Ok { c with forwards = List.rev c.forwards; argv }
     | [ "--" ] | [] -> Error "missing -- and the runtime's command"
-    | "signals=kill" :: rest -> go forwards container true rest
+    | "signals=kill" :: rest -> go { c with kill_signals = true } rest
     | a :: rest -> (
-        match (value ~prefix:"forward=" a, value ~prefix:"container=" a) with
-        | Some p, _ -> (
+        match
+          ( value ~prefix:"forward=" a,
+            value ~prefix:"container=" a,
+            value ~prefix:"staging=" a )
+        with
+        | Some p, _, _ -> (
             match int_of_string_opt p with
             | Some port when port >= 1 && port <= 65535 ->
-                go (port :: forwards) container kill_signals rest
+                go { c with forwards = port :: c.forwards } rest
             | Some _ | None -> Error (Printf.sprintf "%S is not a port" p))
-        | None, Some name when not (String.equal name "") ->
-            go forwards (Some name) kill_signals rest
-        | None, (Some _ | None) ->
+        | None, Some name, _ when not (String.equal name "") ->
+            go { c with container = name } rest
+        (* Only a run's own staging directory, which the bridge removes. *)
+        | None, None, Some dir
+          when (not (Filename.is_relative dir))
+               && String.equal (Filename.basename dir) "staging" ->
+            go { c with staging = Some dir } rest
+        | None, (Some _ | None), (Some _ | None) ->
             Error (Printf.sprintf "unexpected argument %S" a))
   in
-  go [] None false args
+  go
+    {
+      forwards = [];
+      container = "";
+      kill_signals = false;
+      staging = None;
+      argv = [];
+    }
+    args
 
 let rec watch_parent ~clock parent =
   Eio.Time.sleep clock 1.;
@@ -382,4 +399,9 @@ let main ~env ~log config =
   | `Done (Error e) -> Error (describe_error e)
   | `Orphaned ->
       to_container [ "rm"; "-f" ];
+      Option.iter
+        (fun dir ->
+          try Proc_util.remove_tree dir
+          with Unix.Unix_error _ | Sys_error _ -> ())
+        config.staging;
       Error "bactrian has gone, so the container was removed"

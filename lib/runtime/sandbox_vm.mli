@@ -54,18 +54,26 @@ val probe :
     directory, and [masked] a file, of [layout.deny]. The container is removed
     after. *)
 
+val remove_stale_staging : runs_dir:string -> string list
+(** Removes the staging directory of each run under [runs_dir] whose bactrian,
+    as the directory records it, is of this host and no longer alive
+    ({!Vm_runtime.owner_gone}): one a bactrian killed with SIGKILL left behind.
+    Gives the directories removed. *)
+
 val make_stages :
   run_dir:string -> Bactrian_core.Vm_args.stage list -> (unit, string) result
-(** Makes container's staging directories under [run_dir]. Each hard link is
-    made without following a symbolic link and must be the file the listing saw
-    (device and inode), or the staging stops with [Error] and that link is
-    removed. The caller removes the rest. *)
+(** Makes container's staging directories under [run_dir], with a record of this
+    process and host for {!remove_stale_staging}. Each hard link is made without
+    following a symbolic link and must be the file the listing saw (device and
+    inode), or the staging stops with [Error] and that link is removed. The
+    caller removes the rest. *)
 
 type session = {
   argv : string list;
       (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...],
           or for container
-          [... container=NAME signals=kill -- container start -a -i NAME]. *)
+          [... container=NAME signals=kill staging=DIR -- container start -a -i
+           NAME]. *)
   env : (string * string) list;  (** The bridge's whole environment. *)
 }
 
@@ -90,4 +98,6 @@ val start :
     ({!Bactrian_core.Vm_args.stage}) under [run_dir], creates the container and
     checks its image ({!image_id}). When [sw] ends the container is removed,
     even if the bridge was killed, and so are [agent.env] and the staging
-    directories. *)
+    directories. If bactrian is killed instead, the bridge removes the container
+    and the staging directories, and if the bridge is killed too, the next
+    preflight does ({!Vm_runtime.remove_stale}, {!remove_stale_staging}). *)
