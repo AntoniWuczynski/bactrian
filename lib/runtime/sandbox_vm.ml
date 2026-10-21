@@ -10,6 +10,7 @@ type t = {
 }
 
 let runtime_name t = Vm_runtime.name t.runtime
+let kind t = Vm_runtime.kind t.runtime
 let image t = t.image
 let image_id t = t.image_id
 let ( let* ) = Result.bind

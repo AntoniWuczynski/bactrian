@@ -471,8 +471,9 @@ let vm_layout ?(extra = []) ?(read_only = []) (host : host) : Sandbox_vm.layout
 
 (* The probe runs as a run would, with its directories under .bactrian/runs,
    a masked directory and a masked file in its state directory, and another
-   run beside it. The masked file's directory is shown read-only, as container
-   requires of every directory holding a masked file. *)
+   run beside it. Under container the masked file's directory is shown
+   read-only, as container requires of every directory holding a masked file.
+   Docker's stays writable, as a run's may be. *)
 let check_vm ~env settings =
   let* image =
     Option.to_result settings.image
@@ -512,7 +513,10 @@ let check_vm ~env settings =
     Sandbox_vm.probe ~env vm
       (vm_layout
          ~extra:[ resolved denied_dir; resolved masked ]
-         ~read_only:[ resolved mask_dir ]
+         ~read_only:
+           (match Sandbox_vm.kind vm with
+           | `Docker -> []
+           | `Container -> [ resolved mask_dir ])
          host)
       ~dir
       {

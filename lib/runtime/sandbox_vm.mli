@@ -7,6 +7,7 @@ type t
     runtime's architecture. *)
 
 val runtime_name : t -> string
+val kind : t -> Bactrian_core.Experiment.sandbox_runtime
 
 val image : t -> string
 (** The image as configured. *)
@@ -33,7 +34,7 @@ type layout = {
       (** Resolved; those that do not exist are skipped. *)
   read_only : string list;
       (** Directories in the run's own that are shown read-only (the probe's
-          directory of a masked file, which container requires). *)
+          directory of a masked file under container, which requires it). *)
   deny : (string * Bactrian_core.Sandbox_policy.kind) list;
       (** The deny-list with what is at each path. *)
 }
