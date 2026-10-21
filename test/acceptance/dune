@@ -69,8 +69,9 @@
    %{exe:../../bin/main.exe}
    (run %{exe:test_launch_env_outside.exe}))))
 
-; The virtual machine sandbox, on a Docker-compatible runtime. Skipped without
-; one, unless BACTRIAN_REQUIRE_VM is 1. Needs the network once, for the images,
+; The virtual machine sandbox, on docker, or on Apple's container when
+; BACTRIAN_VM_RUNTIME is container. Skipped without the runtime, unless
+; BACTRIAN_REQUIRE_VM is 1. Needs the network once, for the images,
 ; the relay's build and the Python agent's packages.
 
 (rule
@@ -83,7 +84,8 @@
   ../sandbox/escape.mts
   ../sandbox/escape.py
   (source_tree ../fixtures/protocols/openai_chat)
-  (env_var BACTRIAN_REQUIRE_VM))
+  (env_var BACTRIAN_REQUIRE_VM)
+  (env_var BACTRIAN_VM_RUNTIME))
  (action
   (setenv
    BACTRIAN_EXE

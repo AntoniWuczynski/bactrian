@@ -38,6 +38,12 @@ val executable : string -> string
 val sandbox_available : bool
 val sandbox_flag : string
 
+val vm_runtime : Bactrian_core.Experiment.sandbox_runtime
+(** The runtime of the virtual machine worlds: [BACTRIAN_VM_RUNTIME] ([docker]
+    or [container]), [docker] when it is unset. *)
+
+val vm_runtime_name : string
+
 type world = {
   env : Eio_unix.Stdenv.base;
   up : F.t;

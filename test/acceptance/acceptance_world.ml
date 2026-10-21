@@ -136,6 +136,16 @@ let sandbox_flag =
     | `Bubblewrap -> "bubblewrap"
   else "off"
 
+let vm_runtime_name =
+  Option.value (Sys.getenv_opt "BACTRIAN_VM_RUNTIME") ~default:"docker"
+
+let vm_runtime =
+  match
+    List.assoc_opt vm_runtime_name Bactrian_core.Experiment.sandbox_runtimes
+  with
+  | Some r -> r
+  | None -> failwith "BACTRIAN_VM_RUNTIME is neither docker nor container"
+
 (* With [vm], the virtual machine sandbox running that image. *)
 let sandbox ?vm ~env ~dir ~deny_read () =
   if Option.is_none vm && not sandbox_available then Sandbox.off
@@ -150,7 +160,7 @@ let sandbox ?vm ~env ~dir ~deny_read () =
             | Some _ -> `Vm
             | None -> (Sandbox.host_backend () :> Sandbox.backend));
           image = vm;
-          runtime = None;
+          runtime = Option.map (fun (_ : string) -> vm_runtime) vm;
           allow_write = [];
           deny_read;
           bactrian_exe = executable "BACTRIAN_EXE";
@@ -184,12 +194,13 @@ let check_sandboxed w (r : Run.result) =
     r.sandbox.applied;
   if w.vm then
     match r.sandbox.backend with
-    | Some (Vm_backend { image_id; _ }) ->
+    | Some (Vm_backend { image_id; runtime; _ }) ->
         (* The image that ran, not the reference it was named by. *)
         Alcotest.(check bool)
           "labelled with the image's ID" true
           (String.starts_with ~prefix:"sha256:" image_id
-          && String.length image_id = 71)
+          && String.length image_id = 71);
+        Alcotest.(check string) "the runtime" vm_runtime_name runtime
     | Some (Seatbelt_backend | Bubblewrap_backend) | None ->
         Alcotest.fail "the run was not in the virtual machine"
 
