@@ -55,8 +55,8 @@ val create :
   t ->
   string list ->
   (unit, string) result
-(** Runs container's [create] command ({!Bactrian_core.Vm_args.argv}). Gives up
-    after 120 seconds. *)
+(** Runs container's [create] command ({!Bactrian_core.Vm_args.val-argv}). Gives
+    up after 120 seconds. *)
 
 val created_image :
   process_mgr:_ Eio.Process.mgr ->

@@ -35,9 +35,9 @@ val run :
   string list ->
   (int, error) result
 (** [run ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv] runs
-    [argv] (the runtime's [run] command, see {!Bactrian_core.Vm_args.argv}) with
-    environment [env] and relays until the runtime exits, sending the relay a
-    heartbeat every {!Bactrian_core.Vm_frame.heartbeat_interval} seconds. The
+    [argv] (the runtime's [run] command, see {!Bactrian_core.Vm_args.val-argv})
+    with environment [env] and relays until the runtime exits, sending the relay
+    a heartbeat every {!Bactrian_core.Vm_frame.heartbeat_interval} seconds. The
     result is the agent's exit code from the relay's [exit] frame: its status,
     or 128 plus the signal number. [stderr] defaults to bactrian's own.
 
