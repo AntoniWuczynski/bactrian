@@ -3,7 +3,7 @@
 open Bactrian_core
 
 let good =
-  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","interfaces_listed":"ok","interfaces":["lo"]}|}
+  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|}
 
 let judged ?(runtime = `Docker) line =
   match Vm_probe.of_line line with
@@ -58,7 +58,7 @@ let test_judge () =
          "a read of a denied file succeeded";
        ])
     (judged
-       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","interfaces_listed":"ok","interfaces":["lo"]}|});
+       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|});
   Alcotest.check wrong "a masked file read under another name"
     (Error
        [ "a read of a masked file under its name in another case succeeded" ])
@@ -66,6 +66,13 @@ let test_judge () =
   Alcotest.check wrong "an empty file over a masked file is a surprise"
     (Error [ "a read of a masked file failed with empty instead of ENOENT" ])
     (judged (with_field "masked_read" (`String "empty")));
+  Alcotest.check wrong "privileges that can be gained"
+    (Error
+       [
+         "no_new_privs is not set for the agent (off), so a set-user-ID \
+          program could raise its privileges";
+       ])
+    (judged (with_field "no_new_privs" (`String "off")));
   Alcotest.check wrong "a writable root" (Error [ "a write to / succeeded" ])
     (judged (with_field "root_write" (`String "ok")));
   Alcotest.check wrong "another run visible"

@@ -19,7 +19,9 @@
    takes bactrian for dead (the runtime's client can outlive it and keep the
    input open), kills the agent's group and exits. It makes
    itself not dumpable, so the agent (the same user) can neither trace it nor
-   open its descriptors through /proc/1/fd and write frames of its own. Memory
+   open its descriptors through /proc/1/fd and write frames of its own. It
+   sets no_new_privs, which the agent inherits, so no program the agent runs
+   gains privileges through a set-user-ID or set-group-ID bit. Memory
    is bounded: a destination that does not drain stops the reading of its
    source.
 
@@ -30,7 +32,8 @@
    The probe form runs the sandbox checks instead of an agent and writes one
    JSON line on channel 0: the outcome of a connection to a public address and
    to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
-   reading DENIED, MASKED and MASKED_CASE, and the network interfaces. */
+   reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
+   no_new_privs is set. */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -814,6 +817,22 @@ static const char *probe_create(const char *path) {
   return NULL;
 }
 
+/* NULL when /proc/self/status says NoNewPrivs is 1. */
+static const char *probe_no_new_privs(void) {
+  FILE *s = fopen("/proc/self/status", "re");
+  if (s == NULL) return errno_name(errno);
+  char line[256];
+  const char *res = "off";
+  while (fgets(line, sizeof line, s) != NULL) {
+    if (strncmp(line, "NoNewPrivs:", 11) == 0) {
+      if (strtol(line + 11, NULL, 10) == 1) res = NULL;
+      break;
+    }
+  }
+  fclose(s);
+  return res;
+}
+
 static const char *probe_read(const char *path) {
   int fd = open(path, O_RDONLY | O_CLOEXEC);
   if (fd < 0) return errno_name(errno);
@@ -841,6 +860,7 @@ static int run_probe(int port, const char **paths) {
   const char *masked_case_r = probe_read(paths[4]);
   const char *root_w = probe_create(paths[5]);
   const char *other_run_w = probe_create(paths[6]);
+  const char *no_new_privs = probe_no_new_privs();
   FILE *f = stdout;
   fputc('{', f);
   put_outcome(f, "public", public_, 1);
@@ -852,6 +872,7 @@ static int run_probe(int port, const char **paths) {
   put_outcome(f, "masked_case_read", masked_case_r, 1);
   put_outcome(f, "root_write", root_w, 1);
   put_outcome(f, "other_run_write", other_run_w, 1);
+  put_outcome(f, "no_new_privs", no_new_privs, 1);
   DIR *d = opendir("/sys/class/net");
   put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
   fputs("\"interfaces\":[", f);
@@ -914,6 +935,8 @@ int main(int argc, char **argv) {
   if (probing ? (nports != 1 || i < argc) : i >= argc) usage();
   /* exec makes the agent dumpable again: this holds for the relay alone. */
   if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) < 0) die("prctl");
+  /* Inherited across fork and exec: the agent cannot gain privileges. */
+  if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) die("prctl");
   set_nonblock(0);
   set_nonblock(1);
   buf_init(&out, OUT_CAP);

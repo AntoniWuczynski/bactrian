@@ -20,6 +20,9 @@ type report = {
       (** Reading the masked file under its name in another case. *)
   root_write : outcome;  (** Creating a file in [/]. *)
   other_run_write : outcome;  (** Creating a file in another run's directory. *)
+  no_new_privs : outcome;
+      (** Whether [NoNewPrivs] is 1 in [/proc/self/status], so no program the
+          agent runs gains privileges. [Error "off"] when it is 0. *)
   interfaces_listed : outcome;  (** Listing [/sys/class/net]. *)
   interfaces : string list;  (** The container's network interfaces. *)
 }
@@ -39,9 +42,10 @@ val checks :
 val judge : Experiment.sandbox_runtime -> report -> (unit, string list) result
 (** Every check with the wrong result, described. The interfaces must have been
     listed and be [lo] alone, and the public connection must fail at once rather
-    than time out, which would mean a route that drops packets. Reads of the
-    masked file under either name and the write into another run must fail with
-    [ENOENT], the write to [/] with [EROFS], and the write outside the state
-    directory, which is under a mask, with [EROFS] for Docker (a read-only
-    tmpfs) and [EACCES] for container (a tmpfs only root can write to): another
-    error is a surprise, so it fails the probe too. *)
+    than time out, which would mean a route that drops packets, and
+    [no_new_privs] must be set. Reads of the masked file under either name and
+    the write into another run must fail with [ENOENT], the write to [/] with
+    [EROFS], and the write outside the state directory, which is under a mask,
+    with [EROFS] for Docker (a read-only tmpfs) and [EACCES] for container (a
+    tmpfs only root can write to): another error is a surprise, so it fails the
+    probe too. *)

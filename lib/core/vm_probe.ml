@@ -10,6 +10,7 @@ type report = {
   masked_case_read : outcome;
   root_write : outcome;
   other_run_write : outcome;
+  no_new_privs : outcome;
   interfaces_listed : outcome;
   interfaces : string list;
 }
@@ -24,6 +25,7 @@ type wire = {
   masked_case_read : string;
   root_write : string;
   other_run_write : string;
+  no_new_privs : string;
   interfaces_listed : string;
   interfaces : string list;
 }
@@ -47,6 +49,7 @@ let of_line line =
             masked_case_read = of_word w.masked_case_read;
             root_write = of_word w.root_write;
             other_run_write = of_word w.other_run_write;
+            no_new_privs = of_word w.no_new_privs;
             interfaces_listed = of_word w.interfaces_listed;
             interfaces = w.interfaces;
           })
@@ -101,8 +104,19 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
     | Error e ->
         [ Printf.sprintf "%s failed with %s instead of %s" what e expected ]
   in
+  let no_new_privs =
+    match r.no_new_privs with
+    | Ok () -> []
+    | Error e ->
+        [
+          Printf.sprintf
+            "no_new_privs is not set for the agent (%s), so a set-user-ID \
+             program could raise its privileges"
+            e;
+        ]
+  in
   match
-    public @ interfaces
+    public @ interfaces @ no_new_privs
     @ fails_with "a read of a masked file" "ENOENT" r.masked_read
     @ fails_with "a read of a masked file under its name in another case"
         "ENOENT" r.masked_case_read
