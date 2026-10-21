@@ -589,13 +589,14 @@ let preflight ?(seatbelt_hint = true) ~env ~warn settings =
                 ("sandbox: strict on macOS runs the agent in a virtual \
                   machine, and sandbox.image is not set. Fix: set \
                   sandbox.image to an image that holds the agent's runtime and \
-                  run OrbStack or Docker Desktop" ^ seatbelt_fix)
+                  run OrbStack, Docker Desktop or Apple's container"
+               ^ seatbelt_fix)
           | None, `Auto ->
               warn
                 ("sandbox: auto: the agent runs under Seatbelt, where "
                ^ exposure
-               ^ ". Fix: set sandbox.image and run OrbStack or Docker Desktop \
-                  to run it in a virtual machine"
+               ^ ". Fix: set sandbox.image and run OrbStack, Docker Desktop or \
+                  Apple's container to run it in a virtual machine"
                 ^
                 if seatbelt_hint then
                   ", or set sandbox.backend: seatbelt to accept this"
