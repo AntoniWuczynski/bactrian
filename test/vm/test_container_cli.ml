@@ -85,12 +85,19 @@ let test_listing () =
         (List.map (fun (c : Container_cli.listed) -> (c.id, c.labels)) cs)
   | Error m -> Alcotest.failf "list: %s" m
 
-let test_bad_labels () =
+let test_bad_entries () =
+  let ids text =
+    Result.map
+      (List.map (fun (c : Container_cli.listed) -> c.id))
+      (Container_cli.containers text)
+  in
+  Alcotest.(check (result (list string) string))
+    "only the entries that decode" (Ok [ "bactrian-r1" ])
+    (ids
+       {|[{"configuration":{"id":"x","labels":{"bactrian.pid":1}}},{"configuration":{"labels":{}}},{"configuration":{"id":"bactrian-r1","labels":{}}}]|});
   Alcotest.(check bool)
-    "a label that is not a string" true
-    (Result.is_error
-       (Container_cli.containers
-          {|[{"configuration":{"id":"x","labels":{"bactrian.pid":1}}}]|}))
+    "not a list" true
+    (Result.is_error (Container_cli.containers {|{"configuration":{}}|}))
 
 let () =
   Alcotest.run "container_cli"
@@ -100,6 +107,7 @@ let () =
           Alcotest.test_case "system status" `Quick test_status;
           Alcotest.test_case "digests" `Quick test_digests;
           Alcotest.test_case "list" `Quick test_listing;
-          Alcotest.test_case "labels" `Quick test_bad_labels;
+          Alcotest.test_case "entries that do not decode" `Quick
+            test_bad_entries;
         ] );
     ]

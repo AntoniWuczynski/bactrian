@@ -28,4 +28,5 @@ type listed = {
 
 val containers : string -> (listed list, string) result
 (** [container list --all --format json]: each container's name
-    ([configuration.id]) and labels ([configuration.labels]). *)
+    ([configuration.id]) and labels ([configuration.labels]). An entry without
+    them, or with labels that are not strings, is left out. *)

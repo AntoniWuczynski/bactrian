@@ -90,16 +90,26 @@ module Listed = struct
 
   type t = { configuration : configuration }
   [@@deriving of_yojson { strict = false }]
-
-  type many = t list [@@deriving of_yojson]
 end
 
 type listed = { id : string; labels : (string * string) list }
 
+(* One by one, so a container of another tool that does not decode is left
+   out alone. *)
 let containers text =
-  let* listed = parse text Listed.many_of_yojson in
-  Ok
-    (List.map
-       (fun (l : Listed.t) ->
-         { id = l.configuration.id; labels = l.configuration.labels })
-       listed)
+  parse text (function
+    | `List items ->
+        Ok
+          (List.filter_map
+             (fun item ->
+               match Listed.of_yojson item with
+               | Ok (l : Listed.t) ->
+                   Some
+                     {
+                       id = l.configuration.id;
+                       labels = l.configuration.labels;
+                     }
+               | Error (_ : string) -> None)
+             items)
+    | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `Assoc _ ->
+        Error "container list: expected a list")
