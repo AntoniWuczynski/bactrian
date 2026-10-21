@@ -261,7 +261,12 @@ let run ?stderr ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv
       | Ok (Some code) -> Ok code
       | Ok None -> Error (No_exit status))
 
-type config = { forwards : int list; container : string; argv : string list }
+type config = {
+  forwards : int list;
+  container : string;
+  kill_signals : bool;
+  argv : string list;
+}
 
 (* Words rather than options, which the command-line parser would take for
    bactrian's own. *)
@@ -273,44 +278,72 @@ let parse args =
            (String.length a - String.length prefix))
     else None
   in
-  let rec go forwards container = function
+  let rec go forwards container kill_signals = function
     | "--" :: (_ :: _ as argv) -> (
         match container with
-        | Some container -> Ok { forwards = List.rev forwards; container; argv }
+        | Some container ->
+            Ok { forwards = List.rev forwards; container; kill_signals; argv }
         | None -> Error "missing container=NAME")
     | [ "--" ] | [] -> Error "missing -- and the runtime's command"
+    | "signals=kill" :: rest -> go forwards container true rest
     | a :: rest -> (
         match (value ~prefix:"forward=" a, value ~prefix:"container=" a) with
         | Some p, _ -> (
             match int_of_string_opt p with
             | Some port when port >= 1 && port <= 65535 ->
-                go (port :: forwards) container rest
+                go (port :: forwards) container kill_signals rest
             | Some _ | None -> Error (Printf.sprintf "%S is not a port" p))
         | None, Some name when not (String.equal name "") ->
-            go forwards (Some name) rest
+            go forwards (Some name) kill_signals rest
         | None, (Some _ | None) ->
             Error (Printf.sprintf "unexpected argument %S" a))
   in
-  go [] None args
-
-(* The bridge outlives a SIGTERM to its group: the runtime's client gets it
-   too and passes it on, and the agent's last output still has to come
-   through. A handler, unlike ignoring, is reset by exec in the client. *)
-let keep_running () =
-  List.iter
-    (fun s -> Sys.set_signal s (Signal_handle (fun (_ : int) -> ())))
-    Interrupt.signals
+  go [] None false args
 
 let rec watch_parent ~clock parent =
   Eio.Time.sleep clock 1.;
   if Unix.getppid () = parent then watch_parent ~clock parent
 
+(* [RUNTIME ARGS... NAME], whatever its outcome, for at most 30 seconds. *)
+let to_container ~clock ~process_mgr ~env config args =
+  match config.argv with
+  | runtime :: _ -> (
+      match
+        Eio.Time.with_timeout clock 30. (fun () ->
+            Ok
+              (Eio.Process.run process_mgr ~env
+                 ~is_success:(fun (_ : int) -> true)
+                 ~stdout:(Eio.Flow.buffer_sink (Buffer.create 64))
+                 ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
+                 ((runtime :: args) @ [ config.container ])))
+      with
+      | Ok () | Error `Timeout -> ()
+      | exception Eio.Io _ -> ())
+  | [] -> ()
+
 let main ~env ~log config =
-  keep_running ();
+  (* The bridge outlives a SIGTERM to its group, because the agent's last
+     output still has to come through. The runtime's client gets the signal
+     too: docker's passes it on to the relay and so to the agent. container's
+     cannot (version 1.5.0 sends the signal in a form its own service refuses),
+     so with [kill_signals] the bridge sends it through [RUNTIME kill]. A
+     handler, unlike ignoring, is reset by exec in the client, and may only set
+     a flag and broadcast. *)
+  let arrived = Eio.Condition.create () in
+  let flags = List.map (fun s -> (s, Atomic.make false)) Interrupt.signals in
+  List.iter
+    (fun (s, flag) ->
+      Sys.set_signal s
+        (Signal_handle
+           (fun (_ : int) ->
+             Atomic.set flag true;
+             Eio.Condition.broadcast arrived)))
+    flags;
   let parent = Unix.getppid () in
   let clock = Eio.Stdenv.clock env in
   let process_mgr = Eio.Stdenv.process_mgr env in
   let vars = Unix.environment () in
+  let to_container = to_container ~clock ~process_mgr ~env:vars config in
   let write_log line =
     Option.iter
       (fun fd ->
@@ -321,6 +354,17 @@ let main ~env ~log config =
         with Eio.Io _ | Unix.Unix_error _ -> ())
       log
   in
+  let pass_signals () =
+    if config.kill_signals then
+      Eio.Condition.loop_no_mutex arrived (fun () ->
+          List.iter
+            (fun (s, flag) ->
+              if Atomic.exchange flag false then
+                to_container [ "kill"; "--signal"; Proc_util.signal_name s ])
+            flags;
+          None)
+    else Eio.Fiber.await_cancel ()
+  in
   match
     Eio.Fiber.first
       (fun () ->
@@ -329,25 +373,13 @@ let main ~env ~log config =
              ~forwards:config.forwards ~stdin:(Eio.Stdenv.stdin env)
              ~stdout:(Eio.Stdenv.stdout env) ~log:write_log config.argv))
       (fun () ->
-        watch_parent ~clock parent;
+        Eio.Fiber.first
+          (fun () -> watch_parent ~clock parent)
+          (fun () -> pass_signals ());
         `Orphaned)
   with
   | `Done (Ok code) -> Ok code
   | `Done (Error e) -> Error (describe_error e)
   | `Orphaned ->
-      let orphaned = "bactrian has gone, so the container was removed" in
-      (match config.argv with
-      | runtime :: _ -> (
-          match
-            Eio.Time.with_timeout clock 30. (fun () ->
-                Ok
-                  (Eio.Process.run process_mgr ~env:vars
-                     ~is_success:(fun (_ : int) -> true)
-                     ~stdout:(Eio.Flow.buffer_sink (Buffer.create 64))
-                     ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
-                     [ runtime; "rm"; "-f"; config.container ]))
-          with
-          | Ok () | Error `Timeout -> ()
-          | exception Eio.Io _ -> ())
-      | [] -> ());
-      Error orphaned
+      to_container [ "rm"; "-f" ];
+      Error "bactrian has gone, so the container was removed"

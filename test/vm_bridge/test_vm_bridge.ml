@@ -136,9 +136,11 @@ let test_parse () =
     match Vm_bridge.parse args with
     | Ok c ->
         Ok
-          (Printf.sprintf "%s %s %s"
+          (Printf.sprintf "%s %s%s %s"
              (String.concat "," (List.map string_of_int c.forwards))
-             c.container (String.concat " " c.argv))
+             c.container
+             (if c.kill_signals then " (kill)" else "")
+             (String.concat " " c.argv))
     | Error m -> Error m
   in
   Alcotest.(check (result string string))
@@ -155,6 +157,24 @@ let test_parse () =
          "--";
          "y";
        ]);
+  Alcotest.(check (result string string))
+    "signals sent by the bridge"
+    (Ok "4242 bactrian-r1 (kill) container start -a -i bactrian-r1")
+    (parsed
+       [
+         "forward=4242";
+         "container=bactrian-r1";
+         "signals=kill";
+         "--";
+         "container";
+         "start";
+         "-a";
+         "-i";
+         "bactrian-r1";
+       ]);
+  Alcotest.(check (result string string))
+    "another signals word" (Error {|unexpected argument "signals=pass"|})
+    (parsed [ "signals=pass"; "container=c"; "--"; "container" ]);
   Alcotest.(check (result string string))
     "a container is required" (Error "missing container=NAME")
     (parsed [ "forward=1"; "--"; "docker" ]);

@@ -1,38 +1,50 @@
+open Bactrian_core
+
 type t = {
+  kind : Experiment.sandbox_runtime;
   name : string;
   exe : string;
   client_env : string array;
   arch : string;
 }
 
+let kind t = t.kind
 let name t = t.name
 let exe t = t.exe
 let client_env t = t.client_env
 let arch t = t.arch
 let ( let* ) = Result.bind
 
-let client_variables =
-  [
-    "PATH";
-    "HOME";
-    "USER";
-    "LOGNAME";
-    "TMPDIR";
-    "XDG_RUNTIME_DIR";
-    "XDG_CONFIG_HOME";
-    "DOCKER_HOST";
-    "DOCKER_CONTEXT";
-    "DOCKER_CONFIG";
-    "DOCKER_CERT_PATH";
-    "DOCKER_TLS_VERIFY";
-    "DOCKER_API_VERSION";
-  ]
+let client_variables : Experiment.sandbox_runtime -> string list =
+  let common =
+    [
+      "PATH";
+      "HOME";
+      "USER";
+      "LOGNAME";
+      "TMPDIR";
+      "XDG_RUNTIME_DIR";
+      "XDG_CONFIG_HOME";
+    ]
+  in
+  function
+  | `Docker ->
+      common
+      @ [
+          "DOCKER_HOST";
+          "DOCKER_CONTEXT";
+          "DOCKER_CONFIG";
+          "DOCKER_CERT_PATH";
+          "DOCKER_TLS_VERIFY";
+          "DOCKER_API_VERSION";
+        ]
+  | `Container -> common
 
-let current_client_env () =
+let current_client_env kind =
   Array.of_list
     (List.filter_map
        (fun k -> Option.map (fun v -> k ^ "=" ^ v) (Sys.getenv_opt k))
-       client_variables)
+       (client_variables kind))
 
 let last_line text =
   String.split_on_char '\n' text
@@ -64,24 +76,29 @@ let capture ~process_mgr ~clock ~env ~timeout argv =
            | Some l -> ": " ^ l
            | None -> ""))
 
-let runtime_name : Bactrian_core.Experiment.sandbox_runtime -> string = function
-  | `Docker -> "docker"
+let run_client ~process_mgr ~clock ?(timeout = 30.) t args =
+  capture ~process_mgr ~clock ~env:t.client_env ~timeout (t.exe :: args)
 
-let detect ~process_mgr ~clock requested =
-  let name = runtime_name (Option.value requested ~default:`Docker) in
-  match
-    Proc_util.find_executable ~path:(Sys.getenv_opt "PATH") ~cwd:(Sys.getcwd ())
-      name
-  with
+let runtime_name : Experiment.sandbox_runtime -> string = function
+  | `Docker -> "docker"
+  | `Container -> "container"
+
+let find name =
+  Proc_util.find_executable ~path:(Sys.getenv_opt "PATH") ~cwd:(Sys.getcwd ())
+    name
+
+let detect_docker ~process_mgr ~clock =
+  let name = runtime_name `Docker in
+  match find name with
   | None ->
       Error
         (Printf.sprintf
            "%s is not on PATH. Fix: install a Docker-compatible runtime \
-            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux; \
+            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux, \
             Podman is not supported yet)"
            name)
   | Some exe -> (
-      let client_env = current_client_env () in
+      let client_env = current_client_env `Docker in
       match
         capture ~process_mgr ~clock ~env:client_env ~timeout:30.
           [ exe; "version"; "--format"; "{{.Server.Arch}}" ]
@@ -95,23 +112,110 @@ let detect ~process_mgr ~clock requested =
       | Ok text -> (
           match String.trim text with
           | "" -> Error (exe ^ " version did not name the daemon's architecture")
-          | arch -> Ok { name; exe; client_env; arch }))
+          | arch -> Ok { kind = `Docker; name; exe; client_env; arch }))
+
+let detect_container ~process_mgr ~clock =
+  let name = runtime_name `Container in
+  match find name with
+  | None ->
+      Error
+        (Printf.sprintf
+           "%s is not on PATH. Fix: install Apple's container (macOS 26 on \
+            Apple silicon, github.com/apple/container)"
+           name)
+  | Some exe -> (
+      let client_env = current_client_env `Container in
+      let fix = Printf.sprintf ". Fix: %s system start" exe in
+      match
+        capture ~process_mgr ~clock ~env:client_env ~timeout:30.
+          [ exe; "system"; "status"; "--format"; "json" ]
+      with
+      | Error why ->
+          Error (Printf.sprintf "%s system status failed (%s)%s" exe why fix)
+      | Ok text -> (
+          match Container_cli.status text with
+          | Error m ->
+              Error
+                (Printf.sprintf
+                   "%s system status gave JSON that is not read: %s" exe m)
+          | Ok { running = false; state; _ } ->
+              Error
+                (Printf.sprintf "%s's services are %S, not running%s" exe state
+                   fix)
+          | Ok { running = true; architecture = ""; _ } ->
+              Error (exe ^ " system status did not name the architecture")
+          | Ok { running = true; architecture = arch; _ } ->
+              Ok { kind = `Container; name; exe; client_env; arch }))
+
+(* Unset, the runtime is docker when it answers, otherwise container. *)
+let detect ~process_mgr ~clock = function
+  | Some `Docker -> detect_docker ~process_mgr ~clock
+  | Some `Container -> detect_container ~process_mgr ~clock
+  | None -> (
+      match detect_docker ~process_mgr ~clock with
+      | Ok t -> Ok t
+      | Error docker -> (
+          match detect_container ~process_mgr ~clock with
+          | Ok t -> Ok t
+          | Error container ->
+              Error
+                (Printf.sprintf
+                   "no container runtime works. docker: %s. container: %s"
+                   docker container)))
 
 let image_id ~process_mgr ~clock t image =
-  match
-    capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
-      [ t.exe; "image"; "inspect"; "--format"; "{{.Id}}"; "--"; image ]
-  with
-  | Ok out when String.starts_with ~prefix:"sha256:" (String.trim out) ->
-      Ok (String.trim out)
+  let missing () =
+    match t.kind with
+    | `Docker ->
+        Printf.sprintf "the image %s is not present locally. Fix: %s pull %s"
+          image t.name image
+    | `Container ->
+        Printf.sprintf
+          "the image %s is not present locally. Fix: %s image pull %s" image
+          t.name image
+  in
+  let digest out =
+    match String.trim out with
+    | d when String.starts_with ~prefix:"sha256:" d -> Ok d
+    | d ->
+        Error
+          (Printf.sprintf "%s image inspect gave %S, not an image digest" t.name
+             d)
+  in
+  match t.kind with
+  | `Docker -> (
+      match
+        run_client ~process_mgr ~clock t
+          [ "image"; "inspect"; "--format"; "{{.Id}}"; "--"; image ]
+      with
+      | Ok out -> digest out
+      | Error _ -> Error (missing ()))
+  | `Container -> (
+      match
+        run_client ~process_mgr ~clock t [ "image"; "inspect"; "--"; image ]
+      with
+      | Error _ -> Error (missing ())
+      | Ok out -> (
+          match Container_cli.image_digest out with
+          | Ok d -> digest d
+          | Error m ->
+              Error
+                (Printf.sprintf
+                   "%s image inspect gave JSON that is not read: %s" t.name m)))
+
+let create ~process_mgr ~clock t argv =
+  match capture ~process_mgr ~clock ~env:t.client_env ~timeout:120. argv with
+  | Ok (_ : string) -> Ok ()
+  | Error why -> Error (Printf.sprintf "%s create failed (%s)" t.name why)
+
+let created_image ~process_mgr ~clock t name =
+  match run_client ~process_mgr ~clock t [ "inspect"; "--"; name ] with
+  | Error why -> Error (Printf.sprintf "%s inspect failed (%s)" t.name why)
   | Ok out ->
-      Error
-        (Printf.sprintf "%s image inspect gave %S, not an image ID" t.name
-           (String.trim out))
-  | Error _ ->
-      Error
-        (Printf.sprintf "the image %s is not present locally. Fix: %s pull %s"
-           image t.name image)
+      Result.map_error
+        (fun m ->
+          Printf.sprintf "%s inspect gave JSON that is not read: %s" t.name m)
+        (Container_cli.container_digest out)
 
 let relay_cache_dir () =
   let base =
@@ -141,16 +245,6 @@ let build_image =
 let build_packages = [ "gcc"; "musl-dev" ]
 let build_timeout = 600.
 
-let rec remove_tree path =
-  match (Unix.lstat path).st_kind with
-  | S_DIR ->
-      Array.iter
-        (fun f -> remove_tree (Filename.concat path f))
-        (Sys.readdir path);
-      Unix.rmdir path
-  | S_REG | S_LNK | S_CHR | S_BLK | S_FIFO | S_SOCK -> Unix.unlink path
-  | exception Unix.Unix_error (ENOENT, _, _) -> ()
-
 let rec mkdirs path =
   if not (Sys.file_exists path) then begin
     mkdirs (Filename.dirname path);
@@ -165,7 +259,8 @@ let build ~process_mgr ~clock t ~dir ~target =
   in
   let src = Filename.concat work "src" and out = Filename.concat work "out" in
   Fun.protect ~finally:(fun () ->
-      try remove_tree work with Unix.Unix_error _ | Sys_error _ -> ())
+      try Proc_util.remove_tree work
+      with Unix.Unix_error _ | Sys_error _ -> ())
   @@ fun () ->
   List.iter (fun d -> Unix.mkdir d 0o755) [ work; src; out ];
   Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
@@ -177,6 +272,11 @@ let build ~process_mgr ~clock t ~dir ~target =
       (String.concat " " build_packages)
       (Unix.getuid ()) (Unix.getgid ())
   in
+  let run =
+    match t.kind with
+    | `Docker -> [ "run"; "--rm" ]
+    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
+  in
   let* _ =
     Result.map_error
       (fun why ->
@@ -184,20 +284,18 @@ let build ~process_mgr ~clock t ~dir ~target =
           "the relay could not be built in %s (%s). It needs the network once, \
            for Alpine's packages"
           build_image why)
-      (capture ~process_mgr ~clock ~env:t.client_env ~timeout:build_timeout
-         [
-           t.exe;
-           "run";
-           "--rm";
-           "--mount";
-           Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
-           "--mount";
-           Printf.sprintf "type=bind,source=%s,target=/out" out;
-           build_image;
-           "sh";
-           "-c";
-           script;
-         ])
+      (run_client ~process_mgr ~clock ~timeout:build_timeout t
+         (run
+         @ [
+             "--mount";
+             Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+             "--mount";
+             Printf.sprintf "type=bind,source=%s,target=/out" out;
+             build_image;
+             "sh";
+             "-c";
+             script;
+           ]))
   in
   Unix.rename (Filename.concat out "relay") target;
   Ok target
@@ -271,43 +369,72 @@ let alive pid =
   | exception Unix.Unix_error (ESRCH, _, _) -> false
   | exception Unix.Unix_error _ -> true
 
-(* "NAME\tPID\tHOST": a container of this host whose bactrian has gone. *)
-let stale line =
-  match String.split_on_char '\t' line with
-  | [ name; pid; host ] when String.starts_with ~prefix:"bactrian-" name -> (
-      match int_of_string_opt pid with
-      | Some pid
-        when pid > 0
-             && String.equal host (Unix.gethostname ())
-             && not (alive pid) ->
-          Some name
-      | Some _ | None -> None)
-  | _ -> None
+(* A container of this host whose bactrian has gone. *)
+let stale ~name ~pid ~host =
+  String.starts_with ~prefix:"bactrian-" name
+  &&
+  match int_of_string_opt pid with
+  | Some pid ->
+      pid > 0 && String.equal host (Unix.gethostname ()) && not (alive pid)
+  | None -> false
+
+(* Each container that carries the labels, as (name, pid, host). *)
+let labelled ~process_mgr ~clock t =
+  match t.kind with
+  | `Docker ->
+      Result.map
+        (fun out ->
+          List.filter_map
+            (fun line ->
+              match String.split_on_char '\t' line with
+              | [ name; pid; host ] -> Some (name, pid, host)
+              | _ -> None)
+            (String.split_on_char '\n' out))
+        (run_client ~process_mgr ~clock t
+           [
+             "ps";
+             "--all";
+             "--filter";
+             "label=" ^ label_pid;
+             "--format";
+             Printf.sprintf {|{{.Names}}	{{.Label "%s"}}	{{.Label "%s"}}|}
+               label_pid label_host;
+           ])
+  | `Container ->
+      let* out =
+        run_client ~process_mgr ~clock t [ "list"; "--all"; "--format"; "json" ]
+      in
+      let* listed = Container_cli.containers out in
+      Ok
+        (List.filter_map
+           (fun (c : Container_cli.listed) ->
+             match
+               ( List.assoc_opt label_pid c.labels,
+                 List.assoc_opt label_host c.labels )
+             with
+             | Some pid, Some host -> Some (c.id, pid, host)
+             | Some _, None | None, (Some _ | None) -> None)
+           listed)
+
+let remove ~process_mgr ~clock t name =
+  ignore
+    (run_client ~process_mgr ~clock t
+       (match t.kind with
+       | `Docker -> [ "rm"; "-f"; name ]
+       | `Container -> [ "delete"; "--force"; name ])
+      : (string, string) result)
 
 let remove_stale ~process_mgr ~clock t =
-  match
-    capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
-      [
-        t.exe;
-        "ps";
-        "--all";
-        "--filter";
-        "label=" ^ label_pid;
-        "--format";
-        Printf.sprintf {|{{.Names}}	{{.Label "%s"}}	{{.Label "%s"}}|} label_pid
-          label_host;
-      ]
-  with
+  match labelled ~process_mgr ~clock t with
   | Error _ -> []
-  | Ok out ->
-      let names = List.filter_map stale (String.split_on_char '\n' out) in
-      List.iter
-        (fun name ->
-          ignore
-            (capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
-               [ t.exe; "rm"; "-f"; name ]
-              : (string, string) result))
-        names;
+  | Ok containers ->
+      let names =
+        List.filter_map
+          (fun (name, pid, host) ->
+            if stale ~name ~pid ~host then Some name else None)
+          containers
+      in
+      List.iter (remove ~process_mgr ~clock t) names;
       names
 
 let relay_cached t =
@@ -319,9 +446,3 @@ let relay_cached t =
       owned ~kind:S_REG ~what:"a regular file"
         (Filename.concat dir (relay_name t))
   | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
-
-let remove ~process_mgr ~clock t name =
-  ignore
-    (capture ~process_mgr ~clock ~env:t.client_env ~timeout:30.
-       [ t.exe; "rm"; "-f"; name ]
-      : (string, string) result)

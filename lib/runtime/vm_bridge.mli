@@ -51,12 +51,17 @@ val run :
 type config = {
   forwards : int list;
   container : string;  (** The container's name, for [rm -f]. *)
+  kill_signals : bool;
+      (** Whether the bridge sends SIGTERM and SIGINT to the container itself,
+          with [RUNTIME kill --signal SIGNAL NAME], because the runtime's client
+          does not pass them on (container 1.5.0). *)
   argv : string list;  (** The runtime's [run] command. Non-empty. *)
 }
 
 val parse : string list -> (config, string) result
-(** The arguments of [__vm-bridge]: [forward=PORT]..., [container=NAME], then
-    [--] and the runtime's command. *)
+(** The arguments of [__vm-bridge]: [forward=PORT]..., [container=NAME],
+    [signals=kill] for {!field-kill_signals}, then [--] and the runtime's
+    command. *)
 
 val main :
   env:Eio_unix.Stdenv.base ->
@@ -69,7 +74,8 @@ val main :
     to [log].
 
     SIGTERM and SIGINT do not stop it: they reach the runtime's client, in the
-    same process group, which passes them to the relay and so to the agent, and
-    the bridge relays until the agent has gone. When its parent dies (bactrian
-    killed with SIGKILL) it stops the container with [rm -f], which the
-    runtime's client alone would leave running. *)
+    same process group, which passes them to the relay and so to the agent (or
+    with [kill_signals] the bridge sends them to the container), and the bridge
+    relays until the agent has gone. When its parent dies (bactrian killed with
+    SIGKILL) it stops the container with [rm -f], which the runtime's client
+    alone would leave running. *)

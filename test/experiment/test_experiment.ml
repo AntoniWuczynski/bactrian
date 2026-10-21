@@ -287,6 +287,12 @@ let test_sandbox_backend () =
   Alcotest.(check (option string))
     "image" (Some "node:24@sha256:abc") t.sandbox_image;
   Alcotest.(check bool) "docker" true (t.sandbox_runtime = Some `Docker);
+  let t =
+    decoded
+      (doc
+         {|, "sandbox": {"backend": "vm", "image": "node:24@sha256:abc", "runtime": "container"}|})
+  in
+  Alcotest.(check bool) "container" true (t.sandbox_runtime = Some `Container);
   let t = decoded (doc {|, "sandbox": {"backend": "seatbelt"}|}) in
   Alcotest.(check bool) "seatbelt" true (t.sandbox_backend = `Seatbelt);
   let one json =
@@ -304,7 +310,7 @@ let test_sandbox_backend () =
     "podman is not verified"
     ( "sandbox.runtime",
       "podman is not supported yet: only docker (Docker Engine, Docker \
-       Desktop, OrbStack) has been verified" )
+       Desktop, OrbStack) and container (Apple's) have been verified" )
     (one {|, "sandbox": {"backend": "vm", "image": "i", "runtime": "podman"}|});
   Alcotest.(check (pair string string))
     "an image that looks like an option"

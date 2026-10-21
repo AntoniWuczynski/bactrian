@@ -66,7 +66,7 @@ let checks ~listener ~outside_write ~inside_write ~denied_read =
   @ must_work "a write inside the state directory" inside_write
   @ must_fail "a read of a denied file" denied_read
 
-let judge (r : report) =
+let judge (runtime : Experiment.sandbox_runtime) (r : report) =
   let public =
     match r.public with
     | Ok () -> [ "an outbound connection to 1.1.1.1:443 succeeded" ]
@@ -110,10 +110,14 @@ let judge (r : report) =
     @ fails_with "a write into another run's directory" "ENOENT"
         r.other_run_write
     (* The shared checks below already report a success. *)
+    (* Outside the state directory is under the mask over .bactrian: Docker's
+       is read-only, container's is writable by root alone. *)
     @ (match r.outside_write with
       | Ok () -> []
       | Error _ as e ->
-          fails_with "a write outside the state directory" "EROFS" e)
+          fails_with "a write outside the state directory"
+            (match runtime with `Docker -> "EROFS" | `Container -> "EACCES")
+            e)
     @ checks ~listener:r.listener ~outside_write:r.outside_write
         ~inside_write:r.inside_write ~denied_read:r.denied_read
   with

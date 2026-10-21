@@ -36,8 +36,12 @@ type compare = {
 type sandbox_backend = [ `Auto | `Vm | `Seatbelt | `Bubblewrap ]
 (** Where a sandboxed agent runs (design §5.3): [auto] chooses for the host. *)
 
-type sandbox_runtime = [ `Docker ]
-(** The container runtime of a [vm] sandbox. *)
+type sandbox_runtime = [ `Docker | `Container ]
+(** The container runtime of a [vm] sandbox: a Docker-compatible one, or Apple's
+    [container]. *)
+
+val sandbox_runtimes : (string * sandbox_runtime) list
+(** Each runtime's name in an experiment, on the command line and over MCP. *)
 
 type t = {
   name : string;
@@ -96,11 +100,10 @@ val decode : Canon.t -> (t, error list) result
     - [sandbox: auto|strict|off] (default auto) or
       [sandbox: {mode, backend, image, runtime, allow_write, deny_read}] (design
       §5.3): [backend] is [auto] (default), [vm], [seatbelt] or [bubblewrap],
-      [image] is required for [vm], and [runtime] is [docker] ([podman] and
-      [container] are refused as not yet verified),
-      [clock: {faketime: auto|off}] (default auto), [caps_usd: {provider: n}]
-      ([provider] is one of {!Pricing.providers}), [pricing] (a price file, see
-      {!Price_file})
+      [image] is required for [vm], and [runtime] is [docker] or [container]
+      ([podman] is refused as not yet verified), [clock: {faketime: auto|off}]
+      (default auto), [caps_usd: {provider: n}] ([provider] is one of
+      {!Pricing.providers}), [pricing] (a price file, see {!Price_file})
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
 

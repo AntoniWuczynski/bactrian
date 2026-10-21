@@ -442,7 +442,8 @@ let check_host ~env settings backend =
       | Bubblewrap _ | Seatbelt | Vm _ -> Error cause)
 
 (* The deny-list with what is at each path, as the virtual machine masks it. *)
-let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
+let vm_layout ?(extra = []) ?(read_only = []) (host : host) : Sandbox_vm.layout
+    =
   let input =
     input_of host ~state_dir:None ~temp_dir:host.bactrian_dir ~listeners:[]
       ~tag:"" ~preload:None [ "agent" ]
@@ -459,6 +460,7 @@ let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
     project_root = host.project_root;
     bactrian_dir = host.bactrian_dir;
     allow_write = host.allow_write;
+    read_only;
     deny =
       List.map
         (fun p -> (p, kind p))
@@ -469,7 +471,8 @@ let vm_layout ?(extra = []) (host : host) : Sandbox_vm.layout =
 
 (* The probe runs as a run would, with its directories under .bactrian/runs,
    a masked directory and a masked file in its state directory, and another
-   run beside it. *)
+   run beside it. The masked file's directory is shown read-only, as container
+   requires of every directory holding a masked file. *)
 let check_vm ~env settings =
   let* image =
     Option.to_result settings.image
@@ -506,7 +509,10 @@ let check_vm ~env settings =
     ];
   let* () =
     Sandbox_vm.probe ~env vm
-      (vm_layout ~extra:[ resolved denied_dir; resolved masked ] host)
+      (vm_layout
+         ~extra:[ resolved denied_dir; resolved masked ]
+         ~read_only:[ resolved mask_dir ]
+         host)
       ~dir
       {
         outside = Filename.concat dir "outside";

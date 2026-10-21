@@ -30,6 +30,7 @@ type layout = {
   project_root : string;
   bactrian_dir : string;
   allow_write : string list;
+  read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
 }
 
@@ -73,7 +74,9 @@ let list_dir ~masked dir =
                    | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK ->
                        Other_link
                    | exception Unix.Unix_error _ -> Other_link)
-               | S_REG | S_DIR | S_CHR | S_BLK | S_FIFO | S_SOCK -> Plain
+               | S_REG -> File
+               | S_DIR -> Dir
+               | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
                | exception Unix.Unix_error _ -> Other_link
              in
              let masked_file =
@@ -88,8 +91,21 @@ let list_dir ~masked dir =
              { name; kind; masked_file })
            (List.sort String.compare (Array.to_list names)))
 
-let args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards command
-    =
+(* What is at each existing allow_write path: container mounts directories
+   only. *)
+let allow_write_kinds paths =
+  List.filter_map
+    (fun p ->
+      match (Unix.stat p).st_kind with
+      | S_DIR -> Some (p, `Dir)
+      | S_REG | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> Some (p, `File)
+      | exception Unix.Unix_error _ -> None)
+    paths
+
+let staging_dir ~run_dir = Filename.concat run_dir "staging"
+
+let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
+    ~forwards command =
   let masked =
     List.filter_map
       (fun (p, k) ->
@@ -99,12 +115,16 @@ let args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards command
   Result.map_error Vm_args.describe_error
     (Vm_args.argv
        {
+         kind = Vm_runtime.kind t.runtime;
          runtime = Vm_runtime.exe t.runtime;
          name = "bactrian-" ^ run_id;
          labels = Vm_runtime.labels ~run_id;
          uid = Unix.getuid ();
          gid = Unix.getgid ();
-         image = t.image_id;
+         image =
+           (match Vm_runtime.kind t.runtime with
+           | `Docker -> t.image_id
+           | `Container -> t.image);
          workdir = cwd;
          env_file;
          relay = t.relay;
@@ -113,12 +133,92 @@ let args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards command
          runs_dir = Filename.concat layout.bactrian_dir "runs";
          state_dir;
          temp_dir;
-         allow_write = List.filter Sys.file_exists layout.allow_write;
+         allow_write = allow_write_kinds layout.allow_write;
+         read_only = layout.read_only;
          deny = layout.deny;
+         staging_dir = staging_dir ~run_dir;
          forwards;
          command;
          list_dir = list_dir ~masked;
        })
+
+(* container's staging directories, made under the run's directory. A hard link
+   fails across volumes, and then the file cannot be shown. *)
+let make_stages ~run_dir (stages : Vm_args.stage list) =
+  let made (s : Vm_args.stage) =
+    match
+      Unix.mkdir s.dir 0o755;
+      List.iter
+        (fun m -> Unix.mkdir (Filename.concat s.dir m) 0o755)
+        s.mount_points
+    with
+    | () ->
+        List.fold_left
+          (fun acc (l : Vm_args.link) ->
+            let* () = acc in
+            match Unix.link l.source (Filename.concat s.dir l.name) with
+            | () -> Ok ()
+            | exception Unix.Unix_error (e, _, _) ->
+                Error
+                  (Printf.sprintf
+                     "%s, beside a hidden file in %s, cannot be shown in \
+                      container: a hard link of it in %s failed (%s), as it \
+                      does for a file on another volume"
+                     l.source s.over s.dir (Unix.error_message e)))
+          (Ok ()) s.links
+    | exception Unix.Unix_error (e, _, path) ->
+        Error
+          (Printf.sprintf "the staging directory %s cannot be made: %s (%s)"
+             s.dir (Unix.error_message e) path)
+  in
+  match stages with
+  | [] -> Ok ()
+  | _ :: _ -> (
+      match Unix.mkdir (staging_dir ~run_dir) 0o700 with
+      | exception Unix.Unix_error (e, _, _) ->
+          Error
+            (Printf.sprintf "the staging directory %s cannot be made: %s"
+               (staging_dir ~run_dir) (Unix.error_message e))
+      | () ->
+          List.fold_left
+            (fun acc s ->
+              let* () = acc in
+              made s)
+            (Ok ()) stages)
+
+let remove t name =
+  Vm_runtime.remove ~process_mgr:t.process_mgr ~clock:t.clock t.runtime name
+
+(* The command the bridge runs. Docker's [run] is it. For container the
+   staging directories are made, the container created, and its image checked
+   against the one [prepare] saw, so a reference moved since cannot change what
+   the agent runs in. *)
+let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
+  match Vm_runtime.kind t.runtime with
+  | `Docker -> Ok invocation.argv
+  | `Container ->
+      let process_mgr = t.process_mgr and clock = t.clock in
+      let* () = make_stages ~run_dir invocation.stages in
+      let* () =
+        Vm_runtime.create ~process_mgr ~clock t.runtime invocation.argv
+      in
+      let* digest =
+        Vm_runtime.created_image ~process_mgr ~clock t.runtime name
+      in
+      if String.equal digest t.image_id then
+        Ok [ Vm_runtime.exe t.runtime; "start"; "-a"; "-i"; name ]
+      else
+        Error
+          (Printf.sprintf
+             "the container was created from %s, but %s was %s when it was \
+              checked: the image moved in between. Fix: run again"
+             digest t.image t.image_id)
+
+(* The container and container's staging directories, once the run is over. *)
+let clean_up t ~run_dir ~name =
+  remove t name;
+  try Proc_util.remove_tree (staging_dir ~run_dir)
+  with Unix.Unix_error _ | Sys_error _ -> ()
 
 let client_env t =
   List.filter_map
@@ -129,9 +229,6 @@ let client_env t =
             (String.sub kv 0 i, String.sub kv (i + 1) (String.length kv - i - 1))
       | None -> None)
     (Array.to_list (Vm_runtime.client_env t.runtime))
-
-let remove t name =
-  Vm_runtime.remove ~process_mgr:t.process_mgr ~clock:t.clock t.runtime name
 
 (* The probe *)
 
@@ -153,7 +250,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
   let name = "bactrian-" ^ id in
   let state_dir = Filename.concat dir "state"
   and temp_dir = Filename.concat dir "tmp" in
-  Fun.protect ~finally:(fun () -> remove t name) @@ fun () ->
+  Fun.protect ~finally:(fun () -> clean_up t ~run_dir:dir ~name) @@ fun () ->
   let* env_file = write_env_file ~dir [] in
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -165,10 +262,11 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
   let port =
     match Eio.Net.listening_addr listener with `Tcp (_, p) -> p | `Unix _ -> 0
   in
-  let* argv =
-    args t layout ~run_id:id ~env_file ~state_dir ~temp_dir ~cwd:state_dir
-      ~forwards:[ port ] (Probe paths)
+  let* invocation =
+    invocation t layout ~run_id:id ~run_dir:dir ~env_file ~state_dir ~temp_dir
+      ~cwd:state_dir ~forwards:[ port ] (Probe paths)
   in
+  let* argv = launch t ~run_dir:dir ~name invocation in
   let out = Buffer.create 256 and err = Buffer.create 256 in
   let* code =
     match
@@ -212,7 +310,9 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
       (Vm_probe.of_line line)
   in
   let wrong =
-    (match Vm_probe.judge report with Ok () -> [] | Error w -> w)
+    (match Vm_probe.judge (Vm_runtime.kind t.runtime) report with
+      | Ok () -> []
+      | Error w -> w)
     @ List.filter_map
         (fun (path, what) ->
           if Sys.file_exists path then Some (what ^ " exists") else None)
@@ -240,12 +340,13 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
       (List.filter (fun (k, _) -> not (String.equal k "PATH")) agent_env)
   in
   Eio.Switch.on_release sw (fun () ->
-      remove t name;
+      clean_up t ~run_dir ~name;
       remove_file env_file);
-  let* runtime_argv =
-    args t layout ~run_id ~env_file ~state_dir ~temp_dir ~cwd ~forwards:[ port ]
-      (Agent agent)
+  let* invocation =
+    invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
+      ~forwards:[ port ] (Agent agent)
   in
+  let* runtime_argv = launch t ~run_dir ~name invocation in
   Ok
     {
       argv =
@@ -254,8 +355,10 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
           "__vm-bridge";
           "forward=" ^ string_of_int port;
           "container=" ^ name;
-          "--";
         ]
-        @ runtime_argv;
+        @ (match Vm_runtime.kind t.runtime with
+          | `Docker -> []
+          | `Container -> [ "signals=kill" ])
+        @ ("--" :: runtime_argv);
       env = client_env t;
     }

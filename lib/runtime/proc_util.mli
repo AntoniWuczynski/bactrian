@@ -32,3 +32,8 @@ val tool_env : unit -> string array
 (** The whole environment of a helper command bactrian runs: {!path_var} alone,
     so that no provider key reaches a launch environment another process of the
     user can read (decision 0010). *)
+
+val remove_tree : string -> unit
+(** Removes a directory and everything in it, without following symbolic links,
+    or a file. Nothing when it is not there. Raises [Unix.Unix_error] and
+    [Sys_error] on any other failure. *)

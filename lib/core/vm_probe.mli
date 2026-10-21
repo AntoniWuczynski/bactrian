@@ -36,10 +36,12 @@ val checks :
     listener and the write inside must work, the write outside and the denied
     read must fail. *)
 
-val judge : report -> (unit, string list) result
+val judge : Experiment.sandbox_runtime -> report -> (unit, string list) result
 (** Every check with the wrong result, described. The interfaces must have been
     listed and be [lo] alone, and the public connection must fail at once rather
     than time out, which would mean a route that drops packets. Reads of the
     masked file under either name and the write into another run must fail with
-    [ENOENT], the writes to [/] and outside the state directory with [EROFS]:
-    another error is a surprise, so it fails the probe too. *)
+    [ENOENT], the write to [/] with [EROFS], and the write outside the state
+    directory, which is under a mask, with [EROFS] for Docker (a read-only
+    tmpfs) and [EACCES] for container (a tmpfs only root can write to): another
+    error is a surprise, so it fails the probe too. *)

@@ -3,7 +3,8 @@
 open Bactrian_core
 
 let project = "/p"
-let plain name : Vm_args.entry = { name; kind = Plain; masked_file = false }
+let plain name : Vm_args.entry = { name; kind = File; masked_file = false }
+let dir name : Vm_args.entry = { name; kind = Dir; masked_file = false }
 
 (* The directories of a masked file, as a host would list them. *)
 let default_listing =
@@ -25,31 +26,45 @@ let default_listing =
           masked_file = false;
         };
         { name = "config"; kind = Link_to_file "/p/.env"; masked_file = true };
-        { name = ".env.bak"; kind = Plain; masked_file = true };
+        { name = ".env.bak"; kind = File; masked_file = true };
         { name = "lib"; kind = Other_link; masked_file = false };
       ] );
   ]
 
-let input ?(allow_write = []) ?(deny = []) ?(listing = default_listing)
+let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
+    ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
-    runtime = "/usr/bin/docker";
+    kind;
+    runtime =
+      (match kind with
+      | `Docker -> "/usr/bin/docker"
+      | `Container -> "/usr/local/bin/container");
     name = "bactrian-r1";
     labels = [ ("bactrian.run", "r1"); ("bactrian.pid", "42") ];
-    uid = 501;
+    uid;
     gid = 20;
     image = "node:24@sha256:abc";
     workdir;
     env_file = "/p/.bactrian/runs/r1/agent.env";
-    relay = "/c/relay";
+    relay =
+      (match kind with
+      | `Docker -> "/c/relay"
+      | `Container -> "/c/relay-1a2b-arm64");
     project_root = project;
     bactrian_dir = "/p/.bactrian";
     runs_dir = "/p/.bactrian/runs";
     state_dir = "/p/.bactrian/runs/r1/state";
     temp_dir = "/p/.bactrian/runs/r1/tmp";
-    allow_write;
+    allow_write =
+      List.map
+        (fun p ->
+          (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
+        allow_write;
+    read_only = [];
     deny;
+    staging_dir = "/p/.bactrian/runs/r1/staging";
     forwards = [ 4242 ];
     command;
     list_dir =
@@ -57,10 +72,12 @@ let input ?(allow_write = []) ?(deny = []) ?(listing = default_listing)
         Option.to_result ~none:"no such directory" (List.assoc_opt dir listing));
   }
 
-let argv i =
+let invocation i =
   match Vm_args.argv i with
-  | Ok a -> a
+  | Ok p -> p
   | Error e -> Alcotest.failf "argv: %s" (Vm_args.describe_error e)
+
+let argv i = (invocation i).argv
 
 let error i =
   match Vm_args.argv i with
@@ -70,7 +87,11 @@ let error i =
 (* The values of every --mount and of every --tmpfs but /tmp, in order. *)
 let mounts i =
   let rec go = function
-    | "--tmpfs" :: "/tmp:rw,noexec,nosuid,nodev,size=1g" :: rest -> go rest
+    | "--tmpfs"
+      :: ( "/tmp:rw,noexec,nosuid,nodev,size=1g"
+         | "/tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777" )
+      :: rest ->
+        go rest
     | ("--mount" | "--tmpfs") :: m :: rest -> m :: go rest
     | _ :: rest -> go rest
     | [] -> []
@@ -429,13 +450,22 @@ let env_error vars =
   | Ok _ -> Alcotest.fail "expected an error"
   | Error e -> Vm_args.describe_error e
 
+let line_break =
+  "it holds a line break (U+000A to U+000D, U+0085, U+2028 or U+2029), which \
+   would end its line early"
+
 let test_env_file () =
   Alcotest.(check (result string string))
     "one line each, as written"
-    (Ok "A=1\nB= quoted \"x\" # not a comment\nEMPTY=\n")
+    (Ok "A=1\nB= quoted \"x\" # not a comment\nEMPTY=\nC=caf\u{e9} \u{20ac}\n")
     (Result.map_error Vm_args.describe_error
        (Vm_args.env_file
-          [ ("A", "1"); ("B", " quoted \"x\" # not a comment"); ("EMPTY", "") ]));
+          [
+            ("A", "1");
+            ("B", " quoted \"x\" # not a comment");
+            ("EMPTY", "");
+            ("C", "caf\u{e9} \u{20ac}");
+          ]));
   List.iter
     (fun (what, vars, reason) ->
       Alcotest.(check string)
@@ -445,8 +475,15 @@ let test_env_file () =
            reason)
         (env_error vars))
     [
-      ("newline", [ ("A", "x\ny") ], "it holds a newline");
-      ("carriage return", [ ("A", "x\r") ], "it ends with a carriage return");
+      ("newline", [ ("A", "x\ny") ], line_break);
+      ("carriage return", [ ("A", "x\r") ], line_break);
+      ("carriage return inside", [ ("A", "x\ry") ], line_break);
+      ("vertical tab", [ ("A", "x\x0by") ], line_break);
+      ("form feed", [ ("A", "x\x0cy") ], line_break);
+      ("next line", [ ("A", "x\u{0085}y") ], line_break);
+      ("line separator", [ ("A", "x\u{2028}y") ], line_break);
+      ("paragraph separator", [ ("A", "x\u{2029}y") ], line_break);
+      ("in a name", [ ("A\u{2028}B", "x") ], line_break);
       ("NUL", [ ("A", "x\000") ], "it holds a NUL byte");
       ("UTF-8", [ ("A", "\xff") ], "it is not valid UTF-8");
       ("empty name", [ ("", "x") ], "the name is empty");
@@ -454,6 +491,220 @@ let test_env_file () =
       ("space", [ ("A B", "x") ], "the name holds = or whitespace");
       ("long", [ ("A", String.make 65536 'x') ], "it is longer than 64 KiB");
     ]
+
+(* container *)
+
+let test_container_command_line () =
+  Alcotest.check strings "the whole command"
+    [
+      "/usr/local/bin/container";
+      "create";
+      "--rm";
+      "--name";
+      "bactrian-r1";
+      "--label";
+      "bactrian.run=r1";
+      "--label";
+      "bactrian.pid=42";
+      "--network";
+      "none";
+      "--read-only";
+      "--cap-drop";
+      "ALL";
+      "--user";
+      "501:20";
+      "--tmpfs";
+      "/tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777";
+      "--ulimit";
+      "nproc=1024:1024";
+      "--memory";
+      "4g";
+      "--workdir";
+      "/p";
+      "--env-file";
+      "/p/.bactrian/runs/r1/agent.env";
+      "--entrypoint";
+      "/bactrian/relay-1a2b-arm64";
+      "--mount";
+      "type=bind,source=/c,target=/bactrian,readonly";
+      "--mount";
+      "type=bind,source=/p,target=/p,readonly";
+      "--mount";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "--mount";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+      "--";
+      "node:24@sha256:abc";
+      "--forward";
+      "4242";
+      "--";
+      "node";
+      "agent.js";
+    ]
+    (argv (input ~kind:`Container ()));
+  Alcotest.(check int)
+    "no staging without a masked file" 0
+    (List.length (invocation (input ~kind:`Container ())).stages)
+
+(* The project's .env: its directory becomes a read-only staging directory
+   with a hard link of each other file and a mount point for each directory
+   and each mask beneath, and the directories are bound again. *)
+let container_listing =
+  [
+    ( "/p",
+      [
+        dir ".bactrian";
+        plain ".env";
+        plain "agent.js";
+        dir "src";
+        {
+          name = "readme";
+          kind = Link_to_file "/p/src/README";
+          masked_file = false;
+        };
+        {
+          name = "outside";
+          kind = Link_to_file "/h/notes";
+          masked_file = false;
+        };
+        { name = "config"; kind = Link_to_file "/p/.env"; masked_file = true };
+        { name = ".env.bak"; kind = File; masked_file = true };
+        { name = "lib"; kind = Other_link; masked_file = false };
+        { name = "socket"; kind = Special; masked_file = false };
+      ] );
+  ]
+
+let test_container_masks () =
+  let i =
+    input ~kind:`Container ~deny:default_deny ~listing:container_listing ()
+  in
+  Alcotest.check strings "a staging directory over the masked file's directory"
+    [
+      "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/staging/0,target=/p,readonly";
+      "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
+      "type=bind,source=/p/src,target=/p/src,readonly";
+      "/p/.bactrian/ca:rw,mode=0755,size=1m";
+      "/p/.bactrian/runs:rw,mode=0755,size=1m";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+    ]
+    (mounts i);
+  match (invocation i).stages with
+  | [ s ] ->
+      Alcotest.(check string) "the stage" "/p/.bactrian/runs/r1/staging/0" s.dir;
+      Alcotest.(check string) "over" "/p" s.over;
+      Alcotest.check strings "hard links of the files the container shows"
+        [ "agent.js <- /p/agent.js"; "readme <- /p/src/README" ]
+        (List.map
+           (fun (l : Vm_args.link) -> l.name ^ " <- " ^ l.source)
+           s.links);
+      Alcotest.check strings "a mount point for each mount beneath"
+        [ ".bactrian"; "src" ] s.mount_points
+  | stages -> Alcotest.failf "%d stages" (List.length stages)
+
+(* Masks beside the masked file (a denied directory, the directory of another
+   masked file) get mount points too, and each masked file's directory gets a
+   stage of its own. *)
+let test_container_nested () =
+  let i =
+    input ~kind:`Container
+      ~deny:
+        [
+          ("/p/.env", `File);
+          ("/p/sub/key", `File);
+          ("/p/secret", `Dir);
+          ("/p/.bactrian/runs", `Dir);
+        ]
+      ~listing:
+        [
+          ("/p", [ plain ".env"; dir ".bactrian"; dir "sub"; dir "secret" ]);
+          ("/p/sub", [ plain "key"; plain "code.js" ]);
+        ]
+      ()
+  in
+  Alcotest.check strings "each stage once, parents first"
+    [
+      "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/staging/0,target=/p,readonly";
+      "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
+      "/p/secret:rw,mode=0755,size=1m";
+      "type=bind,source=/p/.bactrian/runs/r1/staging/1,target=/p/sub,readonly";
+      "/p/.bactrian/runs:rw,mode=0755,size=1m";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+    ]
+    (mounts i);
+  Alcotest.check strings "mount points and links"
+    [ "/p: .bactrian secret sub | "; "/p/sub: | code.js" ]
+    (List.map
+       (fun (s : Vm_args.stage) ->
+         Printf.sprintf "%s: %s| %s" s.over
+           (String.concat "" (List.map (fun m -> m ^ " ") s.mount_points))
+           (String.concat " "
+              (List.map (fun (l : Vm_args.link) -> l.name) s.links)))
+       (invocation i).stages)
+
+(* The probe's masked directory, in the writable state directory, is shown
+   read-only so that container can stage it. *)
+let test_container_read_only () =
+  let state = "/p/.bactrian/runs/r1/state" in
+  let masked = state ^ "/masked" in
+  let i =
+    {
+      (input ~kind:`Container
+         ~deny:[ ("/p/.bactrian", `Dir); (masked ^ "/secret", `File) ]
+         ~listing:[ (masked, [ plain "secret"; plain "beside" ]) ]
+         ())
+      with
+      read_only = [ masked ];
+    }
+  in
+  Alcotest.check strings "staged over the read-only directory"
+    [
+      "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p,target=/p,readonly";
+      "/p/.bactrian:rw,mode=0755,size=1m";
+      "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
+      "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
+      "type=bind,source=/p/.bactrian/runs/r1/staging/0,target=/p/.bactrian/runs/r1/state/masked,readonly";
+    ]
+    (mounts i)
+
+let test_container_errors () =
+  Alcotest.(check string)
+    "root"
+    "the agent cannot run as root (user ID 0) in container: its masks are \
+     directories owned by root, which only another user cannot write to"
+    (error (input ~kind:`Container ~uid:0 ()));
+  Alcotest.(check string)
+    "a writable directory holding a masked file"
+    "/h/.netrc cannot be hidden in container: its directory /h is writable \
+     (sandbox.allow_write or the run's own), and container shows the directory \
+     of a hidden file read-only. Fix: move the file, or make only a \
+     subdirectory of /h writable"
+    (error
+       (input ~kind:`Container ~allow_write:[ "/h" ]
+          ~deny:[ ("/h/.netrc", `File) ]
+          ~listing:[ ("/h", [ plain ".netrc"; plain ".profile" ]) ]
+          ()));
+  Alcotest.(check string)
+    "an allow_write file"
+    "sandbox.allow_write /p/out.txt is a file, which container cannot mount \
+     (it mounts directories only). Fix: name its directory"
+    (error (input ~kind:`Container ~allow_write:[ "/p/out.txt" ] ()));
+  Alcotest.(check bool)
+    "Docker allows all three" true
+    (List.for_all
+       (fun i -> Result.is_ok (Vm_args.argv i))
+       [
+         input ~uid:0 ();
+         input ~allow_write:[ "/h" ]
+           ~deny:[ ("/h/.netrc", `File) ]
+           ~listing:[ ("/h", [ plain ".netrc"; plain ".profile" ]) ]
+           ();
+         input ~allow_write:[ "/p/out.txt" ] ();
+       ])
 
 let () =
   Alcotest.run "vm_args"
@@ -472,6 +723,15 @@ let () =
           Alcotest.test_case "nested masks" `Quick test_nested_masks;
           Alcotest.test_case ".bactrian masked" `Quick test_bactrian_masked;
           Alcotest.test_case "every file mask" `Quick test_every_file_mask;
+        ] );
+      ( "container",
+        [
+          Alcotest.test_case "flags" `Quick test_container_command_line;
+          Alcotest.test_case "staging" `Quick test_container_masks;
+          Alcotest.test_case "nested staging" `Quick test_container_nested;
+          Alcotest.test_case "read-only directory" `Quick
+            test_container_read_only;
+          Alcotest.test_case "refusals" `Quick test_container_errors;
         ] );
       ("environment", [ Alcotest.test_case "env file" `Quick test_env_file ]);
     ]

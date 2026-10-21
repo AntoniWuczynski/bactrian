@@ -83,3 +83,13 @@ let path_var () =
   "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin:/bin"
 
 let tool_env () = [| path_var () |]
+
+let rec remove_tree path =
+  match (Unix.lstat path).st_kind with
+  | S_DIR ->
+      Array.iter
+        (fun f -> remove_tree (Filename.concat path f))
+        (Sys.readdir path);
+      Unix.rmdir path
+  | S_REG | S_LNK | S_CHR | S_BLK | S_FIFO | S_SOCK -> Unix.unlink path
+  | exception Unix.Unix_error (ENOENT, _, _) -> ()

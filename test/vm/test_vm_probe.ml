@@ -5,10 +5,10 @@ open Bactrian_core
 let good =
   {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","interfaces_listed":"ok","interfaces":["lo"]}|}
 
-let judged line =
+let judged ?(runtime = `Docker) line =
   match Vm_probe.of_line line with
   | Error m -> Error [ "unreadable: " ^ m ]
-  | Ok r -> Vm_probe.judge r
+  | Ok r -> Vm_probe.judge runtime r
 
 let with_fields changes =
   let r =
@@ -94,6 +94,39 @@ let test_judge () =
   | Ok _ -> Alcotest.fail "a partial report was read"
   | Error _ -> ()
 
+(* Under container the mask over .bactrian is a tmpfs only root can write to,
+   so a write outside the state directory gives EACCES, and EROFS there is a
+   surprise as much as EACCES is under Docker. *)
+let test_container () =
+  let container = with_field "outside_write" (`String "EACCES") in
+  Alcotest.check wrong "a sandbox that holds" (Ok ())
+    (judged ~runtime:`Container container);
+  Alcotest.check wrong "the read-only error of Docker's mask"
+    (Error
+       [
+         "a write outside the state directory failed with EROFS instead of \
+          EACCES";
+       ])
+    (judged ~runtime:`Container good);
+  Alcotest.check wrong "a write that worked"
+    (Error [ "a write outside the state directory succeeded" ])
+    (judged ~runtime:`Container (with_field "outside_write" (`String "ok")));
+  Alcotest.check wrong "a masked file still there"
+    (Error
+       [ "a read of a masked file under its name in another case succeeded" ])
+    (judged ~runtime:`Container
+       (with_fields
+          [
+            ("outside_write", `String "EACCES");
+            ("masked_case_read", `String "ok");
+          ]))
+
 let () =
   Alcotest.run "vm_probe"
-    [ ("judge", [ Alcotest.test_case "reports" `Quick test_judge ]) ]
+    [
+      ( "judge",
+        [
+          Alcotest.test_case "reports" `Quick test_judge;
+          Alcotest.test_case "container" `Quick test_container;
+        ] );
+    ]

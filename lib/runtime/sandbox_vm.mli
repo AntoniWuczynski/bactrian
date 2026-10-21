@@ -12,8 +12,10 @@ val image : t -> string
 (** The image as configured. *)
 
 val image_id : t -> string
-(** The ID the image had at {!prepare}, which every container runs, so a tag
-    moved since cannot change what the agent runs in. *)
+(** The ID the image had at {!prepare} (container's digest of it), which every
+    container runs, so a tag moved since cannot change what the agent runs in.
+    Docker runs the ID itself. container cannot, so its containers are created
+    from the reference and refused unless they hold this digest. *)
 
 val prepare :
   env:Eio_unix.Stdenv.base ->
@@ -29,6 +31,9 @@ type layout = {
   bactrian_dir : string;
   allow_write : string list;
       (** Resolved; those that do not exist are skipped. *)
+  read_only : string list;
+      (** Directories in the run's own that are shown read-only (the probe's
+          directory of a masked file, which container requires). *)
   deny : (string * Bactrian_core.Sandbox_policy.kind) list;
       (** The deny-list with what is at each path. *)
 }
@@ -51,8 +56,9 @@ val probe :
 
 type session = {
   argv : string list;
-      (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...]
-      *)
+      (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...],
+          or for container
+          [... container=NAME signals=kill -- container start -a -i NAME]. *)
   env : (string * string) list;  (** The bridge's whole environment. *)
 }
 
@@ -73,5 +79,8 @@ val start :
 (** Writes the agent's environment, minus [PATH] (the image's own applies), to
     [agent.env] in [run_dir] (mode 0600), and gives the command that runs the
     agent in a container named [bactrian-RUN_ID] with [port] forwarded to the
-    host's loopback. When [sw] ends the container is removed ([rm -f]), even if
-    the bridge was killed, and so is [agent.env]. *)
+    host's loopback. For container it first makes the staging directories
+    ({!Bactrian_core.Vm_args.stage}) under [run_dir], creates the container and
+    checks its image ({!image_id}). When [sw] ends the container is removed,
+    even if the bridge was killed, and so are [agent.env] and the staging
+    directories. *)
