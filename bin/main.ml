@@ -149,10 +149,11 @@ let sandbox_mode =
             "Where the sandboxed agent runs: $(b,auto) (a virtual machine on \
              macOS when $(b,--sandbox-image) is given, otherwise the host's \
              own sandbox), $(b,vm) (a Linux container with no network, through \
-             Docker), $(b,seatbelt) (macOS) or $(b,bubblewrap) (Linux). On \
-             macOS, $(b,--sandbox strict) with $(b,auto) needs \
-             $(b,--sandbox-image) or $(b,seatbelt), under which the agent can \
-             read the launch environment of your other processes.")
+             Docker or Apple's container), $(b,seatbelt) (macOS) or \
+             $(b,bubblewrap) (Linux). On macOS, $(b,--sandbox strict) with \
+             $(b,auto) needs $(b,--sandbox-image) or $(b,seatbelt), under \
+             which the agent can read the launch environment of your other \
+             processes.")
   in
   let image =
     Arg.(
@@ -164,10 +165,20 @@ let sandbox_mode =
              holding its runtime (pin it by digest). It must be present \
              locally.")
   in
+  let runtime =
+    Arg.(
+      value
+      & opt (some (enum Bactrian_core.Experiment.sandbox_runtimes)) None
+      & info [ "sandbox-runtime" ] ~docv:"RUNTIME"
+          ~doc:
+            "The container runtime of the $(b,vm) backend: $(b,docker) (Docker \
+             Engine, Docker Desktop or OrbStack) or $(b,container) (Apple's). \
+             Default: docker when it answers, otherwise container.")
+  in
   Term.(
-    const (fun mode backend image : Single_run.sandbox ->
-        { mode; backend; image; seatbelt_hint = true })
-    $ mode $ backend $ image)
+    const (fun mode backend image runtime : Single_run.sandbox ->
+        { mode; backend; image; runtime; seatbelt_hint = true })
+    $ mode $ backend $ image $ runtime)
 
 let sandbox_override =
   Arg.(

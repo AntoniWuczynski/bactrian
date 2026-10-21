@@ -239,6 +239,7 @@ type common_args = {
   sandbox : string option; [@default None]
   sandbox_backend : string option; [@default None]
   sandbox_image : string option; [@default None]
+  sandbox_runtime : string option; [@default None]
 }
 [@@deriving of_yojson { strict = false }]
 
@@ -268,19 +269,29 @@ let common_properties =
       (Enum (names Sandbox.backends))
       "Where the sandboxed agent runs: auto (default: a virtual machine on \
        macOS when sandbox_image is set, otherwise the host's own sandbox), vm \
-       (a Linux container with no network, through Docker), seatbelt (macOS, \
-       refused unless the server was started with --allow-unsandboxed) or \
-       bubblewrap (Linux). On macOS, strict with auto needs sandbox_image.";
+       (a Linux container with no network, through Docker or Apple's \
+       container), seatbelt (macOS, refused unless the server was started with \
+       --allow-unsandboxed) or bubblewrap (Linux). On macOS, strict with auto \
+       needs sandbox_image.";
     prop "sandbox_image" String
       "The container image the vm backend runs the agent in, holding its \
        runtime. Pin it by digest. It must be present locally.";
+    prop "sandbox_runtime"
+      (Enum (names Bactrian_core.Experiment.sandbox_runtimes))
+      "The container runtime of the vm backend: docker (Docker Engine, Docker \
+       Desktop or OrbStack) or container (Apple's). Default: docker when it \
+       answers, otherwise container.";
   ]
 
 let sandbox_backend = enum ~field:"sandbox_backend" Sandbox.backends
 
+let sandbox_runtime =
+  enum ~field:"sandbox_runtime" Bactrian_core.Experiment.sandbox_runtimes
+
 let common context (c : common_args) =
   let* cwd = Confine.path context.root ~field:"cwd" c.cwd in
   let* backend = sandbox_backend c.sandbox_backend in
+  let* runtime = sandbox_runtime c.sandbox_runtime in
   let* () =
     match backend with
     | Some b ->
@@ -307,6 +318,7 @@ let common context (c : common_args) =
           backend =
             Option.value backend ~default:Single_run.defaults.sandbox.backend;
           image = c.sandbox_image;
+          runtime;
           seatbelt_hint = false;
         };
     }

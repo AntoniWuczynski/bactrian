@@ -7,6 +7,9 @@ type sandbox = {
   mode : Sandbox.mode;
   backend : Sandbox.backend;
   image : string option;  (** Required for [`Vm]. *)
+  runtime : Bactrian_core.Experiment.sandbox_runtime option;
+      (** The [`Vm] backend's runtime. Unset, docker when it answers, otherwise
+          container. *)
   seatbelt_hint : bool;
       (** Whether a sandbox message may suggest [backend: seatbelt] (see
           {!Bactrian_runtime.Sandbox.preflight}): on the command line, not in

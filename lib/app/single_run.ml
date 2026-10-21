@@ -7,6 +7,7 @@ type sandbox = {
   mode : Sandbox.mode;
   backend : Sandbox.backend;
   image : string option;
+  runtime : Bactrian_core.Experiment.sandbox_runtime option;
   seatbelt_hint : bool;
 }
 
@@ -35,7 +36,13 @@ let defaults =
     turn_timeout = 120.;
     total_timeout = 600.;
     sandbox =
-      { mode = `Auto; backend = `Auto; image = None; seatbelt_hint = true };
+      {
+        mode = `Auto;
+        backend = `Auto;
+        image = None;
+        runtime = None;
+        seatbelt_hint = true;
+      };
   }
 
 let positive name v =
@@ -148,7 +155,7 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                       mode = sandbox.mode;
                       backend = sandbox.backend;
                       image = sandbox.image;
-                      runtime = None;
+                      runtime = sandbox.runtime;
                       allow_write = [];
                       deny_read = [];
                       bactrian_exe;

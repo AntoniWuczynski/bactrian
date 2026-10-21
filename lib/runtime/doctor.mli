@@ -89,8 +89,10 @@ type vm_host = {
 }
 (** What the [vm] check asks of this host. *)
 
-val vm_host : env:Eio_unix.Stdenv.base -> vm_host
-(** This host, through {!Vm_runtime}. Nothing is pulled or built. *)
+val vm_host :
+  env:Eio_unix.Stdenv.base -> Experiment.sandbox_runtime option -> vm_host
+(** This host's runtime (the experiment's, or the one {!Vm_runtime.detect}
+    picks), through {!Vm_runtime}. Nothing is pulled or built. *)
 
 val vm_check : host:vm_host -> target option -> check
 (** The virtual machine sandbox: the runtime works ([info]), the experiment's

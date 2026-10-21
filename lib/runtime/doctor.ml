@@ -236,7 +236,8 @@ type vm_host = {
 }
 
 let no_runtime_fix =
-  "install OrbStack or Docker Desktop (Podman is not supported yet)"
+  "install OrbStack or Docker Desktop, or Apple's container (Podman is not \
+   supported yet)"
 
 (* Whether the experiment's agent would run in the virtual machine. *)
 let uses_vm ~macos (t : target) =
@@ -304,10 +305,10 @@ let vm_check ~host target =
                         (Printf.sprintf "%s works, %s is present, %s" runtime
                            image relay)))))
 
-let vm_host ~env : vm_host =
+let vm_host ~env runtime : vm_host =
   let process_mgr = Eio.Stdenv.process_mgr env
   and clock = Eio.Stdenv.clock env in
-  let runtime = lazy (Vm_runtime.detect ~process_mgr ~clock None) in
+  let runtime = lazy (Vm_runtime.detect ~process_mgr ~clock runtime) in
   {
     macos = Sys.file_exists "/usr/bin/sandbox-exec";
     detect =
@@ -430,7 +431,8 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
     | Some { agent = Command _; _ } | None -> false
   in
   let mode = match target with Some t -> t.sandbox | None -> `Auto in
-  let macos = Sys.file_exists "/usr/bin/sandbox-exec" and vm = vm_host ~env in
+  let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+  and vm = vm_host ~env (Option.bind target (fun (t : target) -> t.runtime)) in
   (* The probe would build the relay, which is more than a check. *)
   let relay_pending =
     match target with
