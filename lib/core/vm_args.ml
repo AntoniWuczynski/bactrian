@@ -10,7 +10,13 @@ type probe = {
 
 type command = Agent of string list | Probe of probe
 type entry_kind = File | Dir | Special | Link_to_file of string | Other_link
-type entry = { name : string; kind : entry_kind; masked_file : bool }
+
+type entry = {
+  name : string;
+  kind : entry_kind;
+  identity : (int * int) option;
+  masked_file : bool;
+}
 
 type input = {
   kind : Experiment.sandbox_runtime;
@@ -37,7 +43,7 @@ type input = {
   list_dir : string -> (entry list, string) result;
 }
 
-type link = { name : string; source : string }
+type link = { name : string; source : string; identity : int * int }
 
 type stage = {
   dir : string;
@@ -325,7 +331,14 @@ let entries_of i plain ~parents ~files dir =
           let bind writable =
             let* () = check_path "an entry beside a hidden file" path in
             Ok (Some (Mount (Bind { path; writable })))
-          and link source = Ok (Some (Link { name = e.name; source })) in
+          and link source =
+            (* Without the identity the listing saw, a link could not be
+               checked, so the entry is left out. *)
+            match e.identity with
+            | Some identity ->
+                Ok (Some (Link { name = e.name; source; identity }))
+            | None -> Ok None
+          in
           if e.masked_file || taken path then Ok None
           else
             match (i.kind, e.kind, shows plain path) with

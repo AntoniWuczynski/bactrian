@@ -54,6 +54,13 @@ val probe :
     directory, and [masked] a file, of [layout.deny]. The container is removed
     after. *)
 
+val make_stages :
+  run_dir:string -> Bactrian_core.Vm_args.stage list -> (unit, string) result
+(** Makes container's staging directories under [run_dir]. Each hard link is
+    made without following a symbolic link and must be the file the listing saw
+    (device and inode), or the staging stops with [Error] and that link is
+    removed. The caller removes the rest. *)
+
 type session = {
   argv : string list;
       (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...],

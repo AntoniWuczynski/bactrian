@@ -79,8 +79,9 @@ let list_dir ~masked dir =
                | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
                | exception Unix.Unix_error _ -> Other_link
              in
+             let identity = identity path in
              let masked_file =
-               match identity path with
+               match identity with
                | Some id ->
                    List.exists
                      (fun (dev, ino) ->
@@ -88,7 +89,7 @@ let list_dir ~masked dir =
                      masked
                | None -> false
              in
-             { name; kind; masked_file })
+             { name; kind; identity; masked_file })
            (List.sort String.compare (Array.to_list names)))
 
 (* What is at each existing allow_write path: container mounts directories
@@ -142,6 +143,39 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          list_dir = list_dir ~masked;
        })
 
+(* A hard link of [l.source] as [path], which must turn out to be the file the
+   listing saw: the source may have been replaced since, by a symbolic link or
+   another name of a masked file. The link does not follow a symbolic link, and
+   anything else that was linked is removed again. *)
+let link_checked ~over (l : Vm_args.link) path =
+  match Unix.link ~follow:false l.source path with
+  | exception Unix.Unix_error (e, _, _) ->
+      Error
+        (Printf.sprintf
+           "%s, beside a hidden file in %s, cannot be shown in container: a \
+            hard link of it in %s failed (%s), as it does for a file on \
+            another volume"
+           l.source over (Filename.dirname path) (Unix.error_message e))
+  | () ->
+      let same =
+        match Unix.lstat path with
+        | { st_kind = S_REG; st_dev; st_ino; _ } ->
+            Int.equal st_dev (fst l.identity)
+            && Int.equal st_ino (snd l.identity)
+        | { st_kind = S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK; _ } ->
+            false
+        | exception Unix.Unix_error _ -> false
+      in
+      if same then Ok ()
+      else begin
+        (try Unix.unlink path with Unix.Unix_error _ -> ());
+        Error
+          (Printf.sprintf
+             "%s, beside a hidden file in %s, changed while its directory was \
+              being staged, so the run stops rather than show what it is now"
+             l.source over)
+      end
+
 (* container's staging directories, made under the run's directory. A hard link
    fails across volumes, and then the file cannot be shown. *)
 let make_stages ~run_dir (stages : Vm_args.stage list) =
@@ -156,15 +190,7 @@ let make_stages ~run_dir (stages : Vm_args.stage list) =
         List.fold_left
           (fun acc (l : Vm_args.link) ->
             let* () = acc in
-            match Unix.link l.source (Filename.concat s.dir l.name) with
-            | () -> Ok ()
-            | exception Unix.Unix_error (e, _, _) ->
-                Error
-                  (Printf.sprintf
-                     "%s, beside a hidden file in %s, cannot be shown in \
-                      container: a hard link of it in %s failed (%s), as it \
-                      does for a file on another volume"
-                     l.source s.over s.dir (Unix.error_message e)))
+            link_checked ~over:s.over l (Filename.concat s.dir l.name))
           (Ok ()) s.links
     | exception Unix.Unix_error (e, _, path) ->
         Error

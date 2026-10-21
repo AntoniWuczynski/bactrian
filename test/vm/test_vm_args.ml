@@ -3,8 +3,22 @@
 open Bactrian_core
 
 let project = "/p"
-let plain name : Vm_args.entry = { name; kind = File; masked_file = false }
-let dir name : Vm_args.entry = { name; kind = Dir; masked_file = false }
+
+let plain name : Vm_args.entry =
+  {
+    name;
+    kind = File;
+    identity = Some (1, Hashtbl.hash name);
+    masked_file = false;
+  }
+
+let dir name : Vm_args.entry =
+  {
+    name;
+    kind = Dir;
+    identity = Some (1, Hashtbl.hash name);
+    masked_file = false;
+  }
 
 (* The directories of a masked file, as a host would list them. *)
 let default_listing =
@@ -18,16 +32,33 @@ let default_listing =
         {
           name = "readme";
           kind = Link_to_file "/p/src/README";
+          identity = Some (2, 1);
           masked_file = false;
         };
         {
           name = "outside";
           kind = Link_to_file "/h/notes";
+          identity = Some (2, 1);
           masked_file = false;
         };
-        { name = "config"; kind = Link_to_file "/p/.env"; masked_file = true };
-        { name = ".env.bak"; kind = File; masked_file = true };
-        { name = "lib"; kind = Other_link; masked_file = false };
+        {
+          name = "config";
+          kind = Link_to_file "/p/.env";
+          identity = Some (2, 0);
+          masked_file = true;
+        };
+        {
+          name = ".env.bak";
+          kind = File;
+          identity = Some (2, 0);
+          masked_file = true;
+        };
+        {
+          name = "lib";
+          kind = Other_link;
+          identity = Some (2, 0);
+          masked_file = false;
+        };
       ] );
   ]
 
@@ -560,17 +591,39 @@ let container_listing =
         {
           name = "readme";
           kind = Link_to_file "/p/src/README";
+          identity = Some (2, 1);
           masked_file = false;
         };
         {
           name = "outside";
           kind = Link_to_file "/h/notes";
+          identity = Some (2, 1);
           masked_file = false;
         };
-        { name = "config"; kind = Link_to_file "/p/.env"; masked_file = true };
-        { name = ".env.bak"; kind = File; masked_file = true };
-        { name = "lib"; kind = Other_link; masked_file = false };
-        { name = "socket"; kind = Special; masked_file = false };
+        {
+          name = "config";
+          kind = Link_to_file "/p/.env";
+          identity = Some (2, 0);
+          masked_file = true;
+        };
+        {
+          name = ".env.bak";
+          kind = File;
+          identity = Some (2, 0);
+          masked_file = true;
+        };
+        {
+          name = "lib";
+          kind = Other_link;
+          identity = Some (2, 0);
+          masked_file = false;
+        };
+        {
+          name = "socket";
+          kind = Special;
+          identity = Some (2, 0);
+          masked_file = false;
+        };
       ] );
   ]
 

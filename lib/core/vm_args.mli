@@ -44,6 +44,9 @@ type entry_kind =
 type entry = {
   name : string;
   kind : entry_kind;
+  identity : (int * int) option;
+      (** The device and inode the entry led to when it was listed (through a
+          symbolic link), if it could be read. *)
   masked_file : bool;
       (** It leads to a file of the deny-list under another name: a hard link,
           or a symbolic link to it. *)
@@ -129,6 +132,9 @@ val relay_dir : string
 type link = {
   name : string;  (** In the staging directory. *)
   source : string;  (** The host file it is a hard link of. *)
+  identity : int * int;
+      (** The device and inode [source] had when it was listed. The link made
+          must be this file, or the staging fails. *)
 }
 
 type stage = {
