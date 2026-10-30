@@ -26,6 +26,7 @@ type input = {
   uid : int;
   gid : int;
   rootless : bool;
+  remote_client : bool;
   image : string;
   workdir : string;
   env_file : string;
@@ -456,7 +457,7 @@ let mounts i =
   in
   Ok (all_mounts, stages)
 
-(* Podman's differences from Docker's command line (decision 0016). A rootless
+(* Podman's differences from Docker's command line (decision 0022). A rootless
    Podman always runs the container in a user namespace, where the host user is
    the container's root and any other ID is a subordinate one that owns none of
    the project's files, so the agent's own ID is mapped to itself
@@ -469,8 +470,9 @@ let mounts i =
    Podman also adds the proxy variables of the Podman service's environment
    ([http-proxy], on by default, which can hold credentials) and, with
    [env_host] in containers.conf, the whole of it ([env-host]), so both are
-   switched off. *)
-let podman_flags kind ~rootless =
+   switched off. The remote client (a Podman machine, [CONTAINER_HOST]) has no
+   [env-host] flag, and sends no host environment, so only the first applies. *)
+let podman_flags kind ~rootless ~remote_client =
   match kind with
   | `Docker -> []
   | `Podman ->
@@ -480,8 +482,8 @@ let podman_flags kind ~rootless =
           "--tmpfs";
           "/dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=64m";
           "--http-proxy=false";
-          "--env-host=false";
         ]
+      @ if remote_client then [] else [ "--env-host=false" ]
 
 let check_port p = if p >= 1 && p <= 65535 then Ok () else Error (Bad_port p)
 
@@ -557,6 +559,7 @@ let argv i =
         ( [ "run"; "--rm"; "-i" ],
           [ "--security-opt"; "no-new-privileges" ]
           @ podman_flags kind ~rootless:i.rootless
+              ~remote_client:i.remote_client
           @ [
               "--user"; Printf.sprintf "%d:%d" i.uid i.gid; "--tmpfs"; tmp_mount;
             ]

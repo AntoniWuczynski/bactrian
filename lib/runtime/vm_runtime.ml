@@ -7,6 +7,7 @@ type t = {
   client_env : string array;
   arch : string;
   rootless : bool;
+  remote_client : bool;
 }
 
 let kind t = t.kind
@@ -15,6 +16,7 @@ let exe t = t.exe
 let client_env t = t.client_env
 let arch t = t.arch
 let rootless t = t.rootless
+let remote_client t = t.remote_client
 let ( let* ) = Result.bind
 
 let client_variables : Experiment.sandbox_runtime -> string list =
@@ -138,6 +140,7 @@ let detect_docker ~process_mgr ~clock =
                   client_env;
                   arch;
                   rootless = false;
+                  remote_client = false;
                 }))
 
 let detect_container ~process_mgr ~clock =
@@ -179,10 +182,12 @@ let detect_container ~process_mgr ~clock =
                   client_env;
                   arch;
                   rootless = false;
+                  remote_client = false;
                 }))
 
-(* The architecture and whether containers are rootless, from [podman info]
-   (on macOS the client reaches the machine's Podman, so these are its). *)
+(* The architecture, whether containers are rootless and whether the client is
+   Podman's remote one, from [podman info] (on macOS the client reaches the
+   machine's Podman, so the first two are its). *)
 let detect_podman ~process_mgr ~clock =
   let name = runtime_name `Podman in
   match find name with
@@ -206,8 +211,17 @@ let detect_podman ~process_mgr ~clock =
                exe why name name)
       | Ok text -> (
           match Podman_cli.info text with
-          | Ok { arch; rootless } ->
-              Ok { kind = `Podman; name; exe; client_env; arch; rootless }
+          | Ok { arch; rootless; remote } ->
+              Ok
+                {
+                  kind = `Podman;
+                  name;
+                  exe;
+                  client_env;
+                  arch;
+                  rootless;
+                  remote_client = remote;
+                }
           | Error m -> Error (Printf.sprintf "%s info %s" exe m)))
 
 let detect_kind ~process_mgr ~clock : Experiment.sandbox_runtime -> _ = function

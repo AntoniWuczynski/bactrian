@@ -148,6 +148,7 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          uid = Unix.getuid ();
          gid = Unix.getgid ();
          rootless = Vm_runtime.rootless t.runtime;
+         remote_client = Vm_runtime.remote_client t.runtime;
          image =
            (match Vm_runtime.kind t.runtime with
            | `Docker | `Podman -> t.image_id

@@ -5,21 +5,37 @@ open Bactrian_core
 let hex = String.make 64 'a'
 
 let test_info () =
-  let info = Alcotest.(result (pair string bool) string) in
+  let info = Alcotest.(result (triple string bool bool) string) in
   let read text =
     Result.map
-      (fun (i : Podman_cli.info) -> (i.arch, i.rootless))
+      (fun (i : Podman_cli.info) -> (i.arch, i.rootless, i.remote))
       (Podman_cli.info text)
   in
-  Alcotest.check info "rootless" (Ok ("arm64", true)) (read "arm64 true\n");
-  Alcotest.check info "rootful" (Ok ("amd64", false)) (read "amd64 false");
+  Alcotest.check info "rootless"
+    (Ok ("arm64", true, false))
+    (read "arm64 true false\n");
+  Alcotest.check info "rootful"
+    (Ok ("amd64", false, false))
+    (read "amd64 false false");
+  Alcotest.check info "remote client"
+    (Ok ("arm64", true, true))
+    (read "arm64 true true");
   List.iter
     (fun text ->
       Alcotest.(check bool)
         (Printf.sprintf "%S is refused" text)
         true
         (Result.is_error (read text)))
-    [ ""; "arm64"; " true"; "arm64 yes"; "arm64 true extra"; "<no value> true" ]
+    [
+      "";
+      "arm64";
+      "arm64 true";
+      " true false";
+      "arm64 yes false";
+      "arm64 true yes";
+      "arm64 true false extra";
+      "<no value> true false";
+    ]
 
 let test_image_id () =
   let id = Alcotest.(result string string) in

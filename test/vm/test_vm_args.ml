@@ -62,8 +62,9 @@ let default_listing =
       ] );
   ]
 
-let input ?(kind = `Docker) ?(uid = 501) ?(rootless = false) ?(allow_write = [])
-    ?(deny = []) ?(listing = default_listing)
+let input ?(kind = `Docker) ?(uid = 501) ?(rootless = false)
+    ?(remote_client = false) ?(allow_write = []) ?(deny = [])
+    ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -78,6 +79,7 @@ let input ?(kind = `Docker) ?(uid = 501) ?(rootless = false) ?(allow_write = [])
     uid;
     gid = 20;
     rootless;
+    remote_client;
     image = "node:24@sha256:abc";
     workdir;
     env_file = "/p/.bactrian/runs/r1/agent.env";
@@ -237,7 +239,13 @@ let test_podman_command_line () =
     (expected ~userns:[ "--userns=keep-id" ])
     (argv (input ~kind:`Podman ~rootless:true ()));
   Alcotest.check strings "rootful" (expected ~userns:[])
-    (argv (input ~kind:`Podman ()))
+    (argv (input ~kind:`Podman ()));
+  (* The remote client has no --env-host flag and would refuse the command. *)
+  Alcotest.check strings "remote client"
+    (List.filter
+       (fun a -> not (String.equal a "--env-host=false"))
+       (expected ~userns:[ "--userns=keep-id" ]))
+    (argv (input ~kind:`Podman ~rootless:true ~remote_client:true ()))
 
 let test_podman_masks () =
   let deny = default_deny in

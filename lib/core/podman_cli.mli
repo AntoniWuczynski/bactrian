@@ -1,9 +1,12 @@
 (** What Podman's command line prints (version 4.9.3, Ubuntu 24.04's), read for
-    the virtual machine sandbox (decision 0016). Pure. *)
+    the virtual machine sandbox (decision 0022). Pure. *)
 
 type info = {
   arch : string;  (** [Host.Arch], such as ["arm64"]. *)
   rootless : bool;  (** [Host.Security.Rootless]. *)
+  remote : bool;
+      (** [Host.ServiceIsRemote], true when the client is Podman's remote one (a
+          Podman machine, [CONTAINER_HOST] or [CONTAINER_CONNECTION]). *)
 }
 
 val info_format : string

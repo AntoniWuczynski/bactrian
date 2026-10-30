@@ -1,6 +1,6 @@
 (** The container runtime behind a virtual machine sandbox (design §5.3): a
     Docker-compatible command line, which on macOS drives a Linux virtual
-    machine (OrbStack, Docker Desktop), Podman (decision 0016), or Apple's
+    machine (OrbStack, Docker Desktop), Podman (decision 0022), or Apple's
     [container], which starts a virtual machine for each container. Finds it,
     checks images, builds the relay ([vm/relay.c]) and removes containers.
 
@@ -35,6 +35,11 @@ val client_env : t -> string array
 val rootless : t -> bool
 (** Whether the runtime runs containers in a user namespace of its own: a
     rootless Podman. Always false for the others. *)
+
+val remote_client : t -> bool
+(** Whether the client is Podman's remote one (a Podman machine, or
+    [CONTAINER_HOST] or [CONTAINER_CONNECTION] set), which has no [--env-host].
+    Always false for the others. *)
 
 val arch : t -> string
 (** The architecture of the runtime's machines, such as ["arm64"] or ["amd64"].

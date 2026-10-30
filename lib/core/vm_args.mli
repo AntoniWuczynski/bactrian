@@ -1,6 +1,6 @@
 (** The command line that starts an agent in a virtual machine sandbox (design
     §5.3): a Docker-compatible [run] (Docker's, or Podman's with the differences
-    of decision 0016), or Apple's [container create], of the image with no
+    of decision 0022), or Apple's [container create], of the image with no
     network, a read-only root and the relay ([vm/relay.c]) as its entrypoint,
     and the file of the agent's environment. Pure.
 
@@ -66,6 +66,9 @@ type input = {
   rootless : bool;
       (** Whether the runtime runs containers in a user namespace of its own
           (rootless Podman). Podman then maps [uid] to itself. *)
+  remote_client : bool;
+      (** Whether the client is Podman's remote one, which has no [--env-host].
+      *)
   image : string;
       (** The image's ID for Docker and Podman. container cannot run an ID, so
           there it is the reference, and the caller checks the digest after
@@ -177,9 +180,11 @@ val argv : input -> (invocation, error) result
 
     For Podman the same, with [--userns=keep-id] after [--security-opt] when the
     runtime is rootless ([rootless]), and [--read-only-tmpfs=false],
-    [--http-proxy=false] and [--env-host=false] after it. Its directory masks
-    are [--tmpfs PATH:ro,mode=0755,notmpcopyup], because Podman copies what is
-    beneath a tmpfs into it unless told not to.
+    [--tmpfs /dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=64m],
+    [--http-proxy=false] and [--env-host=false] after it ([--env-host=false] not
+    for the remote client, which has no such flag, [remote_client]). Its
+    directory masks are [--tmpfs PATH:ro,mode=0755,notmpcopyup], because Podman
+    copies what is beneath a tmpfs into it unless told not to.
 
     For container:
     [RUNTIME create --rm --name NAME --label KEY=VALUE... --network none
