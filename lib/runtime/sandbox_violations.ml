@@ -160,21 +160,24 @@ let seatbelt ~env ~tag ~since ~marker =
          the log dropped it or only showed it late. *)
       let marks = ref 1 in
       let collected ?(gaps = []) items =
-        if !marks > 1 then
-          prerr_endline
-            (Printf.sprintf
-               "bactrian: sandbox: the system log showed the run's end marker \
-                once it had been logged %d times"
-               !marks);
-        Collected { items; coverage = Seatbelt_log; gaps = log_drops :: gaps }
+        let late =
+          if !marks > 1 then
+            [
+              Printf.sprintf
+                "the system log showed the run's end marker once it had been \
+                 logged %d times"
+                !marks;
+            ]
+          else []
+        in
+        Collected
+          { items; coverage = Seatbelt_log; gaps = (log_drops :: late) @ gaps }
       in
       match
         Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
             Ok
               (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
-                 ~mark:(fun () ->
-                   incr marks;
-                   ignore (mark () : bool))
+                 ~mark:(fun () -> if mark () then incr marks)
                  ~deadline:(now () +. log_timeout)))
       with
       | Ok (Settled vs) -> collected vs
