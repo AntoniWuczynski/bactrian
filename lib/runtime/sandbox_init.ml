@@ -337,7 +337,9 @@ let run ?(on_listening = fun ~requested:_ ~bound:_ -> ())
         Result.map_error
           (fun e -> Dns_failed e)
           (Sandbox_dns.serve ~sw ~net ~record:(record ~log)
-             (List.map (fun ip -> (ip, Sandbox_dns.port)) Sandbox_dns.addresses))
+             (List.map
+                (fun ip -> (ip, Sandbox_dns.port))
+                (Sandbox_dns.listen_addresses ())))
   in
   Option.iter
     (fun fd ->

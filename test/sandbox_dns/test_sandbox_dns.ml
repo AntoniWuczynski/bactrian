@@ -144,7 +144,12 @@ let nameservers () =
   in
   check "none named" [] "search example.com\noptions edns0\n";
   check "the forwarder's addresses" []
-    "nameserver 127.0.0.53\nnameserver\t127.0.0.1  # local\n";
+    "nameserver 127.0.0.53\n\
+     nameserver\t127.0.0.1  # local\n\
+     nameserver 127.0.1.1\n";
+  check "loopback, but not in dotted decimal"
+    [ "127.0.0.010"; "127.1"; "127.0.0.256" ]
+    "nameserver 127.0.0.010\nnameserver 127.1\nnameserver 127.0.0.256\n";
   check "others, in order"
     [ "192.168.1.1"; "::1"; "10.0.0.2" ]
     "# nameserver 9.9.9.9\n\
@@ -170,7 +175,16 @@ let resolv_conf () =
     "through a link" [ "10.0.0.1" ] (unrecorded link);
   Alcotest.(check (list string))
     "missing" []
-    (unrecorded (Filename.concat dir "missing"))
+    (unrecorded (Filename.concat dir "missing"));
+  Out_channel.with_open_bin file (fun oc ->
+      output_string oc
+        "nameserver 127.0.1.1\nnameserver 10.0.0.1\nnameserver 127.0.0.53\n");
+  Alcotest.(check (list string))
+    "listened on: the two, then the other loopback one"
+    [ "127.0.0.1"; "127.0.0.53"; "127.0.1.1" ]
+    (List.map
+       (Format.asprintf "%a" Eio.Net.Ipaddr.pp)
+       (Dns_server.listen_addresses ~path:link ()))
 
 let () =
   Alcotest.run "sandbox_dns"

@@ -21,9 +21,7 @@ let line ~transport query =
            ]
        | Error e -> [ ("error", `String (Dns.describe_error e)) ]))
 
-let answered = List.map (Format.asprintf "%a" Eio.Net.Ipaddr.pp) addresses
-
-let unanswered_nameservers text =
+let nameservers text =
   String.split_on_char '\n' text
   |> List.filter_map (fun line ->
       match
@@ -31,19 +29,54 @@ let unanswered_nameservers text =
           (String.map (function '\t' -> ' ' | c -> c) line)
         |> List.filter (fun w -> not (String.equal w ""))
       with
-      | "nameserver" :: address :: _
-        when not (List.exists (String.equal address) answered) ->
-          Some address
+      | "nameserver" :: address :: _ -> Some address
       | _ -> None)
 
-let unrecorded_resolvers ?(path = "/etc/resolv.conf") () =
+(* Dotted decimal only: the C library reads a part with a leading zero as
+   octal. *)
+let loopback address =
+  let part p =
+    match int_of_string_opt p with
+    | Some n
+      when String.length p <= 3
+           && String.for_all (fun c -> c >= '0' && c <= '9') p
+           && (String.length p = 1 || not (Char.equal p.[0] '0'))
+           && n <= 255 ->
+        Some (Char.chr n)
+    | Some _ | None -> None
+  in
+  match List.map part (String.split_on_char '.' address) with
+  | [ Some ('\127' as a); Some b; Some c; Some d ] ->
+      Some (Eio.Net.Ipaddr.of_raw (String.of_seq (List.to_seq [ a; b; c; d ])))
+  | _ -> None
+
+let unanswered_nameservers text =
+  List.filter (fun a -> Option.is_none (loopback a)) (nameservers text)
+
+let listened text =
+  let same (a : Eio.Net.Ipaddr.v4v6) (b : Eio.Net.Ipaddr.v4v6) =
+    String.equal (a :> string) (b :> string)
+  in
+  List.fold_left
+    (fun acc ip -> if List.exists (same ip) acc then acc else acc @ [ ip ])
+    addresses
+    (List.filter_map loopback (nameservers text))
+
+(* The file as the sandbox shows it. *)
+let resolv_conf path =
   match Unix.realpath path with
-  | exception Unix.Unix_error _ -> []
-  | real when String.starts_with ~prefix:"/run/" real -> []
+  | exception Unix.Unix_error _ -> ""
+  | real when String.starts_with ~prefix:"/run/" real -> ""
   | real -> (
       match In_channel.with_open_bin real In_channel.input_all with
-      | exception Sys_error _ -> []
-      | text -> unanswered_nameservers text)
+      | exception Sys_error _ -> ""
+      | text -> text)
+
+let unrecorded_resolvers ?(path = "/etc/resolv.conf") () =
+  unanswered_nameservers (resolv_conf path)
+
+let listen_addresses ?(path = "/etc/resolv.conf") () =
+  listened (resolv_conf path)
 
 type error = { address : string; reason : string }
 

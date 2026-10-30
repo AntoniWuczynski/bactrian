@@ -24,8 +24,9 @@ val line :
 
 val unanswered_nameservers : string -> string list
 (** The addresses of the [nameserver] lines of a [resolv.conf]'s text that are
-    not among {!addresses}, in order. A text without any gives none: a resolver
-    then asks 127.0.0.1. *)
+    not IPv4 loopback addresses in dotted decimal, in order: the sandbox's
+    network namespace has no route to those, and nothing listens on [::1]. A
+    text without any gives none: a resolver then asks 127.0.0.1. *)
 
 val unrecorded_resolvers : ?path:string -> unit -> string list
 (** The resolvers that the agent's own resolver asks and the forwarder does not
@@ -34,6 +35,12 @@ val unrecorded_resolvers : ?path:string -> unit -> string list
     which the sandbox replaces with an empty directory, so that the agent's
     resolver asks 127.0.0.1, otherwise {!unanswered_nameservers} of the file its
     symbolic links lead to. *)
+
+val listen_addresses : ?path:string -> unit -> Eio.Net.Ipaddr.v4v6 list
+(** Where the forwarder listens: {!addresses}, then each other IPv4 loopback
+    address that a [nameserver] line of [path] ([/etc/resolv.conf], read as for
+    {!unrecorded_resolvers}) names, such as NetworkManager's [127.0.1.1], all on
+    the sandbox's own loopback interface. *)
 
 type error = { address : string; reason : string }
 
