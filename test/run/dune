@@ -20,6 +20,8 @@
   bactrian.runtime
   fake_upstream
   http_agent
+  fake_https
+  bactrian.tls
   weather_agent
   denials
   eio_main

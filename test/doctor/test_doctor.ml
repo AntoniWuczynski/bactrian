@@ -222,17 +222,21 @@ let test_clock () =
 
 let test_tls () =
   let tls ?(available = false) ?(upstream = P.default_upstream) t =
-    Doctor.tls_check ~available ~upstream t
+    Doctor.tls_check
+      ~tls:(fun () -> if available then Ok () else Error "no roots")
+      ~upstream t
   in
   let funded = [ (P.Openai, "openai") ] in
   let local _ = Uri.of_string "http://127.0.0.1:11434" in
-  check_status "built in" Pass (tls ~available:true None);
-  check_status "no experiment" Skip (tls None);
-  check_status "no provider called live" Skip
+  check_status "ready" Pass (tls ~available:true None);
+  check_status "ready with an https agent" Pass
+    (tls ~available:true (Some (target ~dir:"." (http "https://a.example/x"))));
+  check_status "no experiment" Warn (tls None);
+  check_status "no provider called live" Warn
     (tls (Some (target ~dir:"." (command ()))));
   check_status "a provider is called live" Fail
     (tls (Some (target ~funded ~dir:"." (command ()))));
-  check_status "a provider is called live at an http upstream" Skip
+  check_status "a provider is called live at an http upstream" Warn
     (tls ~upstream:local (Some (target ~funded ~dir:"." (command ()))));
   check_status "an https upstream that is not a default" Fail
     (tls
@@ -240,7 +244,7 @@ let test_tls () =
        (Some (target ~funded ~dir:"." (command ()))));
   check_status "an https agent" Fail
     (tls (Some (target ~dir:"." (http "https://a.example/x"))));
-  check_status "an http agent" Skip
+  check_status "an http agent" Warn
     (tls (Some (target ~dir:"." (http "http://127.0.0.1:1/x"))));
   Alcotest.check pairs "egress is not built"
     [ ("ca", "skip"); ("node", "skip") ]
@@ -312,7 +316,8 @@ let test_no_key_value_in_output () =
   Eio_main.run @@ fun env ->
   let report t =
     Doctor.report
-      (Doctor.run ~env ~bactrian_exe:"/nonexistent" ~tls_available:false
+      (Doctor.run ~env ~bactrian_exe:"/nonexistent"
+         ~tls:(fun () -> Ok ())
          ~upstream:P.default_upstream ~keys:sentinels
          ~path:(Some "/usr/bin:/bin") t)
   in

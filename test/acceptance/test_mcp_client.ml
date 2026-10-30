@@ -870,14 +870,17 @@ let sandboxed_checkers era () =
     (contains (Canon.to_string status) "--trust-project");
   check_exit "the second server exits at end of input" 0 (C.close conn.c)
 
-(* An https upstream cannot be called in this build, so the job fails as
-   [bactrian run] does. *)
+(* An https upstream cannot be called when the trusted roots cannot be loaded,
+   so the job fails as [bactrian run] does. *)
 
-let run_start_https_without_tls () =
-  if Bactrian_app.Features.tls_available then Alcotest.skip ();
+let run_start_https_without_roots () =
   with_project "run-start-https" @@ fun ~parent:_ ~project ->
   write_experiment project [ "python3"; "-I"; "-c"; "pass" ];
-  let env = (upstream_variable, "https://gateway.invalid") :: key_env in
+  let env =
+    (upstream_variable, "https://gateway.invalid")
+    :: ("BACTRIAN_EXTRA_CA_CERTS", "/nonexistent/ca.pem")
+    :: key_env
+  in
   let conn = connect ~env ~dir:project Modern in
   let job = string_field "job_id" (ok_call conn "run_start" (run_args ())) in
   let status = C.poll_job conn.c job in
@@ -940,6 +943,6 @@ let () =
       ( "run_start with an https upstream",
         [
           Alcotest.test_case "fails as run does" `Quick
-            run_start_https_without_tls;
+            run_start_https_without_roots;
         ] );
     ]

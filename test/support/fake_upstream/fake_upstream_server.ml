@@ -2,7 +2,9 @@
    process: a request that already holds a tool message gets the second
    recorded reply, any other the first, whatever the model or the system
    prompt. It prints its port as its first line, serves until its standard
-   input closes, and holds every request while the --hold file exists. *)
+   input closes, and holds every request while the --hold file exists. With
+   --tls-ca it serves HTTPS for localhost and 127.0.0.1, with a certificate of
+   a CA minted at start and written to that file. *)
 
 open Cmdliner
 module F = Fake_upstream
@@ -29,6 +31,13 @@ let log =
     & info [ "log" ] ~docv:"FILE"
         ~doc:"Append the path of every request to $(docv).")
 
+let tls_ca =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "tls-ca" ] ~docv:"FILE"
+        ~doc:"Serve HTTPS, and write the certificate of its CA to $(docv).")
+
 let has_tool_message (r : F.request) =
   match Canon.of_string r.body with
   | Error _ -> false
@@ -45,7 +54,7 @@ let reply dir case =
       Format.eprintf "fake_upstream_server: %a@." F.pp_error e;
       exit 2
 
-let main fixtures hold log =
+let main fixtures hold log tls_ca =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let first = reply fixtures "luna_nonstream"
@@ -70,7 +79,20 @@ let main fixtures hold log =
       Format.eprintf "fake_upstream_server: %a@." F.pp_error e;
       2
   | Ok up ->
-      print_endline (string_of_int (F.port up));
+      let port =
+        match tls_ca with
+        | None -> F.port up
+        | Some file ->
+            Mirage_crypto_rng_unix.use_default ();
+            let ca = Fake_https.ca () in
+            Out_channel.with_open_bin file (fun oc ->
+                output_string oc (Fake_https.ca_pem ca));
+            Fake_https.port
+              (Fake_https.start ~sw ~net:(Eio.Stdenv.net env)
+                 ~chain:(Fake_https.leaf ca [ Dns "localhost"; Ip "127.0.0.1" ])
+                 ~backend:(F.port up) ())
+      in
+      print_endline (string_of_int port);
       (* The parent holds the other end of standard input. *)
       ignore
         (Eio.Buf_read.take_all
@@ -84,4 +106,4 @@ let () =
        (Cmd.v
           (Cmd.info "fake_upstream_server"
              ~doc:"A fake OpenAI-compatible upstream.")
-          Term.(const main $ fixtures $ hold $ log)))
+          Term.(const main $ fixtures $ hold $ log $ tls_ca)))

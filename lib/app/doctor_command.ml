@@ -30,7 +30,10 @@ let run ?files ~bactrian_exe ~env r =
           Ok
             (Doctor.report
                (Doctor.run ~env ~bactrian_exe
-                  ~tls_available:Features.tls_available ~upstream
+                  ~tls:(fun () ->
+                    Upstream.tls_ready
+                      (Features.connector (Eio.Stdenv.process_mgr env)))
+                  ~upstream
                   ~keys:(Run.keys_from_environment ())
                   ~path:(Sys.getenv_opt "PATH") target)))
 

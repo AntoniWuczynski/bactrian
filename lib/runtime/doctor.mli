@@ -117,13 +117,14 @@ val clock_check :
     all. Contract-only on macOS is expected, so it is [Pass]. *)
 
 val tls_check :
-  available:bool ->
+  tls:(unit -> (unit, string) result) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
   target option ->
   check
-(** [Pass] when the build has the TLS stack. Otherwise [Skip], or [Fail] when
-    the experiment calls a provider whose [upstream] is an [https] URL, or an
-    agent at one. An [http] upstream does not count. *)
+(** [Pass] when [tls] (usually {!Upstream.tls_ready}) succeeds. Otherwise [Fail]
+    when the experiment calls a provider whose [upstream] is an [https] URL, or
+    an agent at one, and [Warn] when it does not. An [http] upstream does not
+    count. *)
 
 val egress_checks : check list
 (** The CA and the Node version, which only matter once egress is intercepted:
@@ -132,7 +133,7 @@ val egress_checks : check list
 val run :
   env:Eio_unix.Stdenv.base ->
   bactrian_exe:string ->
-  tls_available:bool ->
+  tls:(unit -> (unit, string) result) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
   keys:(Model_proxy.provider * string) list ->
   path:string option ->

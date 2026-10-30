@@ -4,6 +4,7 @@
  (libraries
   bactrian.core
   bactrian.runtime
+  bactrian.tls
   eio
   eio.unix
   mirage-crypto-rng.unix

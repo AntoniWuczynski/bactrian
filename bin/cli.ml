@@ -14,7 +14,7 @@ let exits =
       Cmd.Exit.info environment
         ~doc:
           "when the environment is not ready, for example a spend cap of 0, a \
-           missing API key or no TLS support for a live call.";
+           missing API key or no trusted root certificates for an HTTPS call.";
       Cmd.Exit.info internal ~doc:"on an internal error.";
       Cmd.Exit.info Interrupt.exit_status
         ~doc:"when interrupted by SIGINT or SIGTERM.";

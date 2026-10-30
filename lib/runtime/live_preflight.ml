@@ -1,7 +1,7 @@
 type problem =
   | No_cap
   | Missing_key of { provider : Model_proxy.provider; name : string }
-  | No_tls of string list
+  | No_tls of { providers : string list; reason : string }
 
 let funded caps =
   List.filter
@@ -9,7 +9,7 @@ let funded caps =
       match List.assoc_opt name caps with Some usd -> usd > 0. | None -> false)
     Run.providers
 
-let problem ~caps ~has_key ~upstream ~tls_available =
+let problem ~caps ~has_key ~upstream ~tls =
   match funded caps with
   | [] -> Some No_cap
   | funded -> (
@@ -19,20 +19,22 @@ let problem ~caps ~has_key ~upstream ~tls_available =
           match
             List.filter (fun (p, _) -> Upstream.is_https (upstream p)) funded
           with
-          | _ :: _ as https when not tls_available ->
-              Some (No_tls (List.map snd https))
-          | _ :: _ | [] -> None))
+          | [] -> None
+          | _ :: _ as https -> (
+              match tls () with
+              | Ok () -> None
+              | Error reason ->
+                  Some (No_tls { providers = List.map snd https; reason }))))
 
 let describe ~set_caps = function
   | No_cap -> "no provider has a spend cap above 0: set " ^ set_caps
   | Missing_key { provider; name } ->
       Printf.sprintf "%s has a spend cap but %s is not set" name
         (Run.key_variable provider)
-  | No_tls names ->
-      Printf.sprintf
-        "this build has no TLS support (bactrian.tls), so it cannot call \
-         providers (%s) over HTTPS"
-        (String.concat ", " names)
+  | No_tls { providers; reason } ->
+      Printf.sprintf "%s, so bactrian cannot call providers (%s) over HTTPS"
+        reason
+        (String.concat ", " providers)
 
 let is_loopback uri =
   match Uri.host uri with

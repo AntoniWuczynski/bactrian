@@ -149,6 +149,7 @@ val run_experiment :
     resume.
 
     [random_bytes], [keys], [upstream] and [connector] are passed to
-    {!Run.execute}. Without [connector], an https upstream of a provider with a
-    spend cap, or an https HTTP agent, is refused with [Environment] (this build
-    has no TLS). An [http] upstream needs no connector. *)
+    {!Run.execute}. [connector] defaults to {!Upstream.plain}. An https upstream
+    of a provider with a spend cap, or an https HTTP agent, is refused with
+    [Environment] when {!Upstream.tls_ready} fails for it (no TLS connector, or
+    no trusted root certificates). An [http] upstream needs no connector. *)

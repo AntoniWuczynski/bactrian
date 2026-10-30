@@ -154,7 +154,7 @@ let rec reap pid =
 
 let upstream_server = "FAKE_UPSTREAM_SERVER"
 
-let with_upstream ?hold ~dir f =
+let with_upstream ?hold ?tls_ca ~dir f =
   let log = Filename.concat dir "upstream.log" in
   let fixtures =
     Filename.concat (Sys.getcwd ()) "../fixtures/protocols/openai_chat"
@@ -162,7 +162,8 @@ let with_upstream ?hold ~dir f =
   let exe = executable upstream_server in
   let args =
     [ exe; "--fixtures"; fixtures; "--log"; log ]
-    @ match hold with Some h -> [ "--hold"; h ] | None -> []
+    @ (match hold with Some h -> [ "--hold"; h ] | None -> [])
+    @ match tls_ca with Some file -> [ "--tls-ca"; file ] | None -> []
   in
   let stdin_r, stdin_w = Unix.pipe ~cloexec:true () in
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
@@ -178,7 +179,13 @@ let with_upstream ?hold ~dir f =
       reap pid)
   @@ fun () ->
   match int_of_string_opt (String.trim (input_line from_server)) with
-  | Some port -> f { url = Printf.sprintf "http://127.0.0.1:%d" port; log }
+  | Some port ->
+      let url =
+        match tls_ca with
+        | Some _ -> Printf.sprintf "https://localhost:%d" port
+        | None -> Printf.sprintf "http://127.0.0.1:%d" port
+      in
+      f { url; log }
   | None -> Alcotest.fail "the fake upstream did not print its port"
 
 let upstream_url u = u.url

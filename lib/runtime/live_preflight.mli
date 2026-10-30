@@ -8,9 +8,10 @@ type problem =
   | No_cap  (** No provider has a spend cap above 0. *)
   | Missing_key of { provider : Model_proxy.provider; name : string }
       (** A provider with a cap has no key. *)
-  | No_tls of string list
-      (** These providers, which have a cap, have an [https] upstream and this
-          build has no TLS connector. *)
+  | No_tls of { providers : string list; reason : string }
+      (** These providers, which have a cap, have an [https] upstream and TLS
+          cannot work, for [reason]: no TLS connector in the build, or no
+          trusted root certificates. *)
 
 val funded : (string * float) list -> (Model_proxy.provider * string) list
 (** The providers (with their names) whose spend cap is above 0: the ones a
@@ -20,9 +21,11 @@ val problem :
   caps:(string * float) list ->
   has_key:(Model_proxy.provider -> bool) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
-  tls_available:bool ->
+  tls:(unit -> (unit, string) result) ->
   problem option
-(** The first problem, in the order of the constructors. *)
+(** The first problem, in the order of the constructors. [tls] (usually
+    {!Upstream.tls_ready}) is called only when a provider with a cap has an
+    [https] upstream. *)
 
 val describe : set_caps:string -> problem -> string
 (** The message for a problem. [set_caps] says where caps are set, for [No_cap].

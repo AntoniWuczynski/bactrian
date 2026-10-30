@@ -188,26 +188,27 @@ let read_manifest path =
 
 let funded = Live_preflight.funded
 
-let no_tls what =
-  Environment
-    (Printf.sprintf
-       "this build has no TLS support (bactrian.tls), so it cannot call %s \
-        over HTTPS"
-       what)
-
 (* An HTTP agent at an https URL needs the connector, like an https upstream. *)
 let agent_preflight ~connector : Run.agent -> (unit, error) result = function
   | Command _ -> Ok ()
-  | Http { url; _ } ->
-      if Option.is_none connector && Upstream.is_https (Uri.of_string url) then
-        Error (no_tls ("the agent at " ^ url))
-      else Ok ()
+  | Http { url; _ } -> (
+      if not (Upstream.is_https (Uri.of_string url)) then Ok ()
+      else
+        match Upstream.tls_ready connector with
+        | Ok () -> Ok ()
+        | Error reason ->
+            Error
+              (Environment
+                 (Printf.sprintf
+                    "%s, so bactrian cannot call the agent at %s over HTTPS"
+                    reason url)))
 
 let preflight ~caps ~keys ~upstream ~connector ~warn =
   match
     Live_preflight.problem ~caps
       ~has_key:(fun p -> List.mem_assoc p keys)
-      ~upstream ~tls_available:(Option.is_some connector)
+      ~upstream
+      ~tls:(fun () -> Upstream.tls_ready connector)
   with
   | Some problem ->
       Error
@@ -592,7 +593,7 @@ let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
 let run_experiment ?seatbelt_hint ?root
     ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
-    ?(upstream = P.default_upstream) ?connector ?sandbox
+    ?(upstream = P.default_upstream) ?(connector = Upstream.plain) ?sandbox
     ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env ?files
     ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
   let fs = Eio.Stdenv.fs env in
@@ -760,7 +761,7 @@ let run_experiment ?seatbelt_hint ?root
           (match
              Run.execute ~random_bytes
                ~on_start:(fun id -> set i (fun (p, s, _) -> (p, s, Some id)))
-               ~keys ~upstream ?connector ~env ~proxy ~store ~ledger config
+               ~keys ~upstream ~connector ~env ~proxy ~store ~ledger config
            with
           | Ok r ->
               (match r.outcome with

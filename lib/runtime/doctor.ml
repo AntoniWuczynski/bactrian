@@ -387,30 +387,28 @@ let clock_check ~linux ~library_override ~path target =
 
 (* TLS *)
 
-let tls_check ~available ~upstream target =
-  if available then check "tls" Pass "HTTPS support is built in"
-  else
-    let needed =
-      match target with
-      | None -> []
-      | Some t -> (
-          List.filter_map
-            (fun (p, name) ->
-              if Upstream.is_https (upstream p) then Some name else None)
-            t.funded
-          @
-          match t.agent with
-          | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
-              [ "the agent at " ^ url ]
-          | Http _ | Command _ -> [])
-    in
-    match needed with
-    | [] -> check "tls" Skip "HTTPS support is not built in"
-    | _ :: _ ->
-        check "tls" Fail
-          (Printf.sprintf
-             "HTTPS support is not built in, but the experiment needs it for %s"
-             (String.concat ", " needed))
+let tls_check ~tls ~upstream target =
+  let needed =
+    match target with
+    | None -> []
+    | Some t -> (
+        List.filter_map
+          (fun (p, name) ->
+            if Upstream.is_https (upstream p) then Some name else None)
+          t.funded
+        @
+        match t.agent with
+        | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
+            [ "the agent at " ^ url ]
+        | Http _ | Command _ -> [])
+  in
+  match (tls (), needed) with
+  | Ok (), _ -> check "tls" Pass "HTTPS works: the root certificates are loaded"
+  | Error reason, [] -> check "tls" Warn (reason ^ ", so HTTPS will not work")
+  | Error reason, _ :: _ ->
+      check "tls" Fail
+        (Printf.sprintf "%s, but the experiment needs HTTPS for %s" reason
+           (String.concat ", " needed))
 
 (* Egress *)
 
@@ -422,7 +420,7 @@ let egress_checks =
 
 (* All of them *)
 
-let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
+let run ~env ~bactrian_exe ~tls ~upstream ~keys ~path target =
   let keys = List.map fst keys in
   let cwd = match target with Some t -> t.dir | None -> Sys.getcwd () in
   let http_agent =
@@ -463,6 +461,6 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;
-      tls_check ~available:tls_available ~upstream target;
+      tls_check ~tls ~upstream target;
     ]
   @ egress_checks

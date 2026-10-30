@@ -9,4 +9,10 @@
 (executable
  (name fake_upstream_server)
  (modules fake_upstream_server)
- (libraries fake_upstream bactrian.core cmdliner eio_main))
+ (libraries
+  fake_upstream
+  fake_https
+  bactrian.core
+  cmdliner
+  eio_main
+  mirage-crypto-rng.unix))

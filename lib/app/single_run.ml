@@ -99,7 +99,7 @@ let read_caps () =
 
 (* A live call needs a spend cap above zero, the key behind it and, for an
    https upstream, TLS. *)
-let live_problem ~upstream caps =
+let live_problem ~upstream ~connector caps =
   Option.map
     (Live_preflight.describe
        ~set_caps:
@@ -111,7 +111,8 @@ let live_problem ~upstream caps =
          match Sys.getenv_opt (Run.key_variable p) with
          | None | Some "" -> false
          | Some _ -> true)
-       ~upstream ~tls_available:Features.tls_available)
+       ~upstream
+       ~tls:(fun () -> Upstream.tls_ready connector))
 
 let sandbox_problem (s : sandbox) =
   match (Sandbox.backend_available s.backend, s.backend, s.image) with
@@ -131,11 +132,12 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   | Error m, _, _ | _, Error m, _ | _, _, Some m ->
       Error (Command_error.Usage m)
   | Ok caps, Ok upstream, None -> (
-      match if live then live_problem ~upstream caps else None with
+      Mirage_crypto_rng_unix.use_default ();
+      let connector = Features.connector (Eio.Stdenv.process_mgr env) in
+      match if live then live_problem ~upstream ~connector caps else None with
       | Some m -> Error (Command_error.Environment m)
       | None -> (
           if live then List.iter warn (Live_preflight.cleartext caps upstream);
-          Mirage_crypto_rng_unix.use_default ();
           Eio.Switch.run @@ fun sw ->
           let root = Eio.Path.(Eio.Stdenv.cwd env / ".bactrian") in
           match Ledger.create ~path:Eio.Path.(root / "ledger.jsonl") ~caps with
@@ -179,8 +181,8 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                             Option.iter warn
                               (Sandbox.mcp_warning sandbox
                                  (config : Run.config).mcp);
-                            Run.execute ~upstream ~env ~proxy ~store ~ledger
-                              config))
+                            Run.execute ~upstream ~connector ~env ~proxy ~store
+                              ~ledger config))
                   with
                   | Error signal ->
                       Error

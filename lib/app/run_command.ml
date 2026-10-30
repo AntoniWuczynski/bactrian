@@ -19,6 +19,7 @@ let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
       match
         Interrupt.run ?stop (fun () ->
             Executor.run_experiment ~seatbelt_hint:r.seatbelt_hint ~upstream
+              ~connector:(Features.connector (Eio.Stdenv.process_mgr env))
               ?sandbox:r.sandbox
               ~on_sandbox:(fun l -> label := Some l)
               ~bactrian_exe ~env ?files ?vet ~experiment_file:r.experiment
