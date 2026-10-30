@@ -88,7 +88,8 @@ let kind (e : Trace.entry) =
   | Tool_call { turn; name; _ } -> Printf.sprintf "tool_call %d %s" turn name
   | Tool_result { turn; index; _ } ->
       Printf.sprintf "tool_result %d #%d" turn index
-  | Http_call _ -> "http_call"
+  | Http_call { turn; meth; host; status; _ } ->
+      Printf.sprintf "http_call %d %s %s %d" turn meth host status
   | Agent_event { name; _ } -> "event " ^ name
   | Reply { turn; _ } -> Printf.sprintf "reply %d" turn
   | Sandbox_violation _ -> "sandbox_violation"
@@ -537,12 +538,69 @@ let test_no_mcp_means_unjoined () =
   Alcotest.check strs "unchanged" [ "get_weather unjoined" ]
     (joins (build_with two_calls one_turn))
 
+(* The egress proxy's calls go into the turn in progress, by time, and a
+   no_egress assertion sees them. *)
+let test_http_calls () =
+  let agent : B.agent_event list =
+    [
+      Sent_turn { t_ms = 0; turn = 1; content = "a" };
+      Got_reply { t_ms = 50; turn = 1; content = "x" };
+      Sent_turn { t_ms = 100; turn = 2; content = "b" };
+      Got_reply { t_ms = 200; turn = 2; content = "y" };
+    ]
+  in
+  let http : B.http_call list =
+    [
+      {
+        t_ms = 10;
+        meth = "GET";
+        host = "api.example.com";
+        path = "/w";
+        status = 200;
+      };
+      {
+        t_ms = 150;
+        meth = "CONNECT";
+        host = "evil.example";
+        path = "";
+        status = 403;
+      };
+    ]
+  in
+  let entries = B.build { (input agent) with http } in
+  Alcotest.(check (list string))
+    "placed in their turns"
+    [
+      "run_start";
+      "turn_start 1";
+      "http_call 1 GET api.example.com 200";
+      "reply 1";
+      "turn_start 2";
+      "http_call 2 CONNECT evil.example 403";
+      "reply 2";
+      "done";
+    ]
+    (kinds entries);
+  let verdict hosts =
+    match
+      Assertion.evaluate
+        ~cost:(fun _ -> Some 0.)
+        ~egress_intercepted:true (No_egress hosts) entries
+    with
+    | Pass -> "pass"
+    | Fail _ -> "fail"
+  in
+  Alcotest.(check (list string))
+    "a blocked attempt counts" [ "fail"; "pass" ]
+    [ verdict [ "evil.example" ]; verdict [ "other.example" ] ]
+
 let () =
   Alcotest.run "trace_builder"
     [
       ( "build",
         [
           Alcotest.test_case "two-call tool-use sequence" `Quick test_sequence;
+          Alcotest.test_case "egress calls" `Quick test_http_calls;
           Alcotest.test_case "tool call and result details" `Quick
             test_tool_details;
           Alcotest.test_case "tool results are not repeated" `Quick
