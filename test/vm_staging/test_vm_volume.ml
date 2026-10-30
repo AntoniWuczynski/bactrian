@@ -26,9 +26,15 @@ let with_volume f =
   let mount = Filename.concat root "volume"
   and image = Filename.concat root "volume.dmg" in
   Fun.protect ~finally:(fun () ->
-      (* A volume still in use is detached by force: the test owns it. *)
+      (* A volume still in use is detached by force: the test owns it. The
+         scratch directory goes only when the volume does not stay mounted in
+         it, because removing the tree would recurse into the volume. *)
       ignore (quiet "%s detach -force %s" hdiutil (Filename.quote mount) : bool);
-      Proc_util.remove_tree root)
+      let mounted =
+        Sys.file_exists mount
+        && not (Int.equal (fst (identity mount)) (fst (identity root)))
+      in
+      if not mounted then Proc_util.remove_tree root)
   @@ fun () ->
   Unix.mkdir mount 0o700;
   if
