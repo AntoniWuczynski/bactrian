@@ -29,7 +29,7 @@ The sandbox also does not keep other processes of the user from reading the key:
 - The MCP server needs `--trust-project` for an experiment that sets `real_keys`, as it does for `agent.env_passthrough`, the other way an experiment hands the agent the server's own environment. Its jobs run `strict` unless `--allow-unsandboxed`, so over MCP an experiment needs both flags, and the refusal names the one that is missing.
 - There is no switch on `record` and `replay`. Only an experiment can set it.
 
-**Labels.** Each run's `meta.json` has `real_keys: true|false`. `compare`, `report` and the JSON of both read it back: a warning counts the runs that had the key ("N of M runs had the real provider keys in the agent's environment"), each run has `real_keys` and the header has `real_keys_runs`. A run from before the field has none and counts as `false`. The trace and cassette headers do not carry it, because a cassette is shared and the label is about the run that made it. A replay does not need the key and is labelled by its own configuration.
+**Labels.** Each run's `meta.json` has `real_keys: true|false`, which is `true` only when the run placed at least one real key, so a run where bactrian holds no provider key is `false` however the experiment is set. `compare`, `report` and the JSON of both read it back: a warning counts the runs that had the key ("N of M runs had the real provider keys in the agent's environment"), each run has `real_keys` and the header has `real_keys_runs`. A run from before the field has none and counts as `false`. The trace and cassette headers do not carry it, because a cassette is shared and the label is about the run that made it. A replay does not need the key, and without one it is labelled `false`.
 
 ## Consequences
 

@@ -201,7 +201,12 @@ let test_real_keys =
   Alcotest.(check bool)
     "without a key, the placeholder" true
     (String.starts_with ~prefix:"bactrian-"
-       (Yojson.Safe.Util.to_string (List.assoc "OPENAI_API_KEY" replay_env)))
+       (Yojson.Safe.Util.to_string (List.assoc "OPENAI_API_KEY" replay_env)));
+  Alcotest.(check bool)
+    "no key placed, so labelled false" false
+    Yojson.Safe.Util.(
+      to_bool
+        (member "real_keys" (Yojson.Safe.from_file (file replayed "meta.json"))))
 
 let test_environment =
   with_ctx "env" @@ fun ctx ->

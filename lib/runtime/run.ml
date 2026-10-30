@@ -280,6 +280,12 @@ let agent_key config ~keys ~token p =
   | true, Some key -> key
   | true, None | false, _ -> "bactrian-" ^ token
 
+(* Whether [agent_key] gave the agent a real key for any provider, which is
+   what [meta.json] labels [real_keys]. *)
+let real_keys_placed config ~keys =
+  config.real_keys
+  && List.exists (fun (p, _, _) -> Option.is_some (List.assoc_opt p keys)) table
+
 (* What bactrian sets for one run (design §5 step 2), with the variant's own
    variables. A command agent gets them as its environment and an HTTP agent in
    the [env] of its [start] message (design §5.1), so the two cannot differ. *)
@@ -397,9 +403,9 @@ let decide_outcome ~replay (findings : P.findings) failure =
 
 (* Files *)
 
-let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
-    ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock
-    ~upstreams =
+let meta_json ~run_id ~config ~real_keys ~sim_now ~outcome
+    ~(findings : P.findings) ~spend ~latency_ms ~tokens ~normalise ~redact
+    ~replay_of ~violations ~clock ~upstreams =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -415,7 +421,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
               (fun (name, url) -> (name, `String (Uri.to_string url)))
               upstreams) );
        ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
-       ("real_keys", `Bool config.real_keys);
+       ("real_keys", `Bool real_keys);
        ("sandbox_violations", Sandbox.violations_json violations);
        ("outcome", `String (outcome_kind outcome));
        ( "reason",
@@ -874,7 +880,9 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       Store.write_atomic
         Eio.Path.(run_dir / "meta.json")
         (Yojson.Safe.pretty_to_string
-           (meta_json ~run_id ~config ~sim_now ~outcome ~findings ~spend
+           (meta_json ~run_id ~config
+              ~real_keys:(real_keys_placed config ~keys)
+              ~sim_now ~outcome ~findings ~spend
               ~latency_ms:(Report_data.latency_ms entries)
               ~tokens:(Report_data.tokens entries)
               ~normalise:normalise_sources ~redact:redact_sources

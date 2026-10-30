@@ -89,8 +89,10 @@ type config = {
   env_passthrough : string list;
   real_keys : bool;
       (** The agent's environment holds the real key of each provider bactrian
-          has one for, instead of the placeholder (design §5.2). Recorded in
-          [meta.json] under [real_keys]. *)
+          has one for, instead of the placeholder (design §5.2). [meta.json]
+          records [real_keys] as true only when at least one real key was
+          placed, so a replay or a run without any provider key is labelled
+          false. *)
   variant_env : (string * string) list;
       (** The variant's variables, given to the agent after the passthrough
           ones. They cannot replace bactrian's own variables. *)
