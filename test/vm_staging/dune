@@ -4,6 +4,13 @@
 (tests
  (names test_vm_staging test_vm_volume test_vm_launch)
  (package bactrian)
- (libraries bactrian.core bactrian.runtime eio eio_main unix alcotest)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  eio
+  eio_main
+  unix
+  alcotest
+  substring)
  (flags
   (:standard -w -70)))

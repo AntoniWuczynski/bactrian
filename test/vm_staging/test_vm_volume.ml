@@ -55,14 +55,6 @@ let stage ~over ~identity ~run_dir : Vm_args.stage =
     mount_points = [];
   }
 
-let contains s sub =
-  let n = String.length sub in
-  let rec go i =
-    i + n <= String.length s
-    && (String.equal (String.sub s i n) sub || go (i + 1))
-  in
-  go 0
-
 let test_other_volume () =
   if not (Sys.file_exists hdiutil) then Alcotest.skip ();
   with_volume @@ fun ~root ~mount ->
@@ -83,11 +75,13 @@ let test_other_volume () =
   | Ok () -> Alcotest.fail "a file on another volume was staged"
   | Error m ->
       Printf.printf "%s\n" m;
-      Alcotest.(check bool) "names the file" true (contains m notes);
-      Alcotest.(check bool) "says the link failed" true (contains m "hard link");
+      Alcotest.(check bool) "names the file" true (Substring.contains m notes);
+      Alcotest.(check bool)
+        "says the link failed" true
+        (Substring.contains m "hard link");
       Alcotest.(check bool)
         "gives the reason" true
-        (contains m (Unix.error_message Unix.EXDEV)));
+        (Substring.contains m (Unix.error_message Unix.EXDEV)));
   Alcotest.(check bool)
     "nothing of it staged" false
     (Sys.file_exists (Filename.concat s.dir "notes.txt"))
