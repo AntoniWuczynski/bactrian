@@ -121,6 +121,17 @@ def plain_scalar(text: str) -> JSON:
     return text
 
 
+def narrow(value: object) -> JSON:
+    """What json.loads returned, checked to be JSON rather than trusted."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [narrow(item) for item in cast(list[object], value)]
+    if isinstance(value, dict):
+        return {str(key): narrow(item) for key, item in cast(dict[object, object], value).items()}
+    raise SystemExit(f"not JSON: {value!r}")
+
+
 def node_json(node: yaml.Node) -> JSON:
     if isinstance(node, yaml.ScalarNode):
         value = str(node.value)
@@ -128,23 +139,27 @@ def node_json(node: yaml.Node) -> JSON:
     if isinstance(node, yaml.SequenceNode):
         return [node_json(child) for child in node.value]
     if isinstance(node, yaml.MappingNode):
-        return {str(node_json(key)): node_json(value) for key, value in node.value}
+        return {mapping_key(key): node_json(value) for key, value in node.value}
     raise SystemExit(f"unsupported YAML node {node!r}")
+
+
+def mapping_key(node: yaml.Node) -> str:
+    """A mapping key is its text as written, whatever it would resolve to as a
+    value: bactrian keeps the raw key (Config_loader.fields), so `true:` is "true"."""
+    if isinstance(node, yaml.ScalarNode):
+        return str(node.value)
+    raise SystemExit(f"unsupported YAML mapping key {node!r}")
 
 
 def load_text(text: str, suffix: str) -> JSON:
     if suffix in (".yaml", ".yml"):
-        # types-pyyaml leaves compose's parameters unannotated, so its result is
-        # unknown to pyright. It is a node or None, as PyYAML documents.
-        root = cast(yaml.Node | None, yaml.compose(text, Loader=yaml.SafeLoader))  # pyright: ignore[reportUnknownMemberType]
+        root = yaml.SafeLoader(text).get_single_node()
         return None if root is None else node_json(root)
-    parsed: JSON = json.loads(text)
-    return parsed
+    return narrow(json.loads(text))
 
 
 def load_lines(text: str) -> list[JSON]:
-    parsed: list[JSON] = [json.loads(line) for line in text.split("\n") if line != ""]
-    return parsed
+    return [narrow(json.loads(line)) for line in text.split("\n") if line != ""]
 
 
 @dataclass(frozen=True)
@@ -184,6 +199,8 @@ def checker_inputs(root: Path) -> list[Document]:
 
 @dataclass(frozen=True)
 class Fixture:
+    origin: str
+    schema: str
     expected_valid: bool
     documents: list[Document]
 
@@ -196,8 +213,26 @@ def fixtures(root: Path) -> list[Fixture]:
         for path in sorted((root / verdict).glob("*")):
             schema = path.name.split(".", 1)[0]
             kind: Kind = "lines" if path.suffix == ".jsonl" else "document"
-            found.append(Fixture(expected, documents(path, schema, kind, f"fixtures/{verdict}/{path.name}")))
+            origin = f"fixtures/{verdict}/{path.name}"
+            found.append(Fixture(origin, schema, expected, documents(path, schema, kind, origin)))
     return found
+
+
+def ecma_anchors(schema: JSON) -> JSON:
+    """The schemas' patterns as ECMA-262 reads them, which they are written in: a
+    final `$` matches only at the end. Python's `$` also matches before a
+    trailing newline, so "2026-01-01\\n" would pass a date pattern the decoder
+    rejects. `\\Z` is Python's end of string."""
+    if isinstance(schema, list):
+        return [ecma_anchors(item) for item in schema]
+    if isinstance(schema, dict):
+        return {
+            key: item.removesuffix("$") + r"\Z"
+            if key == "pattern" and isinstance(item, str) and item.endswith("$") and not item.endswith("\\$")
+            else ecma_anchors(item)
+            for key, item in schema.items()
+        }
+    return schema
 
 
 class Schemas:
@@ -206,7 +241,7 @@ class Schemas:
         contents: dict[str, Schema] = {}
         resources: list[tuple[str, Resource[Schema]]] = []
         for path in sorted(directory.glob("*.schema.json")):
-            schema: JSON = json.loads(path.read_text(encoding="utf-8"))
+            schema = ecma_anchors(narrow(json.loads(path.read_text(encoding="utf-8"))))
             if not isinstance(schema, dict) or not isinstance(schema.get("$id"), str):
                 raise SystemExit(f"{path.name}: needs an object with an $id")
             if schema.get("$schema") != DIALECT:
@@ -288,8 +323,16 @@ def main() -> int:
         failures.extend(f"{document.origin}: {e}" for e in schemas.errors(document))
 
     for fixture in fixtures(args.fixtures):
+        origin = fixture.origin
+        # An invalid fixture only proves something if it names a schema and has a
+        # document to judge: "no schema named X" would count as a rejection.
+        if fixture.schema not in schemas.names:
+            failures.append(f"{origin}: no schema named {fixture.schema}")
+            continue
+        if not fixture.documents:
+            failures.append(f"{origin}: holds no documents")
+            continue
         rejected = [d for d in fixture.documents if schemas.errors(d)]
-        origin = fixture.documents[0].origin
         if fixture.expected_valid:
             for document in fixture.documents:
                 covered[document.schema] = covered.get(document.schema, 0) + 1
