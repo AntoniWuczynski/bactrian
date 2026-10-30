@@ -46,15 +46,16 @@ let serve ~bactrian_exe (policy : Policy.t) =
               Interrupt.with_handlers
                 (List.map (fun s -> (s, Interrupt.fire stop)) Interrupt.signals)
                 (fun () ->
-                  Mcp_server.run ~env ~root ~stop
+                  let log m = prerr_endline ("bactrian serve-mcp: " ^ m) in
+                  Mcp_server.run ~env ~root
                     {
                       policy;
                       bactrian_exe;
                       on_progress = Cli.print_progress;
-                      log =
-                        (fun m -> prerr_endline ("bactrian serve-mcp: " ^ m));
-                    }
-                    ~input:(flow input) ~output:(flow output))
+                      log;
+                    } (fun server handlers ->
+                      Mcp_server.serve ~server ~handlers ~stop ~log
+                        ~input:(flow input) ~output:(flow output)))
             with
             | Input_closed -> Exit_code.ok
             | Stopped _ -> Interrupt.exit_status))

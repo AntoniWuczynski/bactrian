@@ -28,23 +28,48 @@ type job
 
 val create :
   ?now:(unit -> float) -> ?log:(string -> unit) -> sw:Eio.Switch.t -> unit -> t
-(** Job IDs are random, so the generator must be seeded. [now] (the clock, in
-    seconds) decides when finished jobs expire. [log] gets the exception and
-    backtrace of a job that raised. *)
+(** Job IDs are 128 random bits, so the generator must be seeded. [now] (the
+    clock, in seconds) decides when finished jobs expire. [log] gets the
+    exception and backtrace of a job that raised. *)
 
 val start :
   t ->
   kind:string ->
   progress:(finished:bool -> progress) ->
   (Bactrian_runtime.Interrupt.trigger -> outcome) ->
-  string
-(** Forks the command into the switch and returns the new job's ID at once. The
+  job
+(** Forks the command into the switch and returns the new job at once. The
     command must stop, as on SIGINT, when the trigger fires. An exception from
     it, other than cancellation, fails the job with an [Internal] error.
     [progress] is asked on every {!status}. *)
 
 val find : t -> string -> job option
 val state : job -> state
+val id : job -> string
+
+val created_at : job -> float
+(** When the job started, by the table's clock. *)
+
+val updated_at : job -> float
+(** When the job last changed: it started, a run of it finished (as {!progress}
+    last saw) or it finished. *)
+
+val expires_at : job -> float option
+(** When a finished job is forgotten, at the latest. [None] while it runs. *)
+
+val progress : job -> progress
+
+type ending = {
+  state : state;  (** Never [Running]. *)
+  exit : int;
+  body : Canon.t;
+      (** The command's [--json] output, or its error as [--json] prints it. *)
+  message : string;
+      (** One line on how it ended: the exit status, or the error's message. *)
+}
+
+val ending : job -> ending option
+(** How a finished job ended. [None] while it runs. *)
 
 val running : t -> int
 (** The number of jobs still running. *)
@@ -55,6 +80,9 @@ val status : job -> Canon.t
     output) once it has succeeded or ["error"] ({!Bactrian_app.Command_error} as
     [--json]) once it has failed or been cancelled. [total] is [null] until
     known. *)
+
+val request_cancel : job -> unit
+(** Asks a running job to stop, as {!cancel} does, without waiting for it. *)
 
 val cancel : job -> unit
 (** Stops a running job and returns once its command has finished unwinding: its

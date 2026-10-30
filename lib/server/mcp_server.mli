@@ -1,11 +1,9 @@
-(** [bactrian serve-mcp]: the MCP server over stdio (decision record 0011). One
-    JSON-RPC message per line in each direction. Replies go out through one
-    writer, so lines never interleave, and the server never sends a request.
-    Each [tools/call] runs in its own fibre, so calls are answered as they
-    finish, and [notifications/cancelled] stops the call it names, which then
-    gets no reply. *)
-
-open Bactrian_core
+(** [bactrian serve-mcp]: the MCP server over stdio (decision record 0011), and
+    the job table any transport serves. One JSON-RPC message per line in each
+    direction. Replies go out through one writer, so lines never interleave, and
+    the server never sends a request. Each [tools/call] runs in its own fibre,
+    so calls are answered as they finish, and [notifications/cancelled] stops
+    the call it names, which then gets no reply. *)
 
 type ended =
   | Input_closed  (** End of input: the client is done. *)
@@ -13,17 +11,17 @@ type ended =
 
 val serve :
   server:Mcp_dispatch.server ->
-  call:(string -> Canon.t option -> Canon.t) ->
+  handlers:Mcp_dispatch.handlers ->
   stop:Bactrian_runtime.Interrupt.trigger ->
   log:(string -> unit) ->
   input:_ Eio.Flow.source ->
   output:_ Eio.Flow.sink ->
   ended
-(** Answers the messages on [input] with [call] for the tools until the end of
-    input or until [stop] fires, then cancels the calls still in flight (they
-    get no reply) and returns once they have unwound. A message longer than 16
-    MiB is answered with an error and skipped. [log] gets a line for standard
-    error when that happens. *)
+(** Answers the messages on [input] with [handlers] for the tools and tasks
+    until the end of input or until [stop] fires, then cancels the calls still
+    in flight (they get no reply) and returns once they have unwound. A message
+    longer than 16 MiB is answered with an error and skipped. [log] gets a line
+    for standard error when that happens. *)
 
 val server : Policy.t -> Mcp_dispatch.server
 (** bactrian's name, version, tools and instructions, which state the policy. *)
@@ -38,13 +36,13 @@ type config = {
 val run :
   env:Eio_unix.Stdenv.base ->
   root:Confine.t ->
-  stop:Bactrian_runtime.Interrupt.trigger ->
   config ->
-  input:_ Eio.Flow.source ->
-  output:_ Eio.Flow.sink ->
+  (Mcp_dispatch.server -> Mcp_dispatch.handlers -> ended) ->
   ended
-(** {!serve} with the tools of {!Mcp_tools} and a job table, which ends with it:
-    when {!serve} returns, every running job is cancelled as SIGINT cancels its
-    command (a [run] stays resumable) and [run] returns once all of them have
-    unwound, their agents gone. Seeds the random generator, and must be called
-    inside [Eio_main.run], after {!Bactrian_runtime.Launch_env.scrub}. *)
+(** [run ~env ~root config transport] serves the tools of {!Mcp_tools} and a job
+    table through [transport] ({!serve}, given {!server} and the tools'
+    handlers). The table ends with it: when [transport] returns, every running
+    job is cancelled as SIGINT cancels its command (a [run] stays resumable) and
+    [run] returns once all of them have unwound, their agents gone. Seeds the
+    random generator, and must be called inside [Eio_main.run], after
+    {!Bactrian_runtime.Launch_env.scrub}. *)

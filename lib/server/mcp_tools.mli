@@ -20,9 +20,21 @@ val definitions : (string * Canon.t) list
 (** Each tool's name and its [tools/list] entry: [name], [title], [description],
     [inputSchema] and [annotations]. In a fixed order. *)
 
-val call : context -> string -> Canon.t option -> Canon.t
-(** [call context name arguments] runs the tool and gives its [tools/call]
-    result: [content], [structuredContent] and [isError]. Bad arguments, a path
+val call :
+  context -> tasks:bool -> string -> Canon.t option -> Mcp_dispatch.tool_result
+(** [call context ~tasks name arguments] runs the tool and gives its
+    [tools/call] result: [content], [structuredContent] and [isError]. With
+    [tasks], [run_start], [record_start] and [replay_start] give their job as a
+    task ({!Mcp_tasks.task}) instead of [{"job_id"}]. Bad arguments, a path
     outside the root and a failed command are results with [isError: true] whose
     JSON is the command's error as [--json] prints it. An unknown [name] is one
     too, though {!Mcp_dispatch} refuses it before. *)
+
+val task : context -> Mcp_dispatch.task_op -> string -> Canon.t option
+(** The job with this ID as a [DetailedTask] ({!Mcp_tasks.detailed}), whose
+    completed [result] is the tool result {!call} gives a finished command.
+    [Cancel_task] first asks the job to stop, without waiting. [Update_task]
+    changes nothing: no job asks for input. [None] when there is no such job. *)
+
+val handlers : context -> Mcp_dispatch.handlers
+(** {!call} and {!task}. *)
