@@ -191,20 +191,32 @@ let relay_violations ~coverage ~gaps path =
   match In_channel.with_open_bin path In_channel.input_all with
   | exception Sys_error m -> Not_collected m
   | text ->
-      let items, bad = Sandbox_log.of_relay_log text in
+      let { Sandbox_log.items; unreadable; not_kept } =
+        Sandbox_log.of_relay_log text
+      in
+      let were n = if n = 1 then "was" else "were" in
       Collected
         {
           items;
           coverage;
           gaps =
             (gaps
+            @ (if unreadable = 0 then []
+               else
+                 [
+                   Printf.sprintf "%s in sandbox.log %s skipped"
+                     (plural unreadable "unreadable line")
+                     (were unreadable);
+                 ])
             @
-            if bad = 0 then []
+            if not_kept = 0 then []
             else
               [
-                Printf.sprintf "%s in sandbox.log %s skipped"
-                  (plural bad "unreadable line")
-                  (if bad = 1 then "was" else "were");
+                Printf.sprintf
+                  "%s after the first %d %s not kept here (sandbox.log has \
+                   them)"
+                  (plural not_kept "violation")
+                  Sandbox_log.max_items (were not_kept);
               ]);
         }
 

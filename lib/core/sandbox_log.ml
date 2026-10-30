@@ -248,13 +248,21 @@ let of_relay_line line =
   | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _ ->
       Error "not an object"
 
-let of_relay_log text =
-  let lines =
-    List.filter
-      (fun l -> not (String.equal l ""))
-      (String.split_on_char '\n' text)
+type relay_log = { items : violation list; unreadable : int; not_kept : int }
+
+let max_items = 1000
+
+let of_relay_log ?(max_items = max_items) text =
+  let rec read kept n ~unreadable ~not_kept = function
+    | [] -> { items = List.rev kept; unreadable; not_kept }
+    | "" :: rest -> read kept n ~unreadable ~not_kept rest
+    | line :: rest -> (
+        match of_relay_line line with
+        | Error (_ : string) ->
+            read kept n ~unreadable:(unreadable + 1) ~not_kept rest
+        | Ok v when n < max_items ->
+            read (v :: kept) (n + 1) ~unreadable ~not_kept rest
+        | Ok (_ : violation) ->
+            read kept n ~unreadable ~not_kept:(not_kept + 1) rest)
   in
-  let items =
-    List.filter_map (fun l -> Result.to_option (of_relay_line l)) lines
-  in
-  (items, List.length lines - List.length items)
+  read [] 0 ~unreadable:0 ~not_kept:0 (String.split_on_char '\n' text)

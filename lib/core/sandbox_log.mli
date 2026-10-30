@@ -67,7 +67,16 @@ val of_relay_line : string -> (violation, string) result
     name as {!Dns_message.parse} renders it, or with ["error"] in place of
     ["name"] and ["type"] for a query it could not read. *)
 
-val of_relay_log : string -> violation list * int
+type relay_log = {
+  items : violation list;  (** The first [max_items], in order. *)
+  unreadable : int;  (** Non-empty lines {!of_relay_line} could not read. *)
+  not_kept : int;  (** Readable lines after the first [max_items]. *)
+}
+
+val max_items : int
+(** 1000: an agent can send DNS queries in a loop, and each would otherwise be
+    an item of [meta.json] and an event of the trace. *)
+
+val of_relay_log : ?max_items:int -> string -> relay_log
 (** The violations of a whole forwarder log, one per line that {!of_relay_line}
-    reads, with the number of non-empty lines it could not read. One bad line
-    loses only itself. *)
+    reads, up to [max_items] ({!max_items}). One bad line loses only itself. *)

@@ -141,9 +141,24 @@ let test_relay_log () =
   let good =
     {|{"kind":"relay_failed","port":8080,"socket":"/s","reason":"refused"}|}
   in
-  let items, bad = L.of_relay_log (good ^ "\nnot json\n\n" ^ good ^ "\n{") in
-  Alcotest.(check int) "both good lines kept" 2 (List.length items);
-  Alcotest.(check int) "the bad ones counted" 2 bad
+  let log = L.of_relay_log (good ^ "\nnot json\n\n" ^ good ^ "\n{") in
+  Alcotest.(check int) "both good lines kept" 2 (List.length log.items);
+  Alcotest.(check int) "the bad ones counted" 2 log.unreadable;
+  Alcotest.(check int) "none dropped" 0 log.not_kept;
+  let line n =
+    Printf.sprintf
+      {|{"kind":"dns","transport":"udp","name":"n%d.test","type":"A"}|} n
+  in
+  let flood =
+    L.of_relay_log ~max_items:3
+      (String.concat "\n" (List.init 5 line @ [ "x"; line 5 ]))
+  in
+  Alcotest.(check (list string))
+    "the first ones kept"
+    [ "n0.test A over udp"; "n1.test A over udp"; "n2.test A over udp" ]
+    (List.map (fun (v : L.violation) -> v.detail) flood.items);
+  Alcotest.(check int) "the rest counted" 3 flood.not_kept;
+  Alcotest.(check int) "a bad line still counted" 1 flood.unreadable
 
 let test_relay () =
   (match
