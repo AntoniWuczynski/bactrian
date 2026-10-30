@@ -13,19 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.5.1"
-      - uses: pnpm/action-setup@v6.1.0
-        with:
-          version: "10.7.0"
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version: "24"
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
-      - run: pnpm --dir examples/agents/typescript build
-      - run: uv sync --locked --project examples/agents/python
+      - uses: ./.github/actions/setup-toolchains
       - name: Type-check the sandbox escape agents
         run: |
           pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
@@ -51,6 +39,48 @@ jobs:
       - run: opam exec -- dune build @acceptance
         env:
           BACTRIAN_REQUIRE_VM: ${{ runner.os == 'Linux' && '1' || '0' }}
+  # The virtual machine sandbox's suite again on Podman, which Ubuntu's runner
+  # ships (rootless, with the user's subordinate IDs set up below). Pinned to
+  # 24.04, whose Podman 4.9.3 decision 0022 was checked against: ubuntu-latest
+  # will move to a newer release, with a newer Podman.
+  podman:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-toolchains
+      - run: opam install . --deps-only --with-test --locked
+      - name: Set up rootless Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y uidmap
+          grep -q "^$USER:" /etc/subuid || sudo usermod --add-subuids 100000-165535 "$USER"
+          grep -q "^$USER:" /etc/subgid || sudo usermod --add-subgids 100000-165535 "$USER"
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          # The probe refuses a Podman that drops --pids-limit or --memory, which
+          # a rootless one does unless the user's systemd session has the
+          # controllers delegated to it.
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl restart "user@$(id -u).service"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          controllers="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+          cat "$controllers"
+          for c in pids memory; do
+            grep -qw "$c" "$controllers" || { echo "::error::the $c controller is not delegated to $USER, so Podman cannot apply its limits and the sandbox probe would refuse it"; exit 1; }
+          done
+          podman --version
+          podman info --format '{{.Host.Arch}} rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupManager}} {{.Host.CgroupControllers}}'
+      - run: opam exec -- dune build @acceptance_vm
+        env:
+          BACTRIAN_VM_RUNTIME: podman
+          BACTRIAN_REQUIRE_VM: "1"
   lint-fmt:
     runs-on: ubuntu-latest
     steps:

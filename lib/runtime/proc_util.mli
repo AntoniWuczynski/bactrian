@@ -1,5 +1,8 @@
 (** Small helpers shared by the modules that find and start processes. *)
 
+val macos : bool
+(** Whether the host is macOS, which has Seatbelt's [/usr/bin/sandbox-exec]. *)
+
 val hex : string -> string
 (** Two lowercase hex digits per byte. *)
 

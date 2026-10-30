@@ -32,8 +32,9 @@
    The probe form runs the sandbox checks instead of an agent and writes one
    JSON line on channel 0: the outcome of a connection to a public address and
    to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
-   reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
-   no_new_privs is set. */
+   reading DENIED, MASKED and MASKED_CASE, the network interfaces, whether
+   no_new_privs is set, and the container's limits on processes and memory as
+   its control group gives them. */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -844,6 +845,23 @@ static const char *probe_read(const char *path) {
   return n == 0 ? "empty" : NULL;
 }
 
+/* The first line of a control group file, version 2's or else version 1's,
+   escaped for JSON, or the error. */
+static const char *probe_limit(char *esc, size_t cap, const char *v2,
+                               const char *v1) {
+  FILE *f = fopen(v2, "re");
+  if (f == NULL && errno == ENOENT) f = fopen(v1, "re");
+  if (f == NULL) return errno_name(errno);
+  char line[64];
+  const char *res = fgets(line, sizeof line, f) == NULL ? "empty" : esc;
+  fclose(f);
+  if (res == esc) {
+    line[strcspn(line, "\n")] = '\0';
+    json_string(esc, cap, line);
+  }
+  return res;
+}
+
 static void put_outcome(FILE *f, const char *name, const char *res, int comma) {
   fprintf(f, "\"%s\":\"%s\"%s", name, res == NULL ? "ok" : res,
           comma ? "," : "");
@@ -861,6 +879,12 @@ static int run_probe(int port, const char **paths) {
   const char *root_w = probe_create(paths[5]);
   const char *other_run_w = probe_create(paths[6]);
   const char *no_new_privs = probe_no_new_privs();
+  char pids[128], memory[128];
+  const char *pids_max = probe_limit(pids, sizeof pids, "/sys/fs/cgroup/pids.max",
+                                     "/sys/fs/cgroup/pids/pids.max");
+  const char *memory_max =
+      probe_limit(memory, sizeof memory, "/sys/fs/cgroup/memory.max",
+                  "/sys/fs/cgroup/memory/memory.limit_in_bytes");
   FILE *f = stdout;
   fputc('{', f);
   put_outcome(f, "public", public_, 1);
@@ -873,6 +897,8 @@ static int run_probe(int port, const char **paths) {
   put_outcome(f, "root_write", root_w, 1);
   put_outcome(f, "other_run_write", other_run_w, 1);
   put_outcome(f, "no_new_privs", no_new_privs, 1);
+  put_outcome(f, "pids_max", pids_max, 1);
+  put_outcome(f, "memory_max", memory_max, 1);
   DIR *d = opendir("/sys/class/net");
   put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
   fputs("\"interfaces\":[", f);

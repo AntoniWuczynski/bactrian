@@ -21,7 +21,7 @@ let backends =
   ]
 
 let host_backend () : [ `Seatbelt | `Bubblewrap ] =
-  if Sys.file_exists "/usr/bin/sandbox-exec" then `Seatbelt else `Bubblewrap
+  if Proc_util.macos then `Seatbelt else `Bubblewrap
 
 type applied_backend =
   | Seatbelt_backend
@@ -410,7 +410,7 @@ let probe ~env (host : host) =
 let host_engine ~env : [ `Seatbelt | `Bubblewrap ] -> (engine, string) result =
   function
   | `Seatbelt ->
-      if Sys.file_exists "/usr/bin/sandbox-exec" then Ok Seatbelt
+      if Proc_util.macos then Ok Seatbelt
       else Error "backend seatbelt needs macOS (/usr/bin/sandbox-exec)"
   | `Bubblewrap ->
       if Sys.file_exists "/proc/self/ns/net" then bubblewrap ~env
@@ -515,7 +515,7 @@ let check_vm ~env settings =
          ~extra:[ resolved denied_dir; resolved masked ]
          ~read_only:
            (match Sandbox_vm.kind vm with
-           | `Docker -> []
+           | `Docker | `Podman -> []
            | `Container -> [ resolved mask_dir ])
          host)
       ~dir
@@ -594,14 +594,14 @@ let preflight ?(seatbelt_hint = true) ~env ~warn settings =
                 ("sandbox: strict on macOS runs the agent in a virtual \
                   machine, and sandbox.image is not set. Fix: set \
                   sandbox.image to an image that holds the agent's runtime and \
-                  run OrbStack, Docker Desktop or Apple's container"
+                  run OrbStack, Docker Desktop, Podman or Apple's container"
                ^ seatbelt_fix)
           | None, `Auto ->
               warn
                 ("sandbox: auto: the agent runs under Seatbelt, where "
                ^ exposure
-               ^ ". Fix: set sandbox.image and run OrbStack, Docker Desktop or \
-                  Apple's container to run it in a virtual machine"
+               ^ ". Fix: set sandbox.image and run OrbStack, Docker Desktop, \
+                  Podman or Apple's container to run it in a virtual machine"
                 ^
                 if seatbelt_hint then
                   ", or set sandbox.backend: seatbelt to accept this"

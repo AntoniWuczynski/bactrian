@@ -1,0 +1,21 @@
+name: setup-toolchains
+description: OCaml, Node and Python toolchains, and the example agents built
+runs:
+  using: composite
+  steps:
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: "5.5.1"
+    - uses: pnpm/action-setup@v6.1.0
+      with:
+        version: "10.7.0"
+    - uses: actions/setup-node@v7.0.0
+      with:
+        node-version: "24"
+    - uses: astral-sh/setup-uv@v10.2.0
+    - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
+      shell: bash
+    - run: pnpm --dir examples/agents/typescript build
+      shell: bash
+    - run: uv sync --locked --project examples/agents/python
+      shell: bash

@@ -293,6 +293,12 @@ let test_sandbox_backend () =
          {|, "sandbox": {"backend": "vm", "image": "node:24@sha256:abc", "runtime": "container"}|})
   in
   Alcotest.(check bool) "container" true (t.sandbox_runtime = Some `Container);
+  let t =
+    decoded
+      (doc
+         {|, "sandbox": {"backend": "vm", "image": "node:24@sha256:abc", "runtime": "podman"}|})
+  in
+  Alcotest.(check bool) "podman" true (t.sandbox_runtime = Some `Podman);
   let t = decoded (doc {|, "sandbox": {"backend": "seatbelt"}|}) in
   Alcotest.(check bool) "seatbelt" true (t.sandbox_backend = `Seatbelt);
   let one json =
@@ -306,12 +312,6 @@ let test_sandbox_backend () =
       "backend vm needs an image that holds the agent's runtime (a \
        digest-pinned reference such as node:24-alpine@sha256:...)" )
     (one {|, "sandbox": {"backend": "vm"}|});
-  Alcotest.(check (pair string string))
-    "podman is not verified"
-    ( "sandbox.runtime",
-      "podman is not supported yet: only docker (Docker Engine, Docker \
-       Desktop, OrbStack) and container (Apple's) have been verified" )
-    (one {|, "sandbox": {"backend": "vm", "image": "i", "runtime": "podman"}|});
   Alcotest.(check (pair string string))
     "an image that looks like an option"
     ( "sandbox.image",

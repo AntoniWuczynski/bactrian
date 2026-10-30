@@ -69,13 +69,13 @@
    %{exe:../../bin/main.exe}
    (run %{exe:test_launch_env_outside.exe}))))
 
-; The virtual machine sandbox, on docker, or on Apple's container when
-; BACTRIAN_VM_RUNTIME is container. Skipped without the runtime, unless
-; BACTRIAN_REQUIRE_VM is 1. Needs the network once, for the images,
-; the relay's build and the Python agent's packages.
+; The virtual machine sandbox, on docker, or on podman or Apple's container
+; when BACTRIAN_VM_RUNTIME is podman or container. Skipped without the
+; runtime, unless BACTRIAN_REQUIRE_VM is 1. Needs the network once, for the
+; images, the relay's build and the Python agent's packages.
 
 (rule
- (alias acceptance)
+ (alias acceptance_vm)
  (deps
   ../../examples/agents/typescript/dist/agent.js
   ../../examples/agents/python/agent.py
@@ -91,3 +91,12 @@
    BACTRIAN_EXE
    %{exe:../../bin/main.exe}
    (run %{exe:test_vm.exe}))))
+
+; @acceptance runs the virtual machine suite too. @acceptance_vm is it alone,
+; for a job that runs it on another runtime.
+
+(rule
+ (alias acceptance)
+ (deps
+  (alias acceptance_vm))
+ (action (progn)))

@@ -25,6 +25,8 @@ type input = {
   labels : (string * string) list;
   uid : int;
   gid : int;
+  rootless : bool;
+  remote_client : bool;
   image : string;
   workdir : string;
   env_file : string;
@@ -129,12 +131,30 @@ let relay_dir = "/bactrian"
    host. 1024 processes is far above what a Node or Python agent starts, 4 GiB
    covers a large agent's heap, and swap is set equal to memory so there is
    none. *)
-let limits = [ "--pids-limit"; "1024"; "--memory"; "4g"; "--memory-swap"; "4g" ]
+let max_processes = 1024
+let max_memory_gib = 4
+let memory = Printf.sprintf "%dg" max_memory_gib
+
+let limits =
+  [
+    "--pids-limit";
+    string_of_int max_processes;
+    "--memory";
+    memory;
+    "--memory-swap";
+    memory;
+  ]
 
 (* container has no --pids-limit. Each container is a virtual machine of its
    own, where the agent's user is the only one but root, so a limit on that
    user's processes is a limit on the container's. It has no swap setting. *)
-let container_limits = [ "--ulimit"; "nproc=1024:1024"; "--memory"; "4g" ]
+let container_limits =
+  [
+    "--ulimit";
+    Printf.sprintf "nproc=%d:%d" max_processes max_processes;
+    "--memory";
+    memory;
+  ]
 
 (* Written out, rather than left to the daemon, so they hold whatever its
    defaults are. *)
@@ -202,6 +222,10 @@ let mount_args (kind : Experiment.sandbox_runtime) ~stage_of = function
          directory bactrian makes) in a test on OrbStack, which stopped the
          agent reaching its own directories beneath the mask over the runs. *)
       | `Docker -> [ "--tmpfs"; path ^ ":ro,mode=0755" ]
+      (* Podman copies the files beneath a tmpfs into it by default, also
+         those of a bind mount above it, which would leave the directory as
+         visible as before. *)
+      | `Podman -> [ "--tmpfs"; path ^ ":ro,mode=0755,notmpcopyup" ]
       | `Container -> (
           match stage_of path with
           | Some stage ->
@@ -342,17 +366,18 @@ let entries_of i plain ~parents ~files dir =
           if e.masked_file || taken path then Ok None
           else
             match (i.kind, e.kind, shows plain path) with
-            | `Docker, (File | Dir | Special), Some writable -> bind writable
+            | (`Docker | `Podman), (File | Dir | Special), Some writable ->
+                bind writable
             | `Container, File, Some _ -> link path
             | `Container, Dir, Some writable -> bind writable
-            | (`Docker | `Container), Link_to_file target, Some _ -> (
+            | (`Docker | `Container | `Podman), Link_to_file target, Some _ -> (
                 match (i.kind, shows plain target) with
-                | `Docker, Some writable -> bind writable
+                | (`Docker | `Podman), Some writable -> bind writable
                 | `Container, Some _ -> link target
-                | (`Docker | `Container), None -> Ok None)
+                | (`Docker | `Container | `Podman), None -> Ok None)
             | `Container, Special, Some _
-            | (`Docker | `Container), Other_link, Some _
-            | ( (`Docker | `Container),
+            | (`Docker | `Container | `Podman), Other_link, Some _
+            | ( (`Docker | `Container | `Podman),
                 (File | Dir | Special | Link_to_file _ | Other_link),
                 None ) ->
                 Ok None)
@@ -379,7 +404,7 @@ let mounts i =
         else
           match (i.kind, shows plain dir) with
           | `Container, Some true -> Error (Writable_mask_dir { file = f; dir })
-          | `Container, (Some false | None) | `Docker, _ -> Ok ())
+          | `Container, (Some false | None) | (`Docker | `Podman), _ -> Ok ())
       files
   in
   let* entries = map_all (entries_of i plain ~parents ~files) parents in
@@ -406,7 +431,7 @@ let mounts i =
      container cannot make a mount point in a read-only mount. *)
   let stages =
     match i.kind with
-    | `Docker -> []
+    | `Docker | `Podman -> []
     | `Container ->
         List.mapi
           (fun n (over, items) ->
@@ -432,6 +457,34 @@ let mounts i =
   in
   Ok (all_mounts, stages)
 
+(* Podman's differences from Docker's command line (decision 0022). A rootless
+   Podman always runs the container in a user namespace, where the host user is
+   the container's root and any other ID is a subordinate one that owns none of
+   the project's files, so the agent's own ID is mapped to itself
+   ([keep-id]). A read-only root gets a writable tmpfs on /dev, /dev/shm, /run,
+   /tmp and /var/tmp unless told not to, where Docker's has bactrian's /tmp and
+   its own /dev/shm alone. Told not to, Podman makes /dev/shm read-only as
+   well, so it gets one like Docker's (64 MiB, Docker Engine's and Podman's
+   default size) for the shared memory and named semaphores of Python's
+   multiprocessing or Chromium.
+   Podman also adds the proxy variables of the Podman service's environment
+   ([http-proxy], on by default, which can hold credentials) and, with
+   [env_host] in containers.conf, the whole of it ([env-host]), so both are
+   switched off. The remote client (a Podman machine, [CONTAINER_HOST]) has no
+   [env-host] flag, and sends no host environment, so only the first applies. *)
+let podman_flags kind ~rootless ~remote_client =
+  match kind with
+  | `Docker -> []
+  | `Podman ->
+      (if rootless then [ "--userns=keep-id" ] else [])
+      @ [
+          "--read-only-tmpfs=false";
+          "--tmpfs";
+          "/dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=64m";
+          "--http-proxy=false";
+        ]
+      @ if remote_client then [] else [ "--env-host=false" ]
+
 let check_port p = if p >= 1 && p <= 65535 then Ok () else Error (Bad_port p)
 
 let argv i =
@@ -452,7 +505,7 @@ let argv i =
   in
   let* () =
     match i.kind with
-    | `Docker -> Ok ()
+    | `Docker | `Podman -> Ok ()
     | `Container ->
         let* () = if i.uid = 0 then Error Root_user else Ok () in
         all
@@ -502,9 +555,11 @@ let argv i =
   in
   let start, flags, entrypoint, relay_mount =
     match i.kind with
-    | `Docker ->
+    | (`Docker | `Podman) as kind ->
         ( [ "run"; "--rm"; "-i" ],
           [ "--security-opt"; "no-new-privileges" ]
+          @ podman_flags kind ~rootless:i.rootless
+              ~remote_client:i.remote_client
           @ [
               "--user"; Printf.sprintf "%d:%d" i.uid i.gid; "--tmpfs"; tmp_mount;
             ]

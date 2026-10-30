@@ -1,8 +1,8 @@
 (** The container runtime behind a virtual machine sandbox (design §5.3): a
     Docker-compatible command line, which on macOS drives a Linux virtual
-    machine (OrbStack, Docker Desktop), or Apple's [container], which starts a
-    virtual machine for each container. Finds it, checks images, builds the
-    relay ([vm/relay.c]) and removes containers.
+    machine (OrbStack, Docker Desktop), Podman (decision 0022), or Apple's
+    [container], which starts a virtual machine for each container. Finds it,
+    checks images, builds the relay ([vm/relay.c]) and removes containers.
 
     Every command it runs gets {!client_env}, never bactrian's own environment,
     which holds the provider keys (decision 0010). *)
@@ -13,20 +13,43 @@ type t
 val kind : t -> Bactrian_core.Experiment.sandbox_runtime
 
 val name : t -> string
-(** ["docker"] or ["container"]. *)
+(** ["docker"], ["podman"] or ["container"]. *)
 
 val exe : t -> string
 (** The executable, an absolute path. *)
 
+val client_variables : Bactrian_core.Experiment.sandbox_runtime -> string list
+(** The names of the variables the runtime's client gets from bactrian's own
+    environment, and no others. For Podman that includes [CONTAINER_SSHKEY], the
+    path of the key to a remote service, but not the key's passphrase
+    ([CONTAINER_PASSPHRASE]) or the agent socket ([SSH_AUTH_SOCK]), and none of
+    them reaches the container. *)
+
 val client_env : t -> string array
 (** [NAME=VALUE] for the variables the runtime's client reads ([PATH], [HOME],
     [USER], [LOGNAME], [TMPDIR], [XDG_RUNTIME_DIR], [XDG_CONFIG_HOME], and for
-    docker the [DOCKER_*] ones that select and reach the daemon), as bactrian
-    has them. *)
+    docker the [DOCKER_*] ones that select and reach the daemon, and for podman
+    where its store, session and remote connection are), as bactrian has them.
+*)
+
+val rootless : t -> bool
+(** Whether the runtime runs containers in a user namespace of its own: a
+    rootless Podman. Always false for the others. *)
+
+val remote_client : t -> bool
+(** Whether the client is Podman's remote one (a Podman machine, or
+    [CONTAINER_HOST] or [CONTAINER_CONNECTION] set), which has no [--env-host].
+    Always false for the others. *)
 
 val arch : t -> string
 (** The architecture of the runtime's machines, such as ["arm64"] or ["amd64"].
 *)
+
+val detection_order :
+  macos:bool -> Bactrian_core.Experiment.sandbox_runtime list
+(** The runtimes {!detect} tries when none is named: docker, podman, container,
+    and on macOS docker, container, podman, so a Podman machine that happens to
+    run is not taken ahead of Apple's [container], which was checked more. *)
 
 val detect :
   process_mgr:_ Eio.Process.mgr ->
@@ -35,9 +58,9 @@ val detect :
   (t, string) result
 (** Looks the runtime up on [PATH] and asks it for its architecture: docker's
     daemon ([version]), or container's services, which must be running
-    ([system status]). Unset, it is docker when that answers, otherwise
-    container. The error says what is missing and how to get it, for both when
-    neither works. *)
+    ([system status]), or podman's ([info]: architecture and whether it is
+    rootless). Unset, it is the first of {!detection_order} that answers. The
+    error says what is missing and how to get it, for each when none works. *)
 
 val image_id :
   process_mgr:_ Eio.Process.mgr ->
@@ -46,8 +69,9 @@ val image_id :
   string ->
   (string, string) result
 (** The image in the runtime's local store ([image inspect -- IMAGE]): docker's
-    image ID, or the digest ([sha256:...]) container names it by. Never pulls:
-    the error gives the command that does. *)
+    image ID, podman's (its 64 hexadecimal digits after [sha256:]), or the
+    digest ([sha256:...]) container names it by. Never pulls: the error gives
+    the command that does. *)
 
 val create :
   process_mgr:_ Eio.Process.mgr ->
@@ -72,14 +96,24 @@ val relay_cache_dir : unit -> string
 
 val relay_name : t -> string
 (** The cached relay's file name: a hash of {!Relay_source.text} and the
-    architecture, so a changed relay is built again, and the same for both
-    runtimes on one host. *)
+    architecture, so a changed relay is built again, and the same for every
+    runtime on one host. *)
 
 val build_image : string
 (** The Alpine image, pinned by digest, that builds the relay. *)
 
 val build_packages : string list
 (** The Alpine packages the build installs. *)
+
+val build_script :
+  kind:Bactrian_core.Experiment.sandbox_runtime ->
+  rootless:bool ->
+  uid:int ->
+  gid:int ->
+  string
+(** The shell script that builds the relay in the container. It ends with a
+    [chown] to [uid:gid], except under a rootless Podman, where the container's
+    root is that user already and the user's ID is a subordinate one inside. *)
 
 val relay :
   process_mgr:_ Eio.Process.mgr ->

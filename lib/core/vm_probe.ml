@@ -11,6 +11,8 @@ type report = {
   root_write : outcome;
   other_run_write : outcome;
   no_new_privs : outcome;
+  pids_max : string;
+  memory_max : string;
   interfaces_listed : outcome;
   interfaces : string list;
 }
@@ -26,6 +28,8 @@ type wire = {
   root_write : string;
   other_run_write : string;
   no_new_privs : string;
+  pids_max : string;
+  memory_max : string;
   interfaces_listed : string;
   interfaces : string list;
 }
@@ -50,6 +54,8 @@ let of_line line =
             root_write = of_word w.root_write;
             other_run_write = of_word w.other_run_write;
             no_new_privs = of_word w.no_new_privs;
+            pids_max = w.pids_max;
+            memory_max = w.memory_max;
             interfaces_listed = of_word w.interfaces_listed;
             interfaces = w.interfaces;
           })
@@ -115,8 +121,32 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
             e;
         ]
   in
+  (* container has no control group limits of its own: its processes are
+     limited per user and its memory is the virtual machine's. *)
+  let limits =
+    let holds what flag value expected =
+      if String.equal value expected then []
+      else
+        [
+          Printf.sprintf
+            "the container's limit on %s is %s, not %s, so the runtime did not \
+             apply %s (a rootless runtime needs the pids and memory \
+             controllers delegated to the user, and a container in the host's \
+             control group namespace, as with cgroupns=host, or in none, as \
+             with Podman's cgroups = \"disabled\", has no limit files to read)"
+            what value expected flag;
+        ]
+    in
+    match runtime with
+    | `Container -> []
+    | `Docker | `Podman ->
+        holds "processes" "--pids-limit" r.pids_max
+          (string_of_int Vm_args.max_processes)
+        @ holds "memory" "--memory" r.memory_max
+            (string_of_int (Vm_args.max_memory_gib * 1024 * 1024 * 1024))
+  in
   match
-    public @ interfaces @ no_new_privs
+    public @ interfaces @ no_new_privs @ limits
     @ fails_with "a read of a masked file" "ENOENT" r.masked_read
     @ fails_with "a read of a masked file under its name in another case"
         "ENOENT" r.masked_case_read
@@ -130,7 +160,9 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
       | Ok () -> []
       | Error _ as e ->
           fails_with "a write outside the state directory"
-            (match runtime with `Docker -> "EROFS" | `Container -> "EACCES")
+            (match runtime with
+            | `Docker | `Podman -> "EROFS"
+            | `Container -> "EACCES")
             e)
     @ checks ~listener:r.listener ~outside_write:r.outside_write
         ~inside_write:r.inside_write ~denied_read:r.denied_read

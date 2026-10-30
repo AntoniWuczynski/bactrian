@@ -269,7 +269,7 @@ let common_properties =
       (Enum (names Sandbox.backends))
       "Where the sandboxed agent runs: auto (default: a virtual machine on \
        macOS when sandbox_image is set, otherwise the host's own sandbox), vm \
-       (a Linux container with no network, through Docker or Apple's \
+       (a Linux container with no network, through Docker, Podman or Apple's \
        container), seatbelt (macOS, refused unless the server was started with \
        --allow-unsandboxed) or bubblewrap (Linux). On macOS, strict with auto \
        needs sandbox_image.";
@@ -279,8 +279,9 @@ let common_properties =
     prop "sandbox_runtime"
       (Enum (names Bactrian_core.Experiment.sandbox_runtimes))
       "The container runtime of the vm backend: docker (Docker Engine, Docker \
-       Desktop or OrbStack) or container (Apple's). Default: docker when it \
-       answers, otherwise container.";
+       Desktop or OrbStack), podman or container (Apple's). Default: the first \
+       of docker, podman and container that answers, on macOS of docker, \
+       container and podman.";
   ]
 
 let sandbox_backend = enum ~field:"sandbox_backend" Sandbox.backends

@@ -6,6 +6,8 @@ type t = {
   exe : string;
   client_env : string array;
   arch : string;
+  rootless : bool;
+  remote_client : bool;
 }
 
 let kind t = t.kind
@@ -13,6 +15,8 @@ let name t = t.name
 let exe t = t.exe
 let client_env t = t.client_env
 let arch t = t.arch
+let rootless t = t.rootless
+let remote_client t = t.remote_client
 let ( let* ) = Result.bind
 
 let client_variables : Experiment.sandbox_runtime -> string list =
@@ -39,6 +43,20 @@ let client_variables : Experiment.sandbox_runtime -> string list =
           "DOCKER_API_VERSION";
         ]
   | `Container -> common
+  | `Podman ->
+      (* Where its store, its remote connection and its user session are. *)
+      common
+      @ [
+          "XDG_DATA_HOME";
+          "DBUS_SESSION_BUS_ADDRESS";
+          "CONTAINER_HOST";
+          "CONTAINER_CONNECTION";
+          "CONTAINER_SSHKEY";
+          "CONTAINERS_CONF";
+          "CONTAINERS_STORAGE_CONF";
+          "CONTAINERS_REGISTRIES_CONF";
+          "PODMAN_CONNECTIONS_CONF";
+        ]
 
 let current_client_env kind =
   Array.of_list
@@ -82,6 +100,7 @@ let run_client ~process_mgr ~clock ?(timeout = 30.) t args =
 let runtime_name : Experiment.sandbox_runtime -> string = function
   | `Docker -> "docker"
   | `Container -> "container"
+  | `Podman -> "podman"
 
 let find name =
   Proc_util.find_executable ~path:(Sys.getenv_opt "PATH") ~cwd:(Sys.getcwd ())
@@ -94,8 +113,8 @@ let detect_docker ~process_mgr ~clock =
       Error
         (Printf.sprintf
            "%s is not on PATH. Fix: install a Docker-compatible runtime \
-            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux, \
-            Podman is not supported yet)"
+            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux), or \
+            for Podman set sandbox.runtime to podman"
            name)
   | Some exe -> (
       let client_env = current_client_env `Docker in
@@ -112,7 +131,17 @@ let detect_docker ~process_mgr ~clock =
       | Ok text -> (
           match String.trim text with
           | "" -> Error (exe ^ " version did not name the daemon's architecture")
-          | arch -> Ok { kind = `Docker; name; exe; client_env; arch }))
+          | arch ->
+              Ok
+                {
+                  kind = `Docker;
+                  name;
+                  exe;
+                  client_env;
+                  arch;
+                  rootless = false;
+                  remote_client = false;
+                }))
 
 let detect_container ~process_mgr ~clock =
   let name = runtime_name `Container in
@@ -145,34 +174,92 @@ let detect_container ~process_mgr ~clock =
           | Ok { running = true; architecture = ""; _ } ->
               Error (exe ^ " system status did not name the architecture")
           | Ok { running = true; architecture = arch; _ } ->
-              Ok { kind = `Container; name; exe; client_env; arch }))
+              Ok
+                {
+                  kind = `Container;
+                  name;
+                  exe;
+                  client_env;
+                  arch;
+                  rootless = false;
+                  remote_client = false;
+                }))
 
-(* Unset, the runtime is docker when it answers, otherwise container. *)
+(* The architecture, whether containers are rootless and whether the client is
+   Podman's remote one, from [podman info] (on macOS the client reaches the
+   machine's Podman, so the first two are its). *)
+let detect_podman ~process_mgr ~clock =
+  let name = runtime_name `Podman in
+  match find name with
+  | None ->
+      Error
+        (Printf.sprintf
+           "%s is not on PATH. Fix: install Podman \
+            (podman.io/docs/installation)"
+           name)
+  | Some exe -> (
+      let client_env = current_client_env `Podman in
+      match
+        capture ~process_mgr ~clock ~env:client_env ~timeout:30.
+          [ exe; "info"; "--format"; Podman_cli.info_format ]
+      with
+      | Error why ->
+          Error
+            (Printf.sprintf
+               "%s cannot reach its service (%s). Fix: on macOS or Windows run \
+                %s machine start, on Linux check %s info"
+               exe why name name)
+      | Ok text -> (
+          match Podman_cli.info text with
+          | Ok { arch; rootless; remote } ->
+              Ok
+                {
+                  kind = `Podman;
+                  name;
+                  exe;
+                  client_env;
+                  arch;
+                  rootless;
+                  remote_client = remote;
+                }
+          | Error m -> Error (Printf.sprintf "%s info %s" exe m)))
+
+let detect_kind ~process_mgr ~clock : Experiment.sandbox_runtime -> _ = function
+  | `Docker -> detect_docker ~process_mgr ~clock
+  | `Container -> detect_container ~process_mgr ~clock
+  | `Podman -> detect_podman ~process_mgr ~clock
+
+let detection_order ~macos : Experiment.sandbox_runtime list =
+  if macos then [ `Docker; `Container; `Podman ]
+  else [ `Docker; `Podman; `Container ]
+
+(* Unset, the first of the [detection_order] that answers. *)
 let detect ~process_mgr ~clock = function
-  | Some `Docker -> detect_docker ~process_mgr ~clock
-  | Some `Container -> detect_container ~process_mgr ~clock
-  | None -> (
-      match detect_docker ~process_mgr ~clock with
-      | Ok t -> Ok t
-      | Error docker -> (
-          match detect_container ~process_mgr ~clock with
-          | Ok t -> Ok t
-          | Error container ->
-              Error
-                (Printf.sprintf
-                   "no container runtime works. docker: %s. container: %s"
-                   docker container)))
+  | Some kind -> detect_kind ~process_mgr ~clock kind
+  | None ->
+      let rec first failed = function
+        | [] ->
+            Error
+              ("no container runtime works. "
+              ^ String.concat ". " (List.rev failed))
+        | kind :: rest -> (
+            match detect_kind ~process_mgr ~clock kind with
+            | Ok t -> Ok t
+            | Error why ->
+                first
+                  (Printf.sprintf "%s: %s" (runtime_name kind) why :: failed)
+                  rest)
+      in
+      first [] (detection_order ~macos:Proc_util.macos)
 
 let image_id ~process_mgr ~clock t image =
   let missing () =
-    match t.kind with
-    | `Docker ->
-        Printf.sprintf "the image %s is not present locally. Fix: %s pull %s"
-          image t.name image
-    | `Container ->
-        Printf.sprintf
-          "the image %s is not present locally. Fix: %s image pull %s" image
-          t.name image
+    Printf.sprintf "the image %s is not present locally. Fix: %s %s %s" image
+      t.name
+      (match t.kind with
+      | `Docker | `Podman -> "pull"
+      | `Container -> "image pull")
+      image
   in
   let digest out =
     match String.trim out with
@@ -182,14 +269,22 @@ let image_id ~process_mgr ~clock t image =
           (Printf.sprintf "%s image inspect gave %S, not an image digest" t.name
              d)
   in
+  let hex_id out =
+    Result.map_error
+      (Printf.sprintf "%s image inspect %s" t.name)
+      (Podman_cli.image_id out)
+  in
+  let by_id check =
+    match
+      run_client ~process_mgr ~clock t
+        [ "image"; "inspect"; "--format"; "{{.Id}}"; "--"; image ]
+    with
+    | Ok out -> check out
+    | Error _ -> Error (missing ())
+  in
   match t.kind with
-  | `Docker -> (
-      match
-        run_client ~process_mgr ~clock t
-          [ "image"; "inspect"; "--format"; "{{.Id}}"; "--"; image ]
-      with
-      | Ok out -> digest out
-      | Error _ -> Error (missing ()))
+  | `Docker -> by_id digest
+  | `Podman -> by_id hex_id
   | `Container -> (
       match
         run_client ~process_mgr ~clock t [ "image"; "inspect"; "--"; image ]
@@ -240,7 +335,7 @@ let relay_name t =
 
 (* Alpine 3.24.2 (2026-09-18), the multi-architecture index. *)
 let build_image =
-  "alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+  "docker.io/library/alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 
 let build_packages = [ "gcc"; "musl-dev" ]
 let build_timeout = 600.
@@ -250,6 +345,21 @@ let rec mkdirs path =
     mkdirs (Filename.dirname path);
     try Unix.mkdir path 0o700 with Unix.Unix_error (EEXIST, _, _) -> ()
   end
+
+let build_script ~kind ~rootless ~uid ~gid =
+  (* In a rootless Podman the container's root is this user already, and this
+     user's ID is a subordinate one there, which a chown would give the file. *)
+  let chown =
+    match (kind, rootless) with
+    | `Podman, true -> ""
+    | (`Docker | `Container | `Podman), (true | false) ->
+        Printf.sprintf " && chown %d:%d /out/relay" uid gid
+  in
+  Printf.sprintf
+    "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
+     /out/relay /src/relay.c%s"
+    (String.concat " " build_packages)
+    chown
 
 (* Built into a directory of its own and renamed into place, so two bactrian
    processes building at once never see half a file. *)
@@ -266,15 +376,12 @@ let build ~process_mgr ~clock t ~dir ~target =
   Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
       output_string oc Relay_source.text);
   let script =
-    Printf.sprintf
-      "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
-       /out/relay /src/relay.c && chown %d:%d /out/relay"
-      (String.concat " " build_packages)
-      (Unix.getuid ()) (Unix.getgid ())
+    build_script ~kind:t.kind ~rootless:t.rootless ~uid:(Unix.getuid ())
+      ~gid:(Unix.getgid ())
   in
   let run =
     match t.kind with
-    | `Docker -> [ "run"; "--rm" ]
+    | `Docker | `Podman -> [ "run"; "--rm" ]
     | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
   in
   let* _ =
@@ -379,10 +486,17 @@ let owner_gone ~pid ~host =
 let stale ~name ~pid ~host =
   String.starts_with ~prefix:"bactrian-" name && owner_gone ~pid ~host
 
+(* A label in a [ps --format] row. Docker's [.Labels] is one string, so it has
+   [.Label]. *)
+let ps_label (kind : [ `Docker | `Podman ]) key =
+  match kind with
+  | `Podman -> Podman_cli.ps_label key
+  | `Docker -> Printf.sprintf {|{{.Label "%s"}}|} key
+
 (* Each container that carries the labels, as (name, pid, host). *)
 let labelled ~process_mgr ~clock t =
   match t.kind with
-  | `Docker ->
+  | (`Docker | `Podman) as kind ->
       Result.map
         (fun out ->
           List.filter_map
@@ -398,8 +512,8 @@ let labelled ~process_mgr ~clock t =
              "--filter";
              "label=" ^ label_pid;
              "--format";
-             Printf.sprintf {|{{.Names}}	{{.Label "%s"}}	{{.Label "%s"}}|}
-               label_pid label_host;
+             Printf.sprintf {|{{.Names}}	%s	%s|} (ps_label kind label_pid)
+               (ps_label kind label_host);
            ])
   | `Container ->
       let* out =
@@ -421,7 +535,7 @@ let remove ~process_mgr ~clock t name =
   ignore
     (run_client ~process_mgr ~clock t
        (match t.kind with
-       | `Docker -> [ "rm"; "-f"; name ]
+       | `Docker | `Podman -> [ "rm"; "-f"; name ]
        | `Container -> [ "delete"; "--force"; name ])
       : (string, string) result)
 

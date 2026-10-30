@@ -3,13 +3,13 @@
    process visible from inside it, and no container left after a run, an
    interrupt or a bactrian killed with SIGKILL.
 
-   They run on docker, or on Apple's container when BACTRIAN_VM_RUNTIME is
-   container. Without a working runtime the tests are skipped, unless
-   BACTRIAN_REQUIRE_VM is 1 (continuous integration on Linux sets it), where
-   they fail. The agents
-   run from copies inside each world, because the virtual machine shows the
-   project alone, and the Python agent from a Linux environment that uv builds
-   in a container from the lock file. *)
+   They run on docker, or on podman or Apple's container when
+   BACTRIAN_VM_RUNTIME is podman or container. Without a working runtime the
+   tests are skipped, unless BACTRIAN_REQUIRE_VM is 1 (continuous integration
+   on Linux sets it), where they fail. The agents run from copies inside each
+   world, because the virtual machine shows the project alone, and the Python
+   agent from a Linux environment that uv builds in a container from the lock
+   file. *)
 
 open Bactrian_runtime
 open Acceptance_world
@@ -17,43 +17,46 @@ open Acceptance_world
 (* Pinned by digest: node 24 on Alpine 3.24 (2026-09-18), and uv 0.12.21 with
    Python 3.12 on Debian trixie (2026-09-29). *)
 let node_image =
-  "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
+  "docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
 
 let python_image =
   "ghcr.io/astral-sh/uv:0.12.21-python3.12-trixie-slim@sha256:5ae92e4d35b8d586d50ddf4aba6ecdd9f744237284d31c86bf45077e4e17e4bd"
 
 let quiet cmd = Sys.command (cmd ^ " > /dev/null 2>&1") = 0
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
 let runtime = vm_runtime_name
 
-let runtime_works =
+let detected =
   lazy
     ( Eio_main.run @@ fun env ->
-      Result.is_ok
+      Result.to_option
         (Vm_runtime.detect
            ~process_mgr:(Eio.Stdenv.process_mgr env)
            ~clock:(Eio.Stdenv.clock env) (Some vm_runtime)) )
 
+let runtime_works = lazy (Option.is_some (Lazy.force detected))
+
 (* The runtime's own command for each thing the tests do beside bactrian. *)
 let image_present image =
   match vm_runtime with
-  | `Docker -> quiet ("docker image inspect " ^ Filename.quote image)
+  | `Docker | `Podman ->
+      quiet (runtime ^ " image inspect " ^ Filename.quote image)
   | `Container -> quiet ("container image inspect " ^ Filename.quote image)
 
 let pull image =
   match vm_runtime with
-  | `Docker -> quiet ("docker pull -q " ^ Filename.quote image)
+  | `Docker | `Podman -> quiet (runtime ^ " pull -q " ^ Filename.quote image)
   | `Container ->
       quiet ("container image pull --progress none " ^ Filename.quote image)
 
 let run_prefix =
   match vm_runtime with
-  | `Docker -> [ "docker"; "run" ]
+  | `Docker | `Podman -> [ runtime; "run" ]
   | `Container -> [ "container"; "run"; "--progress"; "none" ]
 
 let remove_command name =
   match vm_runtime with
   | `Docker -> "docker rm -f " ^ name
+  | `Podman -> "podman rm --force --time 1 " ^ name
   | `Container -> "container delete --force " ^ name
 
 let required =
@@ -111,6 +114,13 @@ let typescript =
 (* uv builds the environment in a container with the network, for the Linux
    wheels, at the path the agent's container sees it at. *)
 let python =
+  (* A rootless Podman maps the user to a subordinate ID unless told to keep
+     it, and a rootful one refuses [keep-id]. *)
+  let keep_user () =
+    match Lazy.force detected with
+    | Some t when Vm_runtime.rootless t -> [ "--userns=keep-id" ]
+    | Some _ | None -> []
+  in
   {
     name = "python";
     image = python_image;
@@ -125,9 +135,8 @@ let python =
         run_or_fail
           (String.concat " "
              (List.map Filename.quote
-                (run_prefix
+                (run_prefix @ [ "--rm" ] @ keep_user ()
                 @ [
-                    "--rm";
                     "--user";
                     Printf.sprintf "%d:%d" (Unix.getuid ()) (Unix.getgid ());
                     "-e";
@@ -155,11 +164,12 @@ let python =
 let container_exists name =
   match vm_runtime with
   | `Container -> quiet ("container inspect " ^ Filename.quote name)
-  | `Docker ->
-      let out = Filename.temp_file "docker-ps" ".txt" in
+  | `Docker | `Podman ->
+      let out = Filename.temp_file "ps" ".txt" in
       Fun.protect ~finally:(fun () -> Sys.remove out) @@ fun () ->
       run_or_fail
-        (Printf.sprintf "docker ps -a --filter %s --format '{{.Names}}' > %s"
+        (Printf.sprintf "%s ps -a --filter %s --format '{{.Names}}' > %s"
+           runtime
            (Filename.quote ("name=^" ^ name ^ "$"))
            (Filename.quote out));
       String.length (String.trim (read out)) > 0
@@ -275,7 +285,7 @@ let with_sentinel_process f =
       ignore (wait_exit pid : Unix.process_status))
   @@ fun () ->
   (* Until the child has run exec, its arguments are this test's. *)
-  if macos then
+  if Proc_util.macos then
     until
       ~deadline:(Unix.gettimeofday () +. 10.)
       "the sentinel process runs"
@@ -323,7 +333,7 @@ let host_processes () =
 (* The known hole, kept as a test: under Seatbelt the same agent reads the
    sentinel through the sysctl. *)
 let seatbelt_control () =
-  if not macos then begin
+  if not Proc_util.macos then begin
     print_endline "not macOS: no Seatbelt to compare with, skipped";
     Alcotest.skip ()
   end;
@@ -342,8 +352,9 @@ let seatbelt_control () =
 (* A hidden file's neighbours. The project's .env is not there under any
    spelling of its name (the host's file system ignores case), while the files
    and directories beside it are, read-only. Docker's replacement directory is
-   a tmpfs, where only the exact name of a neighbour is there. container's is a
-   staging directory on the host, so a neighbour's other spellings read it. *)
+   a tmpfs (Podman's too), where only the exact name of a neighbour is there.
+   container's is a staging directory on the host, so a neighbour's other
+   spellings read it. *)
 
 let neighbours_agent =
   {|import errno, json, os, sys
@@ -375,6 +386,16 @@ for line in sys.stdin:
         break
 |}
 
+(* The one reply of an agent whose content is an object of strings. *)
+let reply_fields r =
+  match entries "reply" r with
+  | [ j ] ->
+      Yojson.Safe.Util.(
+        List.map
+          (fun (k, v) -> (k, to_string v))
+          (to_assoc (Yojson.Safe.from_string (to_string (member "content" j)))))
+  | _ -> Alcotest.fail "expected exactly one reply"
+
 let neighbours () =
   gate [ python_image ];
   with_world ~vm:python_image "vm-neighbours" @@ fun w ->
@@ -396,16 +417,6 @@ let neighbours () =
   in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
   check_sandboxed w r;
-  let seen =
-    match entries "reply" r with
-    | [ j ] ->
-        Yojson.Safe.Util.(
-          List.map
-            (fun (k, v) -> (k, to_string v))
-            (to_assoc
-               (Yojson.Safe.from_string (to_string (member "content" j)))))
-    | _ -> Alcotest.fail "expected exactly one reply"
-  in
   Alcotest.(check (list (pair string string)))
     "what the agent saw"
     [
@@ -414,14 +425,62 @@ let neighbours () =
       (".Env", "ENOENT");
       ("sibling.txt", "visible");
       ( "SIBLING.TXT",
-        match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible" );
+        match vm_runtime with
+        | `Docker | `Podman -> "ENOENT"
+        | `Container -> "visible" );
       ("sub/inner.txt", "inner");
       ("new.txt", "EROFS");
     ]
-    seen;
+    (reply_fields r);
   Alcotest.(check bool)
     "nothing written beside it" false
     (Sys.file_exists (Filename.concat w.dir "new.txt"));
+  no_container r
+
+(* Shared memory. /dev/shm is writable under every runtime, as it is under
+   Docker, so POSIX shared memory and named semaphores (Python's
+   multiprocessing, Chromium) work. A read-only root under Podman makes it
+   read-only unless bactrian mounts one (decision 0022). *)
+
+let shm_agent =
+  {|import errno, json, multiprocessing, os, sys
+
+def attempt(f):
+    try:
+        f()
+        return "ok"
+    except OSError as e:
+        return errno.errorcode.get(e.errno, str(e.errno))
+
+def write():
+    path = "/dev/shm/bactrian-%d" % os.getpid()
+    with open(path, "w"):
+        pass
+    os.remove(path)
+
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        reply = {"file": attempt(write), "semaphore": attempt(multiprocessing.Lock)}
+        sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
+                                     "content": json.dumps(reply)}) + "\n")
+        sys.stdout.flush()
+    elif m["type"] == "end":
+        break
+|}
+
+let shared_memory () =
+  gate [ python_image ];
+  with_world ~vm:python_image "vm-shm" @@ fun w ->
+  let script = Filename.concat w.dir "shm.py" in
+  Out_channel.with_open_bin script (fun oc -> output_string oc shm_agent);
+  let r = w.execute ~agent:(Command [ "python3"; "-I"; script ]) () in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  check_sandboxed w r;
+  Alcotest.(check (list (pair string string)))
+    "in /dev/shm"
+    [ ("file", "ok"); ("semaphore", "ok") ]
+    (reply_fields r);
   no_container r
 
 (* Teardown from outside: bactrian record, through the command line, with an
@@ -433,14 +492,21 @@ let neighbours () =
 let hung_agent =
   {|touch "$BACTRIAN_STATE_DIR/started"; while :; do sleep 1; done|}
 
+(* The variables that tell a rootless Podman where its runtime state is go
+   through too: a container made with another value is not found by it. *)
 let record_env =
-  [|
-    "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
-    "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
-    "BACTRIAN_CAP_OPENAI=1";
-    "OPENAI_API_KEY=not-a-real-key";
-    "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
-  |]
+  Array.append
+    [|
+      "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
+      "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
+      "BACTRIAN_CAP_OPENAI=1";
+      "OPENAI_API_KEY=not-a-real-key";
+      "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
+    |]
+    (Array.of_list
+       (List.filter_map
+          (fun k -> Option.map (fun v -> k ^ "=" ^ v) (Sys.getenv_opt k))
+          [ "TMPDIR"; "XDG_RUNTIME_DIR" ]))
 
 (* bactrian record in the virtual machine, in a directory of its own. *)
 let with_record ~name agent f =
@@ -583,7 +649,9 @@ let all_killed () =
   let bridge = child_of pid "__vm-bridge" in
   let client =
     child_of bridge
-      (match vm_runtime with `Docker -> "run" | `Container -> "start")
+      (match vm_runtime with
+      | `Docker | `Podman -> "run"
+      | `Container -> "start")
   in
   (* Back to back: the bridge checks its parent once a second, so it has no
      time to remove the container itself. *)
@@ -620,7 +688,7 @@ let relay_liveness () =
   (* container mounts directories only. *)
   let relay_args =
     match vm_runtime with
-    | `Docker ->
+    | `Docker | `Podman ->
         [
           "--log-driver";
           "none";
@@ -755,6 +823,8 @@ let () =
           [ typescript; python ] );
       ( "masks",
         [ Alcotest.test_case "a hidden file's neighbours" `Slow neighbours ] );
+      ( "shared memory",
+        [ Alcotest.test_case "/dev/shm writable" `Slow shared_memory ] );
       ( "host processes",
         [
           Alcotest.test_case "none visible in the virtual machine" `Slow

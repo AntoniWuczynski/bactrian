@@ -16,7 +16,7 @@ open Bactrian_runtime
 module P = Model_proxy
 
 let () = Mirage_crypto_rng_unix.use_default ()
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+let macos = Proc_util.macos
 
 let executable variable =
   match Sys.getenv_opt variable with
