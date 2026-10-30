@@ -92,6 +92,25 @@
     "seed": { "type": "integer" },
     "compare": { "$ref": "#/$defs/compare" }
   },
+  "if": {
+    "required": ["agent"],
+    "properties": {
+      "agent": { "required": ["protocol"], "properties": { "protocol": { "const": "http" } } }
+    }
+  },
+  "then": {
+    "description": "bactrian does not start an HTTP agent, so it cannot sandbox it: strict cannot be met.",
+    "properties": {
+      "sandbox": {
+        "not": {
+          "anyOf": [
+            { "const": "strict" },
+            { "type": "object", "required": ["mode"], "properties": { "mode": { "const": "strict" } } }
+          ]
+        }
+      }
+    }
+  },
   "$defs": {
     "agent": {
       "type": "object",

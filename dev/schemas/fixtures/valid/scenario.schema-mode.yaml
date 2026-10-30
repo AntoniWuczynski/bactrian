@@ -1,0 +1,14 @@
+version: 1
+id: s
+turns: [{ user: hi }]
+assertions:
+  - tool_args:
+      tool: t
+      mode: schema
+      schema:
+        type: object
+        required: [city, tags]
+        properties:
+          city: { type: [string, "null"], enum: [Paris, null] }
+          tags: { type: array, items: { type: string } }
+        additionalProperties: false

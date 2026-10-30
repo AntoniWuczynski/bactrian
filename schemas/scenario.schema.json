@@ -56,6 +56,30 @@
     }
   },
   "$defs": {
+    "json_schema_subset": {
+      "description": "The subset of JSON Schema that tool_args mode schema accepts (Json_schema.check): nothing but these keywords.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "oneOf": [
+            { "$ref": "#/$defs/json_type" },
+            { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/json_type" } }
+          ]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/json_schema_subset" }
+        },
+        "required": { "$ref": "defs.schema.json#/$defs/string_list" },
+        "enum": { "type": "array" },
+        "items": { "$ref": "#/$defs/json_schema_subset" },
+        "additionalProperties": { "type": "boolean" },
+        "title": true,
+        "description": true
+      }
+    },
+    "json_type": { "enum": ["object", "array", "string", "number", "integer", "boolean", "null"] },
     "assertion": {
       "description": "An object with exactly one key, the kind of assertion.",
       "type": "object",
@@ -128,7 +152,7 @@
         "tool": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
         "mode": { "enum": ["exact", "partial", "schema"] },
         "match": true,
-        "schema": { "type": "object" }
+        "schema": { "$ref": "#/$defs/json_schema_subset" }
       },
       "if": {
         "required": ["mode"],

@@ -1,0 +1,10 @@
+version: 1
+id: s
+turns: [{ user: hi }]
+assertions:
+  - tool_args:
+      tool: t
+      mode: schema
+      schema:
+        type: object
+        properties: { city: { type: string, minLength: 1 } }
