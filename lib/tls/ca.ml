@@ -101,11 +101,18 @@ let stage ~perm path text =
 
 let install ~temp path = unix_error path (fun () -> Unix.rename temp path)
 
+(* Absolute, so that what bactrian ca path prints can be used from anywhere. *)
+let absolute path =
+  Bactrian_runtime.Proc_util.absolute
+    (if String.starts_with ~prefix:"./" path then
+       String.sub path 2 (String.length path - 2)
+     else path)
+
 let make ~dir ~signer ~cert =
   {
     signer;
     cert;
-    path = Filename.concat dir certificate_file;
+    path = absolute (Filename.concat dir certificate_file);
     leaves = Hosts.create 8;
     lock = Eio.Mutex.create ();
   }

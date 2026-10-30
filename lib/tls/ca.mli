@@ -33,7 +33,7 @@ val certificate_pem : t -> string
 (** The CA's certificate, for the agents' trust bundle. *)
 
 val certificate_path : t -> string
-(** Where the certificate is. *)
+(** Where the certificate is, as an absolute path. *)
 
 val not_after : t -> Ptime.t
 (** When the CA stops being valid. *)

@@ -21,7 +21,7 @@ warning. Only the variable name is printed.
   warn  key-openrouter: OPENROUTER_API_KEY is not set
   ok    loopback: a port on 127.0.0.1 can be bound
   ok    tls: the trusted root certificates load (N)
-  ok    ca: the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
+  ok    ca: the project CA is $TESTCASE_ROOT/.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
   $ grep -c -e ' sandbox:' -e ' vm:' -e ' clock:' -e ' node:' out.txt
   4
   $ grep -c SENTINEL out.txt
@@ -43,7 +43,7 @@ The same as JSON, with the same shape every time.
   {"name":"key-openrouter","status":"warn","message":"OPENROUTER_API_KEY is not set"},
   {"name":"loopback","status":"ok","message":"a port on 127.0.0.1 can be bound"},
   {"name":"tls","status":"ok","message":"the trusted root certificates load (N)"},
-  {"name":"ca","status":"ok","message":"the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH"},
+  {"name":"ca","status":"ok","message":"the project CA is $TESTCASE_ROOT/.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH"},
   {"name":"node","status":"S","message":"M"}],"ok":true}
 
 An empty key counts as missing.
@@ -77,7 +77,7 @@ experiment, so the caps check fails.
   skip  sandbox: sandbox: off
   skip  vm: the agent is not sandboxed
   ok    tls: the trusted root certificates load (N)
-  ok    ca: the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
+  ok    ca: the project CA is $TESTCASE_ROOT/.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
 
 A provider with a spend cap is called live, so its missing key fails.
 
