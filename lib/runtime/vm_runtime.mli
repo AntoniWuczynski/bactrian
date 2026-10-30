@@ -20,8 +20,10 @@ val exe : t -> string
 
 val client_variables : Bactrian_core.Experiment.sandbox_runtime -> string list
 (** The names of the variables the runtime's client gets from bactrian's own
-    environment, and no others. Never a credential, such as
-    [CONTAINER_PASSPHRASE] or [SSH_AUTH_SOCK]. *)
+    environment, and no others. For Podman that includes [CONTAINER_SSHKEY], the
+    path of the key to a remote service, but not the key's passphrase
+    ([CONTAINER_PASSPHRASE]) or the agent socket ([SSH_AUTH_SOCK]), and none of
+    them reaches the container. *)
 
 val client_env : t -> string array
 (** [NAME=VALUE] for the variables the runtime's client reads ([PATH], [HOME],
