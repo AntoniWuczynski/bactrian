@@ -737,7 +737,7 @@ let () =
           Alcotest.test_case "hanging up after a request during a call" `Quick
             test_pipelined_hang_up;
           Alcotest.test_case "a POST without a length" `Quick test_no_length;
-          Alcotest.test_case "a body of unusable length" `Quick test_bad_framing;
           Alcotest.test_case "clients that never read" `Quick test_stalled;
+          Alcotest.test_case "a body of unusable length" `Quick test_bad_framing;
         ] );
     ]
