@@ -40,7 +40,8 @@ val evaluate :
   Trace.entry list ->
   item list
 (** Every assertion in order, then every checker. [egress_intercepted] says
-    whether the trace holds the run's HTTPS calls, without which [no_egress]
+    whether the trace holds every HTTPS call of the run (intercepted, and
+    sandboxed so that no client could go direct), without which [no_egress]
     cannot pass ({!Bactrian_core.Assertion.evaluate}). [timeout] bounds each
     checker, [cwd] is where it runs and [sandbox] what it runs in
     ({!Checker_runner.run}, with [fs]). A checker's stderr never reaches

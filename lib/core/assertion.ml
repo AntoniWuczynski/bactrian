@@ -483,11 +483,13 @@ let evaluate ~cost ~egress_intercepted assertion trace =
           Fail "max_cost_usd: the trace cannot be priced (a model has no price)"
       | Some actual ->
           limit "max_cost_usd" ~actual ~max ~show:(Printf.sprintf "$%g"))
-  | No_egress _ when not egress_intercepted ->
-      Fail
-        "no_egress: cannot be verified, egress is not intercepted so no HTTP \
-         call is recorded"
-  | No_egress hosts -> check_egress hosts trace
+  | No_egress hosts -> (
+      match check_egress hosts trace with
+      | Pass when not egress_intercepted ->
+          Fail
+            "no_egress: cannot be verified, egress is not intercepted or the \
+             run is unsandboxed, so a call may have gone direct and unrecorded"
+      | (Pass | Fail _) as verdict -> verdict)
   | Output { turn; check } -> (
       match check_output turn check trace with
       | Ok () -> Pass

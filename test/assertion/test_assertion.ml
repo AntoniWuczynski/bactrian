@@ -321,11 +321,15 @@ let test_no_egress () =
     (A.No_egress [ "Secret.Example." ])
     (entries [ http "secret.example" ])
 
-(* Nothing intercepts egress yet, so a clean trace proves nothing. *)
+(* Without interception or the sandbox, a clean trace proves nothing. *)
 let test_no_egress_unverifiable () =
   fails "not intercepted" ~egress_intercepted:false
     ~mentions:[ "cannot be verified"; "not intercepted" ]
-    (A.No_egress [ "evil.example" ]) (entries [ Done ])
+    (A.No_egress [ "evil.example" ]) (entries [ Done ]);
+  fails "not intercepted, a host it called" ~egress_intercepted:false
+    ~mentions:[ "HTTP calls to evil.example" ]
+    (A.No_egress [ "evil.example" ])
+    (entries [ http "evil.example" ])
 
 (* List elements are matched multiset-wise. *)
 let test_args_partial_multiset () =

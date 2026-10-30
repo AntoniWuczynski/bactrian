@@ -872,7 +872,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~sandbox:c.checker_sandbox ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
               ~date:(String.sub (rfc3339 now) 0 10)
-              ~egress_intercepted:(Option.is_some egress)
+              ~egress_intercepted:(Option.is_some egress && label.applied)
               ~assertions:c.assertions ~checkers:c.checkers entries
           in
           (* Only a run that passed is judged by its checks. The others keep

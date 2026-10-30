@@ -9,23 +9,7 @@ module J = Yojson.Safe.Util
 let strict =
   { Run.from = ""; matcher = Strict; allow_reorder = false; timing = P.Fast }
 
-let checks ?(assertions = []) ?(checkers = []) () : Run.checks option =
-  Some
-    {
-      assertions;
-      checkers;
-      checks_cwd = ".";
-      checker_timeout = 10.;
-      checker_sandbox = Sandbox.off;
-    }
-
-let json (r : Run.result) name = Yojson.Safe.from_file (file r name)
 let failing_agent = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ]
-
-let verdict_names (r : Run.result) =
-  List.map
-    (fun item -> J.(to_string (member "verdict" item)))
-    J.(to_list (member "items" (json r "verdicts.json")))
 
 (* A checker that cannot give a verdict is a fault outside the agent. *)
 let test_checker_error_is_errored =
@@ -205,50 +189,21 @@ let test_unenforced_in_meta =
     (List.map J.to_string
        J.(to_list (member "unenforced" (json r "meta.json"))))
 
-(* The weather agent, opening a tunnel to a host no policy lists before its
-   first model call. The host is blocked before any TLS, and the attempt is
-   still a call that no_egress sees. *)
-let egress_agent =
-  let connect =
-    {|
-import base64, socket, urllib.parse
-def connect():
-    u = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
-    s = socket.create_connection((u.hostname, u.port))
-    cred = base64.b64encode((u.username + ":" + u.password).encode()).decode()
-    s.sendall(("CONNECT api.weather.example:443 HTTP/1.1\r\nHost: api.weather.example:443\r\nProxy-Authorization: Basic " + cred + "\r\n\r\n").encode())
-    s.recv(4096)
-    s.close()
-|}
-  in
-  let script =
-    Re.replace_string ~all:false
-      (Re.compile (Re.str "msg = chat(messages)\n"))
-      ~by:"connect(); msg = chat(messages)\n" python_agent
-  in
-  [ "python3"; "-I"; "-c"; "import os\n" ^ connect ^ script ]
-
+(* Unsandboxed, a client that ignores the proxy goes direct, so a clean trace
+   proves nothing: only the host it called through the proxy fails as such. *)
 let test_no_egress_fails =
   with_ctx "no-egress" @@ fun ctx ->
-  let r =
-    ok
-      (execute ~interception:Egress_stub.interception ctx
-         {
-           (config ~agent:egress_agent ()) with
-           egress = Some Bactrian_core.Egress.block_all;
-           checks =
-             checks
-               ~assertions:
-                 [
-                   No_egress [ "api.weather.example" ];
-                   No_egress [ "other.example" ];
-                 ]
-               ();
-         })
-  in
+  let r = no_egress_run ctx Sandbox.off in
   Alcotest.(check string) "kind" "failed" (Run.outcome_kind r.outcome);
-  Alcotest.check strs "only the host it called fails" [ "fail"; "pass" ]
-    (verdict_names r);
+  Alcotest.check strs "both fail" [ "fail"; "fail" ] (verdict_names r);
+  Alcotest.(check bool)
+    "the other cannot be verified" true
+    (List.exists
+       (fun item ->
+         Re.execp
+           (Re.compile (Re.str "cannot be verified"))
+           J.(to_string (member "reason" item)))
+       J.(to_list (member "items" (json r "verdicts.json"))));
   Alcotest.(check bool)
     "the attempt is in the trace" true
     (List.mem "http_call" (trace_types r))
