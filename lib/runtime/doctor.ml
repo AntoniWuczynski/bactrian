@@ -408,7 +408,7 @@ let reason_text : Clock_label.reason -> string = function
    [Skip], but not when the experiment names [faketime: auto]: that asked for
    what this host cannot give. [requested] is never true with the reason
    [Faketime_off]. *)
-let clock_check ~linux ~library_override ~path ~hidden target =
+let clock_check ~linux ~library_override ~path ~sandboxed ~hidden target =
   let contract_only ?(requested = false) reason =
     let status, note =
       match (reason_status reason, requested) with
@@ -434,7 +434,7 @@ let clock_check ~linux ~library_override ~path ~hidden target =
              ~hidden:
                (match t.sandbox with
                | `Off -> fun _ -> false
-               | `Auto | `Strict -> hidden)
+               | `Auto | `Strict -> fun l -> sandboxed () && hidden l)
              ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
@@ -507,6 +507,8 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
         | Ok true | Error _ -> false)
     | Some _ | None -> false
   in
+  (* Shared by the sandbox and clock checks, and run at most once. *)
+  let agent_probe = lazy (sandbox_probe ~env ~bactrian_exe target ()) in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
   @ (match target with Some t -> [ caps_check t ] | None -> [])
   @ (match target with
@@ -525,8 +527,8 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
     | Some t -> [ agent_check ~path ~cwd t.agent ]
     | None -> [])
   @ [
-      sandbox_check ~mode ~http_agent ~relay_pending
-        ~probe:(sandbox_probe ~env ~bactrian_exe target);
+      sandbox_check ~mode ~http_agent ~relay_pending ~probe:(fun () ->
+          Lazy.force agent_probe);
     ]
   @ (match target with
     | Some t when t.checkers && (http_agent || uses_vm ~macos t) ->
@@ -540,6 +542,7 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path
+        ~sandboxed:(fun () -> Result.is_ok (Lazy.force agent_probe))
         ~hidden:
           (Sandbox.library_masked
              {

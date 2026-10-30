@@ -134,19 +134,22 @@ val clock_check :
   linux:bool ->
   library_override:string option ->
   path:string option ->
+  sandboxed:(unit -> bool) ->
   hidden:(string -> bool) ->
   target option ->
   check
 (** With a target, the label its command agent would get
     ({!Agent_clock.decide}). [hidden] says whether the sandbox's deny-list masks
     a library path ({!Sandbox.library_masked}), and counts only when the
-    experiment sandboxes the agent. Without a target, whether this host can
-    enforce the clock at all. Contract-only on macOS is expected, so it is
-    [Pass], unless the experiment names [clock: {faketime: auto}] itself: then
-    it is [Warn]. The same holds for the other reasons the host is not expected
-    to meet: an HTTP-mode agent is [Skip] and the virtual machine [Pass], and
-    both are [Warn] only when [faketime: auto] is written explicitly. Any other
-    reason is [Warn]. *)
+    experiment sandboxes the agent and [sandboxed ()], the sandbox probe, says
+    the sandbox applies on this host: an [auto] run that falls back to no
+    sandbox preloads the library. [sandboxed] is called only when [hidden] is.
+    Without a target, whether this host can enforce the clock at all.
+    Contract-only on macOS is expected, so it is [Pass], unless the experiment
+    names [clock: {faketime: auto}] itself: then it is [Warn]. The same holds
+    for the other reasons the host is not expected to meet: an HTTP-mode agent
+    is [Skip] and the virtual machine [Pass], and both are [Warn] only when
+    [faketime: auto] is written explicitly. Any other reason is [Warn]. *)
 
 val tls_check :
   available:bool ->

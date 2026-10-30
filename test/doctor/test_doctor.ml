@@ -255,8 +255,10 @@ let test_clock () =
   write (at "dyn") (E.elf [ (E.pt_interp, E.interp) ]);
   write (at "stat") (E.elf [ (E.pt_load, "code") ]);
   let clock ?(linux = true) ?(faketime = true) ?faketime_requested ?sandbox
-      ?(hidden = fun (_ : string) -> false) ?(override = Some lib) agent =
+      ?(sandboxed = true) ?(hidden = fun (_ : string) -> false)
+      ?(override = Some lib) agent =
     Doctor.clock_check ~linux ~library_override:override ~path:(Some dir)
+      ~sandboxed:(fun () -> sandboxed)
       ~hidden
       (Some
          (target ~faketime ?faketime_requested ?sandbox ~dir
@@ -277,6 +279,7 @@ let test_clock () =
   check_status "agent not found" Warn (clock "absent");
   check_status "http agent" Skip
     (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~sandboxed:(fun () -> true)
        ~hidden:(fun _ -> false)
        (Some (target ~dir (http "http://127.0.0.1:9/a"))));
   (* Only the sandbox can hide the library, and only when it applies. *)
@@ -290,6 +293,8 @@ let test_clock () =
     (clock ~sandbox:`Strict ~hidden:hides_lib "dyn");
   check_status "no sandbox, nothing hides it" Pass
     (clock ~sandbox:`Off ~hidden:hides_lib "dyn");
+  check_status "auto falling back to no sandbox, nothing hides it" Pass
+    (clock ~sandbox:`Auto ~sandboxed:false ~hidden:hides_lib "dyn");
   check_status "another path is not hidden" Pass
     (clock ~sandbox:`Auto ~hidden:(String.equal "/elsewhere") "dyn");
   (* An explicit faketime: auto is a request the host may not meet. *)
@@ -305,11 +310,13 @@ let test_clock () =
     (clock ~faketime_requested:true ~override:(Some (at "none")) "dyn");
   check_status "http agent when asked for" Warn
     (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~sandboxed:(fun () -> true)
        ~hidden:(fun _ -> false)
        (Some
           (target ~faketime_requested:true ~dir (http "http://127.0.0.1:9/a"))));
   let host ~linux ~override =
     Doctor.clock_check ~linux ~library_override:override ~path:None
+      ~sandboxed:(fun () -> true)
       ~hidden:(fun _ -> false)
       None
   in
