@@ -276,7 +276,12 @@ let watch_requests ~terminate fd =
     (* A signal or a spurious wake-up is not the end of the pipe. *)
     | exception Unix.Unix_error ((EINTR | EAGAIN | EWOULDBLOCK), _, _) ->
         loop ()
-    | exception (Unix.Unix_error _ | Eio.Io _) -> ()
+    (* Later requests are lost, and the agent gets SIGKILL after the grace
+       period, so say why. *)
+    | exception ((Unix.Unix_error _ | Eio.Io _) as e) ->
+        prerr_endline
+          ("bactrian sandbox-init: the signal pipe failed, so SIGTERM is no \
+            longer passed on: " ^ Printexc.to_string e)
   in
   loop ()
 
