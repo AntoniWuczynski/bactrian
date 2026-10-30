@@ -224,17 +224,7 @@ let test_environment =
 (* Egress: the proxy and trust variables, and the bundle in tmp. *)
 let test_egress_environment =
   with_ctx "egress-env" @@ fun ctx ->
-  let interception : Egress_proxy.interception =
-    {
-      tls =
-        (fun ~sim_now:_ : Egress_proxy.tls ->
-          {
-            terminate = (fun ~host:_ _ -> Error "not in this test");
-            failure = (fun _ -> None);
-          });
-      bundle = "-----BEGIN CERTIFICATE-----\n";
-    }
-  in
+  let interception = Egress_stub.interception in
   let c = { (config ()) with egress = Some Egress.block_all } in
   (match execute ctx c with
   | Error m ->

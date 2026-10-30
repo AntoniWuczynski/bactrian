@@ -742,7 +742,10 @@ let run_experiment ?seatbelt_hint ?root ?interception
         | Some _, Command _, Some load ->
             Result.map Option.some
               (Result.map_error (fun m -> Environment m) (load ()))
-        | None, _, _ | Some _, Http _, _ | Some _, Command _, None -> Ok None
+        | Some _, Command _, None ->
+            Error
+              (Environment "egress is intercepted, but no project CA was given")
+        | None, _, _ | Some _, Http _, _ -> Ok None
       in
       announce experiment_id;
       List.iter warn (Experiment.unenforced experiment);

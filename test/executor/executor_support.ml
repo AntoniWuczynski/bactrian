@@ -109,6 +109,7 @@ let with_ctx name ?(scenarios = [ "s1"; "s2" ]) f () =
    unless a test asks for it. *)
 let go ?(resume = None) ?announce ?warn ?(sandbox = Some `Off) ctx =
   E.run_experiment ~root:ctx.root ~random_bytes ?announce ?warn ?sandbox
+    ~interception:(fun () -> Ok Egress_stub.interception)
     ~bactrian_exe:"/nonexistent/bactrian"
     ~keys:[ (P.Openai, "real-key") ]
     ~upstream:(fun _ -> Uri.of_string (F.base_url ctx.up))

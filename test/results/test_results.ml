@@ -85,6 +85,7 @@ let with_experiment name f () =
   let summary =
     match
       E.run_experiment ~root:ctx0.root ~sandbox:`Off
+        ~interception:(fun () -> Ok Egress_stub.interception)
         ~bactrian_exe:"/nonexistent/bactrian"
         ~keys:[ (P.Openai, "real-key") ]
         ~upstream:(fun _ -> Uri.of_string (F.base_url up))

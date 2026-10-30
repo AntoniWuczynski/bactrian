@@ -69,6 +69,7 @@ let run_experiment (w : world) argv =
   let summary =
     match
       E.run_experiment
+        ~interception:(fun () -> Ok Egress_stub.interception)
         ~root:Eio.Path.(Eio.Stdenv.fs w.env / Filename.concat w.dir ".bactrian")
         ~keys:[ (Model_proxy.Openai, real_key) ]
         ~upstream:(fun _ -> Uri.of_string (F.base_url w.up))

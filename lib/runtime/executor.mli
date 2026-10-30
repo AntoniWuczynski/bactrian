@@ -157,7 +157,8 @@ val run_experiment :
     loads the project CA and the agents' trust bundle once, before the first run
     (an [Error] is [Environment]), and every run intercepts the agent's HTTPS
     egress under the experiment's [egress] policy ({!Run.config}). Without
-    [interception] no run intercepts it.
+    [interception] such an experiment is refused with [Environment], as
+    {!Run.execute} refuses such a run.
 
     [random_bytes], [keys], [upstream] and [connector] are passed to
     {!Run.execute}. [connector] defaults to {!Upstream.plain}. An https upstream
