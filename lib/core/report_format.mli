@@ -61,6 +61,10 @@ val clock_warning : Report_data.t -> string option
     them. When only some runs are affected it adds that a difference between
     arms may come from the clock. [None] when every run's clock was enforced. *)
 
+val real_keys_warning : Report_data.t -> string option
+(** Counts the runs whose agent held the real provider keys (design §5.2).
+    [None] when none did. *)
+
 val value_estimand_text : string
 (** What the cost, tokens and latency comparisons estimate, for a report header.
 *)

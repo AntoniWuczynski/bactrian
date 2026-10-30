@@ -1,0 +1,10 @@
+(library
+ (name transcript)
+ (modules transcript))
+
+; The agent side of a command-mode transcript, as a process of its own.
+
+(executable
+ (name transcript_agent)
+ (modules transcript_agent)
+ (libraries transcript))

@@ -246,6 +246,12 @@ val preload_hidden : t -> string -> bool
     on Linux, when it lies under a path the deny-list masks after the bind
     ([sandbox.deny_read] among them). Never when unsandboxed or on macOS. *)
 
+val library_masked : settings -> string -> bool
+(** [library_masked settings library] is what {!preload_hidden} would say of a
+    bubblewrap sandbox made from [settings], without making one: only
+    [deny_read] and [bactrian_dir] count, and nothing is created or probed, so
+    [doctor] can ask it in a project that has no [.bactrian]. *)
+
 val collect : env:Eio_unix.Stdenv.base -> started -> violations
 (** After the agent exited: on macOS, the Seatbelt denials logged with the run's
     tag since it started, read with [log show] until the end marker is there and

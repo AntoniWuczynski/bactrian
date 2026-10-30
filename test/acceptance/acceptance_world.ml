@@ -263,6 +263,7 @@ let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
         timezone = "UTC";
         replay;
         env_passthrough = [ prompt_variable ];
+        real_keys = false;
         variant_env;
         fixtures = None;
         normalise = [];

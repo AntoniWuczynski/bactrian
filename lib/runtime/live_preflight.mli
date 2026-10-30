@@ -33,7 +33,16 @@ val is_loopback : Uri.t -> bool
     IPv4-mapped IPv6 loopback address, parsed as an address rather than compared
     as text. *)
 
+val is_cleartext : Uri.t -> bool
+(** Not [https] and not {!is_loopback}: whatever is sent travels unencrypted to
+    another machine. *)
+
 val cleartext :
   (string * float) list -> (Model_proxy.provider -> Uri.t) -> string list
 (** A warning for each provider with a cap whose upstream is plain [http] to a
     host that is not {!is_loopback}: the real key would travel unencrypted. *)
+
+val real_keys_cleartext : agent_url:string -> string option
+(** For [agent.real_keys] with an HTTP-mode agent: a description when the
+    agent's URL is {!is_cleartext}, because the real keys travel in the [start]
+    message. Names the host only, as the URL can carry credentials. *)

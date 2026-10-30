@@ -139,6 +139,7 @@ let test_defaults () =
   Alcotest.(check bool) "no mcp" true (t.mcp = []);
   Alcotest.(check bool) "sandbox auto" true (t.sandbox = `Auto);
   Alcotest.(check bool) "faketime auto" true t.faketime;
+  Alcotest.(check bool) "by default, not requested" false t.faketime_requested;
   Alcotest.(check bool) "no caps" true (t.caps_usd = []);
   Alcotest.(check (option string)) "pricing" None t.pricing;
   Alcotest.(check strings) "passthrough" [] t.env_passthrough;
@@ -146,6 +147,49 @@ let test_defaults () =
   match t.agent with
   | Command { turn_timeout = 120.0; total_timeout = 600.0; _ } -> ()
   | Command _ | Http _ -> Alcotest.fail "default timeouts"
+
+let test_real_keys () =
+  let real_keys ?(sandbox = "") agent_extra =
+    (decoded
+       (doc
+          ~agent:
+            (Printf.sprintf
+               {|"agent": {"protocol": "command", "command": ["x"]%s}|}
+               agent_extra)
+          sandbox))
+      .real_keys
+  in
+  Alcotest.(check bool) "off by default" false (real_keys "");
+  Alcotest.(check bool) "on" true (real_keys {|, "real_keys": true|});
+  Alcotest.(check bool)
+    "false is allowed under strict" false
+    (real_keys ~sandbox:{|, "sandbox": "strict"|} {|, "real_keys": false|});
+  Alcotest.(check bool)
+    "true is allowed under auto and off" true
+    (real_keys ~sandbox:{|, "sandbox": "off"|} {|, "real_keys": true|}
+    && real_keys ~sandbox:{|, "sandbox": {"mode": "auto"}|}
+         {|, "real_keys": true|});
+  (* An HTTP-mode agent is never sandboxed, so there is nothing to refuse. *)
+  Alcotest.(check bool)
+    "an http agent may ask" true
+    (decoded
+       (doc
+          ~agent:
+            {|"agent": {"protocol": "http", "url": "http://x", "namespace_header": "n", "real_keys": true}|}
+          ""))
+      .real_keys
+
+let test_faketime_requested () =
+  let requested json = (decoded (doc json)).faketime_requested in
+  Alcotest.(check bool)
+    "auto by name" true
+    (requested {|, "clock": {"faketime": "auto"}|});
+  Alcotest.(check bool)
+    "off is not a request" false
+    (requested {|, "clock": {"faketime": "off"}|});
+  Alcotest.(check bool)
+    "an empty clock block" false
+    (requested {|, "clock": {}|})
 
 let test_compare_defaults () =
   match (decoded (doc {|, "compare": {"baseline": "a"}|})).compare with
@@ -433,6 +477,8 @@ let () =
         [
           Alcotest.test_case "full document" `Quick test_full;
           Alcotest.test_case "defaults" `Quick test_defaults;
+          Alcotest.test_case "faketime requested" `Quick test_faketime_requested;
+          Alcotest.test_case "real keys" `Quick test_real_keys;
           Alcotest.test_case "compare defaults" `Quick test_compare_defaults;
           Alcotest.test_case "http agent and durations" `Quick test_http;
           Alcotest.test_case "millisecond durations" `Quick test_ms_duration;
@@ -569,6 +615,16 @@ let () =
           case "sandbox strict, as a mapping, neither" [ "sandbox" ]
             (doc ~agent:http_agent
                {|, "sandbox": {"mode": "strict", "deny_read": ["k"]}|});
+          case "real keys cannot be met by sandbox strict" [ "agent.real_keys" ]
+            (doc
+               ~agent:
+                 {|"agent": {"protocol": "command", "command": ["x"], "real_keys": true}|}
+               {|, "sandbox": "strict"|});
+          case "real_keys must be a boolean" [ "agent.real_keys" ]
+            (doc
+               ~agent:
+                 {|"agent": {"protocol": "command", "command": ["x"], "real_keys": "yes"}|}
+               "");
           case "invalid regex"
             [ "normalise[1]"; "redact[0]" ]
             (doc {|, "normalise": ["ok", "(unclosed"], "redact": ["[bad"]|});

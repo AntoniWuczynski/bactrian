@@ -67,10 +67,17 @@ type t = {
   sandbox_deny_read : string list;
       (** More unreadable paths, relative to the experiment file. *)
   faketime : bool;  (** [clock: {faketime: auto}], [false] for [off]. *)
+  faketime_requested : bool;
+      (** The file says [faketime: auto] by name, as opposed to leaving the mode
+          to its default. [doctor] tells the two apart. *)
   caps_usd : (string * float) list;
   pricing : string option;  (** Price file, relative to the experiment file. *)
   seed : int;
   env_passthrough : string list;
+  real_keys : bool;
+      (** [agent.real_keys]: the agent's environment holds the real provider
+          keys instead of placeholders (design §5.2). Never with
+          [sandbox: strict]. *)
   compare : compare option;
 }
 
@@ -82,11 +89,13 @@ val decode : Canon.t -> (t, error list) result
     Document shape (design §6), all keys strict:
     - [version: 1], [name], [scenarios] (non-empty list of globs)
     - [agent: {protocol: command | http, command, url, namespace_header,
-       timeouts: {turn, total}, env_passthrough}]: [command] is required for
-      [command] and forbidden for [http], [url] (an [http://] or [https://] URL)
-      and [namespace_header] the reverse. Timeouts default to 120s per turn and
-      600s in total. [sandbox: strict] with [http] is an error at [sandbox]:
-      bactrian does not start the agent.
+       timeouts: {turn, total}, env_passthrough, real_keys}]: [command] is
+      required for [command] and forbidden for [http], [url] (an [http://] or
+      [https://] URL) and [namespace_header] the reverse. Timeouts default to
+      120s per turn and 600s in total. [sandbox: strict] with [http] is an error
+      at [sandbox]: bactrian does not start the agent. [real_keys] defaults to
+      [false], and [sandbox: strict] with it [true] is an error at
+      [agent.real_keys].
     - [variants]: a mapping [name: {env: {K: V}}], or a list of [{name, env}]
       (where duplicate names are possible and an error).
     - [repeats] (default 1), [concurrency] (default 1), [seed] (default 0)
@@ -107,6 +116,11 @@ val decode : Canon.t -> (t, error list) result
     - [compare: {baseline, confidence (0.95), thresholds, gate (["pass_rate"]),
        population: suite|scenarios (suite)}]; [baseline] must name a variant. *)
 
+val real_keys_strict_reason : string
+(** Why [agent.real_keys] cannot be met in [sandbox: strict]: the part of the
+    configuration error that [--sandbox strict] shares with the experiment's own
+    setting. *)
+
 val image_problem : string -> string option
 (** What is wrong with a container image reference ([sandbox.image],
     [--sandbox-image], the MCP argument [sandbox_image]): empty, starting with
@@ -115,10 +129,10 @@ val image_problem : string -> string option
 val reserved_env : string list
 (** The variables bactrian sets in a run's environment: [SIM_NOW], [TZ],
     [BACTRIAN_RUN_ID], [BACTRIAN_STATE_DIR], the four provider base URLs and the
-    four provider key placeholders, [HOME], [XDG_CACHE_HOME], [XDG_CONFIG_HOME],
-    [XDG_DATA_HOME], [npm_config_cache], [TMPDIR], [PYTHONDONTWRITEBYTECODE]
-    and, in a run with MCP servers, [BACTRIAN_MCP_URL]. See also
-    {!reserved_env_prefixes}. *)
+    four provider key variables (placeholders, or the real keys with
+    [real_keys]), [HOME], [XDG_CACHE_HOME], [XDG_CONFIG_HOME], [XDG_DATA_HOME],
+    [npm_config_cache], [TMPDIR], [PYTHONDONTWRITEBYTECODE] and, in a run with
+    MCP servers, [BACTRIAN_MCP_URL]. See also {!reserved_env_prefixes}. *)
 
 val reserved_env_prefixes : string list
 (** Prefixes of further variables bactrian sets: [BACTRIAN_MCP_HTTP_]. *)

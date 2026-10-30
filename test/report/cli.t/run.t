@@ -72,6 +72,7 @@ The terminal table. Without --gate the exit status is 0 whatever the verdict.
 
   $ bactrian compare $ID --baseline a --candidate b
   experiment demo (20261013T090000Z-0badc0de): candidate b against baseline a
+  warning: 2 of 60 runs had the real provider keys in the agent's environment (agent.real_keys), so the agent could read them and could have written one into its replies or its standard error.
   estimand suite, confidence 95%, seed 7, 10000 resamples
   cost and tokens compare scenario-weighted means, latency the geometric mean of per-scenario ratios of medians
   gate: pass_rate (level 0.9500 per interval)

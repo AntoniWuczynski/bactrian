@@ -55,11 +55,13 @@ let is_loopback uri =
                (Unix.string_of_inet_addr Unix.inet6_addr_loopback)
           || String.starts_with ~prefix:"::ffff:127." text)
 
+let is_cleartext uri = not (Upstream.is_https uri || is_loopback uri)
+
 let cleartext caps upstream =
   List.filter_map
     (fun (p, _) ->
       let url = upstream p in
-      if Upstream.is_https url || is_loopback url then None
+      if not (is_cleartext url) then None
       else
         Some
           (Printf.sprintf
@@ -67,3 +69,13 @@ let cleartext caps upstream =
               set %s to any placeholder"
              (Run.key_variable p) (Uri.to_string url) (Run.key_variable p)))
     (funded caps)
+
+let real_keys_cleartext ~agent_url =
+  let uri = Uri.of_string agent_url in
+  if is_cleartext uri then
+    Some
+      (Printf.sprintf
+         "the start message carries the real provider keys to %s unencrypted: \
+          use https, or an agent on this machine"
+         (Option.value (Uri.host uri) ~default:"another machine"))
+  else None

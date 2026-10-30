@@ -7,7 +7,11 @@ type request = {
   seatbelt_hint : bool;
 }
 
-type t = { summary : Executor.summary; sandbox : Sandbox.label option }
+type t = {
+  summary : Executor.summary;
+  sandbox : Sandbox.label option;
+  checker_sandbox : Sandbox.label option;
+}
 
 let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
   Mirage_crypto_rng_unix.use_default ();
@@ -16,11 +20,13 @@ let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
   | Ok upstream -> (
       let announced = ref None in
       let label = ref None in
+      let checker_label = ref None in
       match
         Interrupt.run ?stop (fun () ->
             Executor.run_experiment ~seatbelt_hint:r.seatbelt_hint ~upstream
               ?sandbox:r.sandbox
               ~on_sandbox:(fun l -> label := Some l)
+              ~on_checker_sandbox:(fun l -> checker_label := Some l)
               ~bactrian_exe ~env ?files ?vet ~experiment_file:r.experiment
               ~resume:r.resume
               ~announce:(fun id ->
@@ -36,7 +42,8 @@ let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
           Error (Command_error.Configuration errors)
       | Ok (Error (Usage m)) -> Error (Command_error.Usage m)
       | Ok (Error (Environment m)) -> Error (Command_error.Environment m)
-      | Ok (Ok summary) -> Ok { summary; sandbox = !label })
+      | Ok (Ok summary) ->
+          Ok { summary; sandbox = !label; checker_sandbox = !checker_label })
 
 let exit_code t = Exit_code.of_summary t.summary
 
@@ -55,6 +62,10 @@ let to_json t =
       ("experiment_id", `String t.summary.experiment_id);
       ( "sandbox",
         match t.sandbox with Some l -> Sandbox.label_json l | None -> `Null );
+      ( "checker_sandbox",
+        match t.checker_sandbox with
+        | Some l -> Sandbox.label_json l
+        | None -> `Null );
       ( "runs",
         `List
           (List.map

@@ -58,15 +58,28 @@ let kind_colour = function
   | "failed" | "diverged" | "errored" -> "31"
   | _ -> "33"
 
-let render_summary_text ~colour ({ summary = s; sandbox } : Run_command.t) =
+let render_summary_text ~colour
+    ({ summary = s; sandbox; checker_sandbox } : Run_command.t) =
   let b = Buffer.create 256 in
   let line fmt = Printf.bprintf b (fmt ^^ "\n") in
   line "experiment %s" s.experiment_id;
-  Option.iter
-    (fun (l : Sandbox.label) ->
-      if not l.applied then
-        line "%s" (paint ~colour "31" ("every run: " ^ unsandboxed_line l)))
-    sandbox;
+  (* Checkers that share the agent's sandbox have the same cause, said once. *)
+  let same_as_agent (c : Sandbox.label) =
+    match sandbox with
+    | Some a ->
+        (not a.applied) && (not c.applied)
+        && String.equal (unsandboxed_line a) (unsandboxed_line c)
+    | None -> false
+  in
+  List.iter
+    (Option.iter (fun (who, (l : Sandbox.label)) ->
+         if not l.applied then
+           line "%s" (paint ~colour "31" (who ^ ": " ^ unsandboxed_line l))))
+    [
+      Option.map (fun l -> ("every run", l)) sandbox;
+      Option.bind checker_sandbox (fun l ->
+          if same_as_agent l then None else Some ("every checker", l));
+    ];
   List.iter
     (fun ((p : Executor.planned), status, run_id) ->
       let kind = Run_command.status_kind status in

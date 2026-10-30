@@ -207,8 +207,8 @@ let redaction source =
   | Error _ -> Alcotest.failf "pattern %S" source
 
 let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
-    ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default) ?(mcp = [])
-    ctx ~token ~upstream =
+    ?(agent_has_real_keys = false) ?(normalise = []) ?(redact = [])
+    ?(pricing = Pricing.default) ?(mcp = []) ctx ~token ~upstream =
   let run_id = run_id_of token in
   {
     P.run_id;
@@ -221,6 +221,7 @@ let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
         ~path:Eio.Path.(ctx.dir / ("ledger-" ^ run_id ^ ".jsonl"))
         ~caps;
     keys = real_keys;
+    real_keys = agent_has_real_keys;
     upstream = (fun _ -> Uri.of_string upstream);
     connector = Upstream.plain;
     normalise = List.map compile normalise;

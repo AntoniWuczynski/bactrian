@@ -31,7 +31,7 @@ How the command differs from Docker's:
 - There is no `--pids-limit`. In its own virtual machine the agent's user is the only one besides root, so `--ulimit nproc` caps the container's processes. There is no swap setting.
 - `/tmp` gets `mode=1777`, because `container` would make it 0755 and root's.
 - The relay's cache directory is mounted at `/bactrian`, since only directories can be mounted. The cached relay's name is the same for both runtimes (`relay-HASH-arm64`), so one build serves both. It is built with `container run --rm --progress none` on the default network.
-- There is no `--log-driver none`. While a container exists, `container` keeps its configuration, which holds the agent's environment (placeholder keys and the run's token), and a log of its standard output and error under `~/Library/Application Support/com.apple.container/containers/NAME/`. The directory goes when the container does.
+- There is no `--log-driver none`. While a container exists, `container` keeps its configuration, which holds the agent's environment (placeholder keys, or the real ones with `agent.real_keys`, and the run's token), and a log of its standard output and error under `~/Library/Application Support/com.apple.container/containers/NAME/`. The directory goes when the container does.
 - There is no `--security-opt no-new-privileges`, so the relay sets `no_new_privs` itself (`prctl(PR_SET_NO_NEW_PRIVS)`) before it starts the agent, under both runtimes, and stops if it cannot. Without it a set-user-ID root program in the image would run with effective user ID 0: dropping every capability from the bounding set takes away capabilities, not the checks that rest on owning a file. The pinned uv image holds eleven such programs (`su`, `passwd`, `mount` among them). Checked in that image: `NoNewPrivs` is 1 in the agent, and `unix_chkpwd`, which is set-group-ID `shadow`, keeps the agent's group (saved group ID 20), where without the flag its saved group ID was 42.
 - `container create` fetches a reference that is not in its store. The preflight checks that the image is present (it never pulls), and the digest is checked after `create`, so only an image the user pulled can run.
 
@@ -56,7 +56,7 @@ Continuous integration cannot run `container` (GitHub's runners do not have it),
 Residual risks, on top of decision 0014's:
 
 - A subdirectory beside a masked file is bound again by its path when `create` runs. A swap of it for a symbolic link to another directory between the listing and `create` would show that directory instead, as with Docker's bind of each entry back. Hard links of files are checked, directories are not.
-- The container's configuration (placeholder keys and the run's token) and its output log sit in the user's Library while it exists. Any process of the user can read them, as it can read the run's own directory.
+- The container's configuration (placeholder keys, or the real ones with `agent.real_keys`, and the run's token) and its output log sit in the user's Library while it exists. Any process of the user can read them, as it can read the run's own directory.
 - `create` would fetch a missing reference. The preflight checks that the image is present before, and the digest is checked after.
 - `container`'s host-only networks (`--internal`) are not used. `--network none` leaves `lo` alone.
 - A file beside a masked one is shown through a hard link, so the agent reads the same file, read-only. A hard link to the masked file elsewhere in the project is still shown, as with Docker and Seatbelt.

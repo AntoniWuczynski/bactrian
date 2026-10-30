@@ -810,6 +810,14 @@ let sandboxed_checkers era () =
     "the job succeeded" "succeeded"
     (string_field "state" status);
   let runs = get "runs" (Canon.list_member "runs" (field "result" status)) in
+  Alcotest.check json "the run reports the checkers' sandbox"
+    (obj
+       [
+         ("mode", Canon.string "strict");
+         ("applied", Canon.bool true);
+         ("backend", Canon.string host_backend);
+       ])
+    (field "checker_sandbox" (field "result" status));
   Alcotest.(check (list string))
     "every run passed, its checker included"
     (List.init 4 (fun _ -> "passed"))

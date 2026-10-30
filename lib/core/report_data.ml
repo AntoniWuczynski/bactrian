@@ -30,6 +30,7 @@ type run = {
   unsandboxed : string option;
   checkers_unsandboxed : string option;
   clock_unenforced : string option;
+  real_keys : bool;
   sandbox_violations : string option;
 }
 
@@ -662,6 +663,7 @@ let run_json ~detail (r : run) : Yojson.Safe.t =
        ("unsandboxed", opt (fun s -> `String s) r.unsandboxed);
        ("checkers_unsandboxed", opt (fun s -> `String s) r.checkers_unsandboxed);
        ("clock_unenforced", opt (fun s -> `String s) r.clock_unenforced);
+       ("real_keys", `Bool r.real_keys);
        ("sandbox_violations", opt (fun s -> `String s) r.sandbox_violations);
      ]
     @
@@ -751,6 +753,8 @@ let summary_fields (t : t) =
            (List.filter
               (fun (r : run) -> Option.is_some r.clock_unenforced)
               t.order)) );
+    ( "real_keys_runs",
+      `Int (List.length (List.filter (fun (r : run) -> r.real_keys) t.order)) );
     ("exit", `Int t.exit);
     ("metrics", `List (List.map metric_json t.metrics));
     ("scenarios", `List (List.map scenario_json t.scenarios));

@@ -331,6 +331,53 @@ let http_agent_strict ~experiment_file ~find experiment sandbox_override =
   | Ok { agent = Command _; _ }, _ | Ok _, (None | Some (`Auto | `Off)) -> []
   | Error _, _ -> []
 
+(* Likewise [agent.real_keys] under [--sandbox strict]. *)
+let real_keys_strict ~experiment_file ~find experiment sandbox_override =
+  match (experiment, sandbox_override) with
+  | Ok ({ real_keys = true; _ } : Experiment.t), Some `Strict ->
+      [
+        at_key ~experiment_file ~find "agent.real_keys"
+          ("--sandbox strict cannot be met with agent.real_keys: "
+         ^ Experiment.real_keys_strict_reason
+         ^ ". The MCP server allows auto and off when started with \
+            --allow-unsandboxed, and real_keys with --trust-project");
+      ]
+  | Ok { real_keys = true | false; _ }, (None | Some (`Auto | `Off))
+  | Ok { real_keys = false; _ }, Some `Strict
+  | Error _, _ ->
+      []
+
+(* What the user has accepted by writing [agent.real_keys] (design §5.2, decision
+   0018). A sandbox keeps the agent off the network but for the proxy, and the
+   proxy forwards what the agent sends: a key written into a prompt or into a
+   call to an HTTP MCP server leaves the machine. *)
+let real_keys_warning ~(label : Sandbox.label) ~keys =
+  let reach =
+    match (label.applied, label.backend) with
+    | false, _ | true, None ->
+        "Nothing stops it from reading a key or sending it anywhere."
+    | true, Some Seatbelt_backend | true, Some Bubblewrap_backend ->
+        "The sandbox stops it from connecting anywhere but to bactrian's \
+         proxy, but the proxy forwards what it sends, so a key in a prompt or \
+         in a call to an HTTP MCP server still leaves this machine, and \
+         another process of yours outside the sandbox (an MCP stdio server, a \
+         checker that is not sandboxed) can read the key from its environment."
+    | true, Some (Vm_backend _) ->
+        "The sandbox stops it from connecting anywhere but to bactrian's \
+         proxy, but the proxy forwards what it sends, so a key in a prompt or \
+         in a call to an HTTP MCP server still leaves this machine. The key is \
+         also in the run's agent.env and in the container's configuration \
+         (docker inspect shows it, and Apple's container keeps it under \
+         ~/Library) while the run lasts, where any process of yours can read \
+         it."
+  in
+  Printf.sprintf
+    "agent.real_keys: the agent's environment holds the real %s, not \
+     placeholders. %s It can also write a key into its replies, its trace and \
+     its standard error. The runs are labelled real_keys."
+    (Run.key_variable_names (List.map fst keys))
+    reach
+
 (* Every stage reports, so one round shows every mistake: the experiment, its
    globs, each scenario and the price file. A stage that needs a field of an
    experiment that did not decode reads it straight from the document. *)
@@ -399,6 +446,7 @@ let load ~fs ~experiment_file ~sandbox_override =
              loaded_scenarios;
            duplicate_ids ~fs ~dir scenarios;
            http_agent_strict ~experiment_file ~find experiment sandbox_override;
+           real_keys_strict ~experiment_file ~find experiment sandbox_override;
            (match pricing with Ok _ -> [] | Error es -> es);
          ])
   in
@@ -470,6 +518,7 @@ let run_config ~fs ~sandbox ~checker_sandbox (l : loaded)
     timezone = Option.value scenario.timezone ~default:"UTC";
     replay = None;
     env_passthrough = l.experiment.env_passthrough;
+    real_keys = l.experiment.real_keys;
     variant_env = variant.env;
     checks =
       Some
@@ -593,8 +642,9 @@ let run_experiment ?seatbelt_hint ?root
     ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
     ?(upstream = P.default_upstream) ?connector ?sandbox
-    ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env ?files
-    ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
+    ?(on_sandbox = fun (_ : Sandbox.label) -> ())
+    ?(on_checker_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env
+    ?files ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
   let fs = Eio.Stdenv.fs env in
   let files = Option.value files ~default:fs in
   let root =
@@ -675,7 +725,16 @@ let run_experiment ?seatbelt_hint ?root
         else Ok (agent, agent)
   in
   on_sandbox (Sandbox.label sandbox);
+  if has_checkers then on_checker_sandbox (Sandbox.label checker_sandbox);
   Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
+  if experiment.real_keys && not (List.is_empty keys) then
+    warn (real_keys_warning ~label:(Sandbox.label sandbox) ~keys);
+  (match (experiment.real_keys, keys, l.agent) with
+  | true, _ :: _, Http { url; _ } ->
+      Option.iter
+        (fun c -> warn ("agent.real_keys: " ^ c))
+        (Live_preflight.real_keys_cleartext ~agent_url:url)
+  | true, [], _ | false, _, _ | true, _ :: _, Command _ -> ());
   let* jobs =
     List.mapi
       (fun i (p : planned) ->

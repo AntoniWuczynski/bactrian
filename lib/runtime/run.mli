@@ -22,6 +22,9 @@ val key_variable : Model_proxy.provider -> string
 (** The environment variable holding bactrian's real key for the provider, and
     the one that carries the placeholder in the agent's environment. *)
 
+val key_variable_names : Model_proxy.provider list -> string
+(** The {!key_variable} of each provider, comma-separated, for messages. *)
+
 type outcome =
   | Passed
       (** The run completed and, when it has {!type-checks}, every assertion and
@@ -84,6 +87,12 @@ type config = {
   timezone : string;
   replay : replay option;  (** None = record. *)
   env_passthrough : string list;
+  real_keys : bool;
+      (** The agent's environment holds the real key of each provider bactrian
+          has one for, instead of the placeholder (design §5.2). [meta.json]
+          records [real_keys] as true only when at least one real key was
+          placed, so a replay or a run without any provider key is labelled
+          false. *)
   variant_env : (string * string) list;
       (** The variant's variables, given to the agent after the passthrough
           ones. They cannot replace bactrian's own variables. *)

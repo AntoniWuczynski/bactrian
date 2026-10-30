@@ -1,43 +1,8 @@
 open Bactrian_core
 
-type provider = Openai | Anthropic | Gemini | Openrouter
+type provider = Provider.t = Openai | Anthropic | Gemini | Openrouter
 
-let providers = [ Openai; Anthropic; Gemini; Openrouter ]
-
-let default_upstream p =
-  Uri.of_string
-    (match p with
-    | Openai -> "https://api.openai.com"
-    | Anthropic -> "https://api.anthropic.com"
-    | Gemini -> "https://generativelanguage.googleapis.com"
-    | Openrouter -> "https://openrouter.ai")
-
-let segment = function
-  | Openai -> "openai"
-  | Anthropic -> "anthropic"
-  | Gemini -> "gemini"
-  | Openrouter -> "openrouter"
-
-let provider_of_segment s =
-  List.find_opt (fun p -> String.equal (segment p) s) providers
-
-let provider_equal a b = String.equal (segment a) (segment b)
-
-(* The part of the path that SDK base URLs include. *)
-let sdk_base = function
-  | Openai -> "/v1"
-  | Openrouter -> "/api/v1"
-  | Anthropic | Gemini -> ""
-
-let key_header = function
-  | Openai | Openrouter -> "authorization"
-  | Anthropic -> "x-api-key"
-  | Gemini -> "x-goog-api-key"
-
-let key_value p key =
-  match p with
-  | Openai | Openrouter -> "Bearer " ^ key
-  | Anthropic | Gemini -> key
+let default_upstream = Provider.default_upstream
 
 type timing = Fast | Recorded
 
@@ -59,6 +24,7 @@ type run = {
   cassette : Store.writer option;
   ledger : Ledger.t;
   keys : (provider * string) list;
+  real_keys : bool;
   upstream : provider -> Uri.t;
   connector : Upstream.connector;
   normalise : Re.re list;
@@ -317,7 +283,7 @@ let dropped_headers =
   ]
 
 let forward_headers headers p real_key =
-  (key_header p, key_value p real_key)
+  (Provider.key_header p, Provider.key_value p real_key)
   :: List.filter
        (fun (k, _) -> not (List.mem (String.lowercase_ascii k) dropped_headers))
        headers
@@ -484,12 +450,12 @@ let live t ~conn_sw st x ~record =
   let date = date_of (t.now ()) in
   match
     List.find_map
-      (fun (p, k) -> if provider_equal p x.provider then Some k else None)
+      (fun (p, k) -> if Provider.equal p x.provider then Some k else None)
       run.keys
   with
   | None ->
       refusal_response st ~status:502 ~type_:"bactrian_no_key"
-        ("no API key is configured for " ^ segment x.provider)
+        ("no API key is configured for " ^ Provider.segment x.provider)
   | Some real_key -> (
       let reservation =
         match
@@ -500,7 +466,8 @@ let live t ~conn_sw st x ~record =
         | None -> Error (Ledger.Unknown_model model)
         | Some usd ->
             Ledger.reserve run.ledger ~owner:run.run_id
-              ~provider:(segment x.provider) ~model ~usd
+              ~provider:(Provider.segment x.provider)
+              ~model ~usd
       in
       match reservation with
       | Error refusal -> refuse_spend st refusal
@@ -744,9 +711,6 @@ let unattributed_response t ~status ~type_ message =
   t.unattributed <- t.unattributed + 1;
   error_response ~status ~type_ message
 
-(* The placeholder key may arrive in the provider's key header and, for Gemini,
-   also in the [key] query parameter. Each one present must be right, and at
-   least one must be present. *)
 let default_max_body = 64 * 1024 * 1024
 
 type body = Body of string | Too_large
@@ -782,7 +746,7 @@ let handle ?only t ((conn_sw, _), _) request body : response =
           unattributed_response t ~status:403 ~type_:"bactrian_forbidden"
             "unknown or ended run"
       | Some st -> (
-          match provider_of_segment provider with
+          match Provider.of_segment provider with
           | None
             when String.equal provider "mcp" || String.equal provider "mcp-http"
             ->
@@ -794,35 +758,37 @@ let handle ?only t ((conn_sw, _), _) request body : response =
               unattributed_response t ~status:404
                 ~type_:"bactrian_unknown_provider"
                 ("unknown provider " ^ provider)
-          | Some p -> (
-              let placeholder = "bactrian-" ^ st.run.token in
-              let in_header =
-                Option.map
-                  (String.equal (key_value p placeholder))
-                  (Http.Header.get headers (key_header p))
-              and in_query =
-                match p with
-                | Gemini ->
-                    Option.map (String.equal placeholder)
-                      (Uri.get_query_param uri "key")
-                | Openai | Anthropic | Openrouter -> None
+          | Some p ->
+              (* What the agent may present as its key: the placeholder, and
+                 for a run that put the real key in its environment
+                 ([real_keys]) that key too. *)
+              let accepted =
+                ("bactrian-" ^ st.run.token)
+                ::
+                (if st.run.real_keys then
+                   Option.to_list (List.assoc_opt p st.run.keys)
+                 else [])
               in
-              match Option.to_list in_header @ Option.to_list in_query with
-              | _ :: _ as checks when List.for_all Fun.id checks ->
-                  let uri =
-                    match p with
-                    | Gemini -> Uri.remove_query_param uri "key"
-                    | Openai | Anthropic | Openrouter -> uri
-                  in
-                  model_request t ~conn_sw st p
-                    ~meth:(Http.Method.to_string (Http.Request.meth request))
-                    ~uri ~path
-                    ~headers:(Http.Header.to_list headers)
-                    ~body
-              | [] | _ :: _ ->
-                  locked st (fun () -> st.refused_keys <- st.refused_keys + 1);
-                  refusal_response st ~status:403 ~type_:"bactrian_forbidden"
-                    ("missing or wrong placeholder key in " ^ key_header p))))
+              if
+                Provider.presents_key p ~accepted
+                  ~header:(Http.Header.get headers (Provider.key_header p))
+                  ~query:(Uri.get_query_param uri "key")
+              then
+                let uri =
+                  match p with
+                  | Gemini -> Uri.remove_query_param uri "key"
+                  | Openai | Anthropic | Openrouter -> uri
+                in
+                model_request t ~conn_sw st p
+                  ~meth:(Http.Method.to_string (Http.Request.meth request))
+                  ~uri ~path
+                  ~headers:(Http.Header.to_list headers)
+                  ~body
+              else (
+                locked st (fun () -> st.refused_keys <- st.refused_keys + 1);
+                refusal_response st ~status:403 ~type_:"bactrian_forbidden"
+                  ("missing or wrong placeholder key in "
+                 ^ Provider.key_header p))))
 
 (* Exceptions that reach here could not be attributed to a run. *)
 let on_error t = function
@@ -965,7 +931,7 @@ let unregister t ~token =
 let base_url ?port t ~token p =
   Printf.sprintf "http://127.0.0.1:%d/r/%s/%s%s"
     (Option.value port ~default:t.port)
-    token (segment p) (sdk_base p)
+    token (Provider.segment p) (Provider.sdk_base p)
 
 let mcp_url ?port t ~token =
   Printf.sprintf "http://127.0.0.1:%d/r/%s/mcp"

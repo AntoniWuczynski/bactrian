@@ -165,7 +165,7 @@ end
 
 (* What a run wrote about itself: cost from the ledger's attribution, the
    latency and token totals of its model calls, and its sandbox and clock
-   labels. A run
+   labels and whether it held the real keys. A run
    without a meta.json (it crashed before writing one) has none of them.
    meta.json holds much more (run ID, outcome, patterns, unenforced settings),
    so this decoder reads only these fields of it and lets the others pass. *)
@@ -175,6 +175,7 @@ type meta = {
   tokens : int option; [@default None]
   sandbox : sandbox option; [@default None]
   clock : Clock_meta.t option; [@default None]
+  real_keys : bool; [@default false]
   sandbox_violations : Violations_meta.t option; [@default None]
 }
 [@@deriving of_yojson { strict = false }]
@@ -232,6 +233,7 @@ let read_meta dir =
           tokens = None;
           sandbox = None;
           clock = None;
+          real_keys = false;
           sandbox_violations = None;
         }
   | Ok (Some text) -> (
@@ -294,6 +296,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
       unsandboxed = None;
       checkers_unsandboxed = None;
       clock_unenforced = None;
+      real_keys = false;
       sandbox_violations = None;
     }
   in
@@ -320,6 +323,7 @@ let load_run ~root ((p : Executor.planned), status, run_id) =
           unsandboxed = unsandboxed meta;
           checkers_unsandboxed;
           clock_unenforced = clock_unenforced meta;
+          real_keys = meta.real_keys;
           sandbox_violations = sandbox_violations meta;
         }
 

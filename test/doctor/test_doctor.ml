@@ -35,8 +35,22 @@ let http url : Experiment.agent =
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
-    ?(funded = []) ~dir agent : Doctor.target =
-  { agent; dir; sandbox; backend; image; runtime = None; faketime; funded }
+    ?(faketime_requested = false) ?(deny_read = []) ?(checkers = false)
+    ?(funded = []) ?(real_keys = false) ~dir agent : Doctor.target =
+  {
+    agent;
+    dir;
+    sandbox;
+    backend;
+    image;
+    runtime = None;
+    deny_read;
+    faketime;
+    faketime_requested;
+    checkers;
+    real_keys;
+    funded;
+  }
 
 (* Keys *)
 
@@ -100,6 +114,37 @@ let test_agent () =
   check_status "no scheme" Fail (url "127.0.0.1:9/agent");
   check_status "another scheme" Fail (url "ftp://agent.example/run")
 
+(* agent.real_keys *)
+
+let test_real_keys () =
+  let check ?(keys = [ P.Openai ]) agent =
+    Doctor.real_keys_check ~keys (target ~real_keys:true ~dir:"/" agent)
+  in
+  let warn = check (command ()) in
+  check_status "warns" Warn warn;
+  Alcotest.(check bool)
+    "names the variable, not a value" true
+    (contains ~sub:"OPENAI_API_KEY" warn.message
+    && not (contains ~sub:"unencrypted" warn.message));
+  check_status "no key set" Skip (check ~keys:[] (command ()));
+  Alcotest.(check bool)
+    "plain http to another machine" true
+    (contains ~sub:"unencrypted"
+       (check (http "http://user:secret@agent.example/run")).message);
+  Alcotest.(check bool)
+    "the credentials are not shown" false
+    (contains ~sub:"secret"
+       (check (http "http://user:secret@agent.example/run")).message);
+  List.iter
+    (fun url ->
+      Alcotest.(check bool)
+        (url ^ " is not cleartext")
+        false
+        (contains ~sub:"unencrypted" (check (http url)).message))
+    [
+      "https://agent.example/run"; "http://127.0.0.1:9/a"; "http://localhost/a";
+    ]
+
 (* The sandbox *)
 
 let test_sandbox () =
@@ -126,6 +171,26 @@ let test_sandbox () =
   Alcotest.(check bool)
     "the cause and its fix commands are kept" true
     (contains ~sub:"sudo sysctl -w a=0" c.message)
+
+let test_checkers_sandbox () =
+  let calls = ref 0 in
+  let run mode result =
+    Doctor.checkers_sandbox_check ~mode ~probe:(fun () ->
+        incr calls;
+        result)
+  in
+  check_status "works" Pass (run `Strict (Ok ()));
+  check_status "unavailable under auto" Warn (run `Auto (Error "no bwrap"));
+  check_status "unavailable under strict" Fail (run `Strict (Error "no bwrap"));
+  Alcotest.(check int) "probed three times" 3 !calls;
+  calls := 0;
+  check_status "off" Skip (run `Off (Error "no bwrap"));
+  Alcotest.(check int) "off does not probe" 0 !calls;
+  let c = run `Strict (Error "no bwrap") in
+  Alcotest.(check string) "its own name" "sandbox-checkers" c.name;
+  Alcotest.(check bool)
+    "the cause is kept" true
+    (contains ~sub:"no bwrap" c.message)
 
 (* The virtual machine *)
 
@@ -189,9 +254,15 @@ let test_clock () =
   write lib "";
   write (at "dyn") (E.elf [ (E.pt_interp, E.interp) ]);
   write (at "stat") (E.elf [ (E.pt_load, "code") ]);
-  let clock ?(linux = true) ?(faketime = true) ?(override = Some lib) agent =
+  let clock ?(linux = true) ?(faketime = true) ?faketime_requested ?sandbox
+      ?(sandboxed = true) ?(hidden = fun (_ : string) -> false)
+      ?(override = Some lib) agent =
     Doctor.clock_check ~linux ~library_override:override ~path:(Some dir)
-      (Some (target ~faketime ~dir (command ~argv:[ agent ] ())))
+      ~sandboxed:(fun () -> sandboxed)
+      ~hidden
+      (Some
+         (target ~faketime ?faketime_requested ?sandbox ~dir
+            (command ~argv:[ agent ] ())))
   in
   let c = clock "dyn" in
   check_status "enforced" Pass c;
@@ -208,15 +279,85 @@ let test_clock () =
   check_status "agent not found" Warn (clock "absent");
   check_status "http agent" Skip
     (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~sandboxed:(fun () -> true)
+       ~hidden:(fun _ -> false)
        (Some (target ~dir (http "http://127.0.0.1:9/a"))));
+  (* Only the sandbox can hide the library, and only when it applies. *)
+  let hides_lib p = String.equal p lib in
+  let hidden = clock ~sandbox:`Auto ~hidden:hides_lib "dyn" in
+  check_status "hidden by deny_read" Warn hidden;
+  Alcotest.(check bool)
+    "names the reason" true
+    (contains ~sub:"library-hidden" hidden.message);
+  check_status "hidden under strict too" Warn
+    (clock ~sandbox:`Strict ~hidden:hides_lib "dyn");
+  check_status "no sandbox, nothing hides it" Pass
+    (clock ~sandbox:`Off ~hidden:hides_lib "dyn");
+  check_status "auto falling back to no sandbox, nothing hides it" Pass
+    (clock ~sandbox:`Auto ~sandboxed:false ~hidden:hides_lib "dyn");
+  check_status "another path is not hidden" Pass
+    (clock ~sandbox:`Auto ~hidden:(String.equal "/elsewhere") "dyn");
+  (* An explicit faketime: auto is a request the host may not meet. *)
+  check_status "macOS by default" Pass (clock ~linux:false "dyn");
+  let asked = clock ~linux:false ~faketime_requested:true "dyn" in
+  check_status "macOS when asked for" Warn asked;
+  Alcotest.(check bool)
+    "says why" true
+    (contains ~sub:"asks for clock: {faketime: auto}" asked.message);
+  check_status "enforced when asked for" Pass
+    (clock ~faketime_requested:true "dyn");
+  check_status "no library when asked for" Warn
+    (clock ~faketime_requested:true ~override:(Some (at "none")) "dyn");
+  check_status "http agent when asked for" Warn
+    (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~sandboxed:(fun () -> true)
+       ~hidden:(fun _ -> false)
+       (Some
+          (target ~faketime_requested:true ~dir (http "http://127.0.0.1:9/a"))));
   let host ~linux ~override =
-    Doctor.clock_check ~linux ~library_override:override ~path:None None
+    Doctor.clock_check ~linux ~library_override:override ~path:None
+      ~sandboxed:(fun () -> true)
+      ~hidden:(fun _ -> false)
+      None
   in
   check_status "no experiment, macOS" Pass (host ~linux:false ~override:None);
   check_status "no experiment, library found" Pass
     (host ~linux:true ~override:(Some lib));
   check_status "no experiment, library missing" Warn
     (host ~linux:true ~override:(Some (at "none")))
+
+(* The deny-list, asked of settings alone: nothing is made on disk. *)
+let test_library_masked () =
+  with_dir @@ fun dir ->
+  let project = Filename.concat dir "project" in
+  let bactrian_dir = Filename.concat project ".bactrian" in
+  let masked deny_read library =
+    Sandbox.library_masked
+      {
+        mode = `Auto;
+        backend = `Auto;
+        image = None;
+        runtime = None;
+        allow_write = [];
+        deny_read;
+        bactrian_exe = "bactrian";
+        bactrian_dir;
+      }
+      library
+  in
+  let lib = "/opt/faketime/libfaketimeMT.so.1" in
+  Alcotest.(check bool) "nothing denied" false (masked [] lib);
+  Alcotest.(check bool)
+    "its directory is denied" true
+    (masked [ "/opt/faketime" ] lib);
+  Alcotest.(check bool) "the file itself" true (masked [ lib ] lib);
+  Alcotest.(check bool)
+    "a sibling directory with the same prefix" false
+    (masked [ "/opt/fake" ] lib);
+  Alcotest.(check bool)
+    "under .bactrian/blobs, which is always denied" true
+    (masked [] (Filename.concat bactrian_dir "blobs/libfaketimeMT.so.1"));
+  Alcotest.(check bool) "no .bactrian made" false (Sys.file_exists bactrian_dir)
 
 (* TLS and egress *)
 
@@ -356,9 +497,12 @@ let () =
           Alcotest.test_case "keys with an experiment" `Quick
             test_keys_with_experiment;
           Alcotest.test_case "agent" `Quick test_agent;
+          Alcotest.test_case "real keys" `Quick test_real_keys;
           Alcotest.test_case "sandbox" `Quick test_sandbox;
+          Alcotest.test_case "checkers' sandbox" `Quick test_checkers_sandbox;
           Alcotest.test_case "virtual machine" `Quick test_vm;
           Alcotest.test_case "clock" `Quick test_clock;
+          Alcotest.test_case "library masked" `Quick test_library_masked;
           Alcotest.test_case "tls and egress" `Quick test_tls;
           Alcotest.test_case "upstream overrides" `Quick test_upstream_checks;
           Alcotest.test_case "loopback" `Quick test_loopback;

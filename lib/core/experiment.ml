@@ -57,10 +57,12 @@ type t = {
   sandbox_allow_write : string list;
   sandbox_deny_read : string list;
   faketime : bool;
+  faketime_requested : bool;
   caps_usd : (string * float) list;
   pricing : string option;
   seed : int;
   env_passthrough : string list;
+  real_keys : bool;
   compare : compare option;
 }
 
@@ -86,6 +88,11 @@ let policy_of_name name =
     policies
 
 let policy = enum ~what:"policy" policies
+
+let real_keys_strict_reason =
+  "the real provider keys would be in the agent's environment inside the \
+   sandbox, which strict promises they never are (use auto or off, or drop \
+   real_keys)"
 
 let valid_url url =
   let after prefix =
@@ -117,8 +124,9 @@ let agent ~path c =
   object_ ~path c (fun r ->
       let common =
         let+ timeouts = default r "timeouts" (120.0, 600.0) timeouts
-        and+ env = default r "env_passthrough" [] (list string) in
-        (timeouts, env)
+        and+ env = default r "env_passthrough" [] (list string)
+        and+ real_keys = default r "real_keys" false bool in
+        (timeouts, env, real_keys)
       in
       match
         required r "protocol"
@@ -132,14 +140,16 @@ let agent ~path c =
           let+ argv = required r "command" (non_empty_list string)
           and+ () = forbidden r "url" ~protocol:"command"
           and+ () = forbidden r "namespace_header" ~protocol:"command"
-          and+ (turn_timeout, total_timeout), env = common in
-          (Command { argv; turn_timeout; total_timeout }, env)
+          and+ (turn_timeout, total_timeout), env, real_keys = common in
+          (Command { argv; turn_timeout; total_timeout }, env, real_keys)
       | Ok `Http ->
           let+ url = required r "url" agent_url
           and+ namespace_header = required r "namespace_header" non_empty_string
           and+ () = forbidden r "command" ~protocol:"http"
-          and+ (turn_timeout, total_timeout), env = common in
-          (Http { url; namespace_header; turn_timeout; total_timeout }, env))
+          and+ (turn_timeout, total_timeout), env, real_keys = common in
+          ( Http { url; namespace_header; turn_timeout; total_timeout },
+            env,
+            real_keys ))
 
 let env_vars = assoc string
 
@@ -305,10 +315,14 @@ let intercept =
          ("egress", `Egress);
        ])
 
+(* The mode, and whether the file asks for [auto] by name. *)
 let clock ~path c =
   object_ ~path c (fun r ->
-      default r "faketime" true
-        (enum ~what:"faketime mode" [ ("auto", true); ("off", false) ]))
+      let+ mode =
+        optional r "faketime"
+          (enum ~what:"faketime mode" [ ("auto", true); ("off", false) ])
+      in
+      (Option.value mode ~default:true, Option.equal Bool.equal mode (Some true)))
 
 let confidence ~path c =
   let* f = float ~path c in
@@ -520,12 +534,25 @@ let baseline_exists (variants : variant list) = function
 (* bactrian does not start an HTTP agent, so it cannot put it in a sandbox. *)
 let http_agent_unsandboxed agent_r sandbox_r =
   match (agent_r, sandbox_r) with
-  | Ok (Http _, _), Ok { mode = `Strict; _ } ->
+  | Ok (Http _, _, _), Ok { mode = `Strict; _ } ->
       fail ~path:"sandbox"
         "strict cannot be met with agent.protocol http: bactrian does not \
          start the agent, so it cannot sandbox it (use auto or off)"
-  | Ok (Command _, _), Ok { mode = `Auto | `Strict | `Off; _ }
-  | Ok (Http _, _), Ok { mode = `Auto | `Off; _ }
+  | Ok (Command _, _, _), Ok { mode = `Auto | `Strict | `Off; _ }
+  | Ok (Http _, _, _), Ok { mode = `Auto | `Off; _ }
+  | Error _, _
+  | Ok _, Error _ ->
+      Ok ()
+
+(* [strict] promises the whole sandbox contract, which includes that the real
+   keys stay out of the agent's environment (design §5.3). *)
+let real_keys_strict agent_r sandbox_r =
+  match (agent_r, sandbox_r) with
+  | Ok (_, _, true), Ok { mode = `Strict; _ } ->
+      fail ~path:"agent.real_keys"
+        ("sandbox: strict cannot be met with agent.real_keys: "
+       ^ real_keys_strict_reason)
+  | Ok (_, _, (true | false)), Ok { mode = `Auto | `Strict | `Off; _ }
   | Error _, _
   | Ok _, Error _ ->
       Ok ()
@@ -547,12 +574,13 @@ let decode c =
               ()
           | Ok (vs, mapping_form), Error _ -> env_not_reserved ~mapping_form vs
           | Error _, (Ok _ | Error _) -> Ok ()
-        and+ () = http_agent_unsandboxed agent_r sandbox_r in
+        and+ () = http_agent_unsandboxed agent_r sandbox_r
+        and+ () = real_keys_strict agent_r sandbox_r in
         ()
       in
       let+ _version = required r "version" (version 1)
       and+ name = required r "name" non_empty_string
-      and+ agent, env_passthrough = agent_r
+      and+ agent, env_passthrough, real_keys = agent_r
       and+ scenarios = required r "scenarios" (non_empty_list non_empty_string)
       and+ variants, _ = variants_r
       and+ repeats = default r "repeats" 1 (int_at_least 1)
@@ -564,7 +592,7 @@ let decode c =
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
       and+ sandbox_block = sandbox_r
-      and+ faketime = default r "clock" true clock
+      and+ faketime, faketime_requested = default r "clock" (true, false) clock
       and+ caps_usd = default r "caps_usd" [] caps_usd
       and+ pricing = optional r "pricing" non_empty_string
       and+ seed = default r "seed" 0 int
@@ -590,10 +618,12 @@ let decode c =
         sandbox_allow_write = sandbox_block.allow_write;
         sandbox_deny_read = sandbox_block.deny_read;
         faketime;
+        faketime_requested;
         caps_usd;
         pricing;
         seed;
         env_passthrough;
+        real_keys;
         compare;
       })
 

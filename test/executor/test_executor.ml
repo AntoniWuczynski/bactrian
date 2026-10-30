@@ -310,7 +310,19 @@ let test_failing_assertion_and_checker =
        ~checkers:
          {|[{"command": ["python3", "-I", "-c", "import json; print(json.dumps({'pass': False, 'message': 'nope'}))"]}]|}
        "checked");
-  let s = ok (go ctx) in
+  let checker_labels = ref [] in
+  let s =
+    ok
+      (go
+         ~on_checker_sandbox:(fun l -> checker_labels := l :: !checker_labels)
+         ctx)
+  in
+  Alcotest.(check (list string))
+    "the checkers' label, once, as the agent's"
+    [ {|{"mode":"off","applied":false,"reason":"sandbox: off"}|} ]
+    (List.map
+       (fun l -> Yojson.Safe.to_string (Sandbox.label_json l))
+       !checker_labels);
   let by_scenario sc =
     List.filter_map
       (fun ((p : E.planned), st, _) ->

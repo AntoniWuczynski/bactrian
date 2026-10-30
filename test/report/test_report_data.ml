@@ -367,6 +367,7 @@ let test_json_deterministic () =
       "unsandboxed_runs";
       "checkers_unsandboxed_runs";
       "clock_unenforced_runs";
+      "real_keys_runs";
       "exit";
       "metrics";
       "scenarios";

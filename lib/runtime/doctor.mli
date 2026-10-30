@@ -30,13 +30,21 @@ type target = {
   backend : Sandbox.backend;
   image : string option;
   runtime : Experiment.sandbox_runtime option;
+  deny_read : string list;
+      (** [sandbox.deny_read], each path absolute (relative ones resolved
+          against [dir]). *)
   faketime : bool;
+  faketime_requested : bool;
+      (** The experiment says [faketime: auto] by name
+          ({!Bactrian_core.Experiment.t}). *)
+  checkers : bool;  (** Some scenario of the experiment has checkers. *)
+  real_keys : bool;  (** [agent.real_keys]. *)
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
 }
 (** What an experiment says that the checks depend on. *)
 
-val target : dir:string -> Experiment.t -> target
+val target : dir:string -> checkers:bool -> Experiment.t -> target
 
 (** {2 The checks}
 
@@ -50,6 +58,13 @@ val key_checks :
     never its value. [keys] are the providers whose variable is set and
     non-empty. Without an experiment ([funded = None]) a missing key is [Warn].
     With one, it is [Fail] for a funded provider and [Skip] for the others. *)
+
+val real_keys_check : keys:Model_proxy.provider list -> target -> check
+(** For an experiment with [agent.real_keys], named [real-keys]: [Warn] naming
+    the key variables that will hold the real keys ([keys] are the providers
+    whose variable is set), and for an HTTP-mode agent at a URL that is not
+    [https] or on this machine ({!Live_preflight.is_cleartext}) that they travel
+    unencrypted. [Skip] when no key is set. *)
 
 val upstream_checks : upstream:(Model_proxy.provider -> Uri.t) -> check list
 (** One check per provider whose upstream is not the real one
@@ -77,6 +92,15 @@ val sandbox_check :
     are [Skip], and so is an agent in the virtual machine whose relay is not
     built yet ([relay_pending]): the probe would build it, which [doctor] does
     not do. *)
+
+val checkers_sandbox_check :
+  mode:Sandbox.mode -> probe:(unit -> (unit, string) result) -> check
+(** [sandbox-checkers]: the sandbox the checkers run in works. It is a separate
+    check, present only for an experiment whose scenarios have checkers and
+    whose agent does not share their sandbox (an HTTP-mode agent, or one in the
+    virtual machine, whose checkers run in the host's own). Like
+    {!sandbox_check} it is [Fail] under [`Strict] and [Warn] under [`Auto] when
+    [probe] fails, and [Skip] under [`Off]. *)
 
 type vm_host = {
   macos : bool;
@@ -110,11 +134,22 @@ val clock_check :
   linux:bool ->
   library_override:string option ->
   path:string option ->
+  sandboxed:(unit -> bool) ->
+  hidden:(string -> bool) ->
   target option ->
   check
 (** With a target, the label its command agent would get
-    ({!Agent_clock.decide}). Without, whether this host can enforce the clock at
-    all. Contract-only on macOS is expected, so it is [Pass]. *)
+    ({!Agent_clock.decide}). [hidden] says whether the sandbox's deny-list masks
+    a library path ({!Sandbox.library_masked}), and counts only when the
+    experiment sandboxes the agent and [sandboxed ()], the sandbox probe, says
+    the sandbox applies on this host: an [auto] run that falls back to no
+    sandbox preloads the library. [sandboxed] is called only when [hidden] is.
+    Without a target, whether this host can enforce the clock at all.
+    Contract-only on macOS is expected, so it is [Pass], unless the experiment
+    names [clock: {faketime: auto}] itself: then it is [Warn]. The same holds
+    for the other reasons the host is not expected to meet: an HTTP-mode agent
+    is [Skip] and the virtual machine [Pass], and both are [Warn] only when
+    [faketime: auto] is written explicitly. Any other reason is [Warn]. *)
 
 val tls_check :
   available:bool ->

@@ -46,11 +46,18 @@ type target = {
   backend : Sandbox.backend;
   image : string option;
   runtime : Experiment.sandbox_runtime option;
+  deny_read : string list;
   faketime : bool;
+  faketime_requested : bool;
+  checkers : bool;
+  real_keys : bool;
   funded : (P.provider * string) list;
 }
 
-let target ~dir (e : Experiment.t) =
+let target ~dir ~checkers (e : Experiment.t) =
+  let in_dir path =
+    if Filename.is_relative path then Filename.concat dir path else path
+  in
   {
     agent = e.agent;
     dir;
@@ -58,7 +65,11 @@ let target ~dir (e : Experiment.t) =
     backend = e.sandbox_backend;
     image = e.sandbox_image;
     runtime = e.sandbox_runtime;
+    deny_read = List.map in_dir e.sandbox_deny_read;
     faketime = e.faketime;
+    faketime_requested = e.faketime_requested;
+    checkers;
+    real_keys = e.real_keys;
     funded = Live_preflight.funded e.caps_usd;
   }
 
@@ -100,6 +111,27 @@ let caps_check (t : target) =
       check "caps" Pass
         ("a spend cap above 0 for " ^ String.concat ", " (List.map snd t.funded))
 
+(* agent.real_keys *)
+
+let real_keys_check ~keys (t : target) =
+  match keys with
+  | [] ->
+      check "real-keys" Skip
+        "no provider key is set, so the agent gets placeholders"
+  | _ :: _ ->
+      let cleartext =
+        match t.agent with
+        | Http { url; _ } -> Live_preflight.real_keys_cleartext ~agent_url:url
+        | Command _ -> None
+      in
+      check "real-keys" Warn
+        (Printf.sprintf
+           "agent.real_keys puts the real %s in the agent's environment, so \
+            the agent can read and repeat %s%s"
+           (Run.key_variable_names keys)
+           (if List.compare_length_with keys 1 = 0 then "it" else "them")
+           (match cleartext with Some c -> ", and " ^ c | None -> ""))
+
 (* Upstream overrides *)
 
 let upstream_checks ~upstream =
@@ -107,13 +139,12 @@ let upstream_checks ~upstream =
     (fun (name, url) ->
       let shown = Uri.to_string url in
       let check_name = "upstream-" ^ name in
-      if Upstream.is_https url || Live_preflight.is_loopback url then
-        check check_name Pass shown
-      else
+      if Live_preflight.is_cleartext url then
         check check_name Warn
           (shown
          ^ " is plain HTTP to another machine: the real API key is sent \
-            unencrypted"))
+            unencrypted")
+      else check check_name Pass shown)
     (Run.overridden_upstreams upstream)
 
 (* The agent *)
@@ -170,6 +201,17 @@ let loopback_check () =
 
 (* The sandbox *)
 
+(* [probe] ran under [mode], which is not [Off]. *)
+let probed name ~(mode : [ `Auto | `Strict ]) ~works ~probe =
+  match probe () with
+  | Ok () -> check name Pass works
+  | Error cause ->
+      let status = match mode with `Strict -> Fail | `Auto -> Warn in
+      check name status
+        (Printf.sprintf "sandbox: %s: %s"
+           (Sandbox.mode_name (mode :> Sandbox.mode))
+           cause)
+
 let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~relay_pending ~probe =
   if http_agent then
     check "sandbox" Skip "an HTTP-mode agent is not started by bactrian"
@@ -181,17 +223,23 @@ let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~relay_pending ~probe =
           "the agent runs in the virtual machine, whose relay is not built \
            yet: the first run builds it (it needs the network once) and probes \
            the sandbox then"
-    | (`Auto | `Strict) as mode -> (
-        match probe () with
-        | Ok () -> check "sandbox" Pass "the sandbox works on this host"
-        | Error cause ->
-            let status = match mode with `Strict -> Fail | `Auto -> Warn in
-            check "sandbox" status
-              (Printf.sprintf "sandbox: %s: %s" (Sandbox.mode_name mode) cause))
+    | (`Auto | `Strict) as mode ->
+        probed "sandbox" ~mode ~works:"the sandbox works on this host" ~probe
+
+(* The checkers share the agent's sandbox unless the agent has none of its own
+   (an HTTP-mode agent) or runs in the virtual machine: then they run in the
+   host's, and a run probes it for them. *)
+let checkers_sandbox_check ~(mode : Sandbox.mode) ~probe =
+  match mode with
+  | `Off -> check "sandbox-checkers" Skip "sandbox: off"
+  | (`Auto | `Strict) as mode ->
+      probed "sandbox-checkers" ~mode
+        ~works:"the sandbox the checkers run in works on this host" ~probe
 
 (* Runs the preflight probe in a directory of its own, so the check leaves no
-   [.bactrian] behind. *)
-let sandbox_probe ~env ~bactrian_exe (target : target option) () =
+   [.bactrian] behind. [for_checkers] probes the sandbox the checkers run in. *)
+let sandbox_probe ~env ~bactrian_exe ?(for_checkers = false)
+    (target : target option) () =
   let mode, backend, image, runtime =
     match target with
     | Some t -> (t.sandbox, t.backend, t.image, t.runtime)
@@ -203,20 +251,22 @@ let sandbox_probe ~env ~bactrian_exe (target : target option) () =
       Fun.protect ~finally:(fun () ->
           Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir))
       @@ fun () ->
+      let settings : Sandbox.settings =
+        {
+          mode = (match mode with `Strict -> `Strict | `Auto | `Off -> `Auto);
+          backend;
+          image;
+          runtime;
+          allow_write = [];
+          deny_read = [];
+          bactrian_exe;
+          bactrian_dir = Filename.concat dir ".bactrian";
+        }
+      in
       match
         Sandbox.preflight ~env
           ~warn:(fun (_ : string) -> ())
-          {
-            mode =
-              (match mode with `Strict -> `Strict | `Auto | `Off -> `Auto);
-            backend;
-            image;
-            runtime;
-            allow_write = [];
-            deny_read = [];
-            bactrian_exe;
-            bactrian_dir = Filename.concat dir ".bactrian";
-          }
+          (if for_checkers then Sandbox.checker_settings settings else settings)
       with
       | Error cause -> Error cause
       | Ok sandbox -> (
@@ -354,30 +404,45 @@ let reason_text : Clock_label.reason -> string = function
   | Http_mode -> "bactrian does not start an HTTP-mode agent"
   | Vm -> "the agent runs in the virtual machine sandbox"
 
-let clock_check ~linux ~library_override ~path target =
-  let contract_only reason =
-    check "clock" (reason_status reason)
-      (Printf.sprintf "contract-only (%s): %s"
+(* A contract-only clock that is the expected state of the host is [Pass] or
+   [Skip], but not when the experiment names [faketime: auto]: that asked for
+   what this host cannot give. [requested] is never true with the reason
+   [Faketime_off]. *)
+let clock_check ~linux ~library_override ~path ~sandboxed ~hidden target =
+  let contract_only ?(requested = false) reason =
+    let status, note =
+      match (reason_status reason, requested) with
+      | (Pass | Skip), true ->
+          (Warn, ", though the experiment asks for clock: {faketime: auto}")
+      | ((Pass | Skip | Warn | Fail) as status), _ -> (status, "")
+    in
+    check "clock" status
+      (Printf.sprintf "contract-only (%s): %s%s"
          (Clock_label.reason_name reason)
-         (reason_text reason))
+         (reason_text reason) note)
   in
   match target with
-  | Some { agent = Http _; _ } -> contract_only Http_mode
-  | Some ({ agent = Command { argv; _ }; dir; faketime; _ } as t) -> (
+  | Some ({ agent = Http _; _ } as t) ->
+      contract_only ~requested:t.faketime_requested Http_mode
+  | Some
+      ({ agent = Command { argv; _ }; dir; faketime; faketime_requested; _ } as
+       t) -> (
       let label =
         Agent_clock.label
           (Agent_clock.decide
              ~vm:(uses_vm ~macos:(not linux) t)
+             ~hidden:
+               (match t.sandbox with
+               | `Off -> fun _ -> false
+               | `Auto | `Strict -> fun l -> sandboxed () && hidden l)
              ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
       match label with
-      | Enforced ->
-          check "clock" Pass
-            "enforced (libfaketime is preloaded, unless the experiment's \
-             sandbox.deny_read hides it)"
-      | Contract_only reason -> contract_only reason)
+      | Enforced -> check "clock" Pass "enforced (libfaketime is preloaded)"
+      | Contract_only reason ->
+          contract_only ~requested:faketime_requested reason)
   | None -> (
       if not linux then contract_only Macos
       else
@@ -442,8 +507,13 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
         | Ok true | Error _ -> false)
     | Some _ | None -> false
   in
+  (* Shared by the sandbox and clock checks, and run at most once. *)
+  let agent_probe = lazy (sandbox_probe ~env ~bactrian_exe target ()) in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
   @ (match target with Some t -> [ caps_check t ] | None -> [])
+  @ (match target with
+    | Some t when t.real_keys -> [ real_keys_check ~keys t ]
+    | Some _ | None -> [])
   @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with
@@ -457,12 +527,36 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
     | Some t -> [ agent_check ~path ~cwd t.agent ]
     | None -> [])
   @ [
-      sandbox_check ~mode ~http_agent ~relay_pending
-        ~probe:(sandbox_probe ~env ~bactrian_exe target);
+      sandbox_check ~mode ~http_agent ~relay_pending ~probe:(fun () ->
+          Lazy.force agent_probe);
+    ]
+  @ (match target with
+    | Some t when t.checkers && (http_agent || uses_vm ~macos t) ->
+        [
+          checkers_sandbox_check ~mode
+            ~probe:(sandbox_probe ~env ~bactrian_exe ~for_checkers:true target);
+        ]
+    | Some _ | None -> [])
+  @ [
       vm_check ~host:vm target;
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
-        ~path target;
+        ~path
+        ~sandboxed:(fun () -> Result.is_ok (Lazy.force agent_probe))
+        ~hidden:
+          (Sandbox.library_masked
+             {
+               mode = `Auto;
+               backend = `Auto;
+               image = None;
+               runtime = None;
+               allow_write = [];
+               deny_read =
+                 (match target with Some t -> t.deny_read | None -> []);
+               bactrian_exe;
+               bactrian_dir = Filename.concat (Sys.getcwd ()) ".bactrian";
+             })
+        target;
       tls_check ~available:tls_available ~upstream target;
     ]
   @ egress_checks

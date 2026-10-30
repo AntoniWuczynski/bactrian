@@ -138,6 +138,62 @@ listens on this one.
   ok    agent: https://agent.example/run is a well-formed URL (not contacted)
   fail  tls: HTTPS support is not built in, but the experiment needs it for the agent at https://agent.example/run
 
+An HTTP-mode agent has no sandbox, but its scenarios' checkers do, and a run
+probes it for them. The doctor does too, in a line of its own that appears only
+when a scenario has checkers (its result depends on the host, so only whether
+the line is there is shown).
+
+  $ mkdir s
+  $ printf 'version: 1\nid: plain\nturns: [{ user: hi }]\n' > s/plain.yaml
+  $ run bactrian doctor --experiment http.yaml | grep -c ' sandbox-checkers:'
+  0
+  [1]
+  $ printf 'version: 1\nid: checked\nturns: [{ user: hi }]\ncheckers: [{ command: ["true"] }]\n' > s/checked.yaml
+  $ run bactrian doctor --experiment http.yaml | grep -c ' sandbox-checkers:'
+  1
+  $ { cat http.yaml; echo 'sandbox: off'; } > http-off.yaml
+  $ run bactrian doctor --experiment http-off.yaml | grep ' sandbox-checkers:'
+  skip  sandbox-checkers: sandbox: off
+
+A command agent's checkers share its sandbox, so they get no line of their own.
+
+  $ run bactrian doctor --experiment exp.yaml | grep -c ' sandbox-checkers:'
+  0
+  [1]
+
+A scenario that does not load is one failing check, after the others, which
+still run. It may have checkers, so it does not hide the checkers' line. The
+same holds for a command agent, whose checks do not depend on the scenarios.
+
+  $ printf 'version: 1\nsurprise: 1\n' > s/broken.yaml
+  $ run bactrian doctor --experiment http.yaml > out.txt; echo "exit $?"
+  exit 69
+  $ grep -c -e ' sandbox-checkers:' -e ' tls:' out.txt
+  2
+  $ sed -n '/ scenarios:/,$p' out.txt
+  fail  scenarios: a scenario does not load:
+        s/broken.yaml:1:1: id: missing required field
+        s/broken.yaml:1:1: turns: missing required field
+        s/broken.yaml:2:1: surprise: unknown field
+  $ rm s/checked.yaml
+  $ run bactrian doctor --experiment exp.yaml | grep -e ' caps:' -e ' scenarios:'
+  fail  caps: no provider has a spend cap above 0: set caps_usd in the experiment
+  fail  scenarios: a scenario does not load:
+  $ rm -r s
+
+An experiment with agent.real_keys gets a line of its own, and one with an
+HTTP-mode agent on another machine over plain http says the keys travel
+unencrypted. Only the variable names are shown.
+
+  $ sed 's#^sandbox: off#sandbox: off\nagent: { protocol: command, command: ["sh"], real_keys: true }#; /^agent: { protocol: command, command: \["sh"\] }/d' exp.yaml > keys.yaml
+  $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment keys.yaml | grep -e ' real-keys:' -e SENTINEL
+  warn  real-keys: agent.real_keys puts the real OPENAI_API_KEY in the agent's environment, so the agent can read and repeat it
+  $ run bactrian doctor --experiment keys.yaml | grep ' real-keys:'
+  skip  real-keys: no provider key is set, so the agent gets placeholders
+  $ sed 's#protocol: http, url: "http://127.0.0.1:9/agent", namespace_header: X-Run#protocol: http, url: "http://user:pw@agent.example/run", namespace_header: X-Run, real_keys: true#' http.yaml > cleartext.yaml
+  $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment cleartext.yaml | grep -e ' real-keys:' -e SENTINEL
+  warn  real-keys: agent.real_keys puts the real OPENAI_API_KEY in the agent's environment, so the agent can read and repeat it, and the start message carries the real provider keys to agent.example unencrypted: use https, or an agent on this machine
+
 A configuration error in the experiment is reported with its location, as
 for run, and exits 64.
 
