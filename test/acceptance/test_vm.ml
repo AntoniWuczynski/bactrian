@@ -520,19 +520,18 @@ let teardown ~signal () =
     [ "sh"; "-c"; hung_agent ]
   @@ fun ~dir ~pid ->
   let name = started ~dir in
-  (* bactrian removes container's staging directory itself, or after a
-     SIGKILL the bridge does. *)
-  let staging =
+  (* bactrian removes container's staging directory and the heartbeat
+     directory itself, or after a SIGKILL the bridge does. *)
+  let in_run entry =
     String.concat "/"
       [
-        dir;
-        ".bactrian/runs";
-        String.sub name 9 (String.length name - 9);
-        "staging";
+        dir; ".bactrian/runs"; String.sub name 9 (String.length name - 9); entry;
       ]
   in
+  let staging = in_run "staging" and heartbeat = in_run "heartbeat" in
   Alcotest.(check bool)
     "staged" (vm_runtime = `Container) (Sys.file_exists staging);
+  Alcotest.(check bool) "heartbeat made" true (Sys.file_exists heartbeat);
   Unix.kill pid signal;
   (match wait_exit pid with
   | WEXITED n when signal = Sys.sigint ->
@@ -543,8 +542,8 @@ let teardown ~signal () =
   gone ~within:30. name;
   until
     ~deadline:(Unix.gettimeofday () +. 10.)
-    "the staging directory is gone"
-    (fun () -> not (Sys.file_exists staging))
+    "the staging and heartbeat directories are gone"
+    (fun () -> not (Sys.file_exists staging || Sys.file_exists heartbeat))
 
 (* The process ID of [pid]'s one child whose command holds [word]. *)
 let child_of pid word =
