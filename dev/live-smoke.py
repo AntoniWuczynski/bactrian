@@ -233,7 +233,10 @@ class Session:
         return Call(done.returncode, report, run_dir, spends)
 
     def log(self, spends: list[Spend], tokens: list[tuple[int, int] | None]) -> None:
-        known = tokens if len(tokens) == len(spends) else [None] * len(spends)
+        # An until-divergence replay that goes live made only the last calls of
+        # its trace live.
+        live = len(tokens) - len(spends)
+        known = tokens[live:] if live >= 0 else [None] * len(spends)
         with self.ledger.open("a") as f:
             for spend, used in zip(spends, known, strict=True):
                 entry = {

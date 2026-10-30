@@ -78,6 +78,14 @@ class LiveSmoke(unittest.TestCase):
             self.assertEqual((entry["input_tokens"], entry["output_tokens"]), (100, 10))
         self.assertNotIn(0.5, [e["usd"] for e in self.logged()])
 
+    def test_logs_the_tokens_of_a_replays_live_calls(self) -> None:
+        done = self.smoke()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        tails = [e for e in self.logged() if e["usd"] == 0.002]
+        self.assertEqual(len(tails), 2, self.logged())
+        for entry in tails:
+            self.assertEqual((entry["input_tokens"], entry["output_tokens"]), (200, 20))
+
 
 if __name__ == "__main__":
     unittest.main()
