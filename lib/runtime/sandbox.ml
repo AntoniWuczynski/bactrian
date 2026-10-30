@@ -446,16 +446,39 @@ let make_host ~env settings engine =
     deny_read = List.map resolved settings.deny_read;
   }
 
-let check_host ~env settings backend =
+(* bubblewrap run by root keeps root's capabilities for the command, so the
+   probe's capability check fails whatever the flags. *)
+let root_cause =
+  "bactrian runs as root, and bubblewrap leaves the agent every capability of \
+   root. Fix: run bactrian as a user other than root"
+
+let check_host ~env ~warn settings backend =
   let* engine = host_engine ~env backend in
   let host = make_host ~env settings engine in
+  let explain cause =
+    match engine with
+    | Bubblewrap _ when Unix.geteuid () = 0 -> Error (cause ^ ". " ^ root_cause)
+    | Bubblewrap path when apparmor_restricted () ->
+        Error (cause ^ ". " ^ apparmor_fix path)
+    | Bubblewrap _ | Seatbelt | Vm _ -> Error cause
+  in
   match probe ~env host with
   | Ok () -> Ok host
   | Error cause -> (
-      match engine with
-      | Bubblewrap path when apparmor_restricted () ->
-          Error (cause ^ ". " ^ apparmor_fix path)
-      | Bubblewrap _ | Seatbelt | Vm _ -> Error cause)
+      match host.dns_as with
+      | None -> explain cause
+      | Some _ -> (
+          (* A host that refuses the agent a user namespace of its own, or the
+             forwarder its capabilities, may still run the sandbox without
+             DNS. *)
+          let plain = { host with dns_as = None } in
+          match probe ~env plain with
+          | Ok () ->
+              warn
+                ("sandbox: DNS lookups are not recorded, because the sandbox \
+                  that answers them failed its check (" ^ cause ^ ")");
+              Ok plain
+          | Error plain_cause -> explain plain_cause))
 
 (* The deny-list with what is at each path, as the virtual machine masks it. *)
 let vm_layout ?(extra = []) ?(read_only = []) (host : host) : Sandbox_vm.layout
@@ -574,7 +597,7 @@ let preflight ?(seatbelt_hint = true) ~env ~warn settings =
                   ("sandbox: strict, but the sandbox is unavailable: " ^ cause))
       in
       let on_host backend =
-        sandboxed (guard (fun () -> check_host ~env settings backend))
+        sandboxed (guard (fun () -> check_host ~env ~warn settings backend))
       in
       (* Under auto a virtual machine that does not work gives way to the
          host's own sandbox. *)

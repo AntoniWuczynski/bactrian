@@ -194,8 +194,8 @@ type coverage = Sandbox_violations.coverage =
       (** Linux: those and every DNS query the agent sent to the forwarder's
           resolver ({!Sandbox_dns}). A lookup through a resolver at another
           address fails unrecorded, so when [/etc/resolv.conf] names one
-          ({!Sandbox_dns.unrecorded_resolvers}) the violations carry a gap
-          that says so. *)
+          ({!Sandbox_dns.unrecorded_resolvers}) the violations carry a gap that
+          says so. *)
 
 val coverage_name : coverage -> string
 (** ["seatbelt-log"], ["relay-failures-only"] or ["relay-failures-and-dns"]. *)
