@@ -143,6 +143,36 @@ let test_dns_is_recorded =
       Alcotest.skip ()
   | Not_collected m, _ -> Alcotest.failf "violations not collected: %s" m
 
+(* On the DNS path the agent starts through [__sandbox-user], and the
+   descriptors that held the log and the signal pipe must still be /dev/null
+   there, as on the plain path, not closed. *)
+let test_dns_path_hides_descriptors =
+  sandboxed "sandbox-dns-fds" @@ fun ctx ->
+  if macos then begin
+    print_endline "not Linux: skipped";
+    Alcotest.skip ()
+  end;
+  let sandbox = strict ctx in
+  let agent =
+    [
+      "sh";
+      "-c";
+      {|readlink /proc/self/fd/3 /proc/self/fd/4 > "$BACTRIAN_STATE_DIR/fds"; exec python3 -I -c "$1"|};
+      "sh";
+      python_agent;
+    ]
+  in
+  let r = ok (execute ctx { (config ~agent ()) with sandbox }) in
+  match r.violations with
+  | Collected { coverage = Relay_failures_and_dns; _ } ->
+      Alcotest.(check string)
+        "fds 3 and 4" "/dev/null\n/dev/null\n"
+        (read (file r "state/fds"))
+  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ } ->
+      print_endline "this sandbox has no DNS path: skipped";
+      Alcotest.skip ()
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+
 (* An agent that tries to leave: each attempt's result is its reply. *)
 let escape_agent =
   {|
@@ -882,6 +912,8 @@ let () =
             test_sigterm_reaches_agent;
           Alcotest.test_case "a DNS lookup is recorded" `Slow
             test_dns_is_recorded;
+          Alcotest.test_case "the DNS path hides descriptors" `Slow
+            test_dns_path_hides_descriptors;
           Alcotest.test_case "linked credential paths are denied" `Slow
             test_linked_credentials;
           Alcotest.test_case "MCP servers readable by the agent" `Slow

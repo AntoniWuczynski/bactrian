@@ -169,17 +169,35 @@ let restore () =
 
 (* /dev/fd lists the descriptors open in the reading process (on Linux through
    /proc/self/fd). The one the listing itself opens is closed again by the time
-   it is marked, which fails with EBADF and is skipped. *)
-let close_inherited_on_exec () =
+   it is used, which fails with EBADF and is skipped. *)
+let descriptors_above_2 () =
   match Sys.readdir "/dev/fd" with
-  | exception Sys_error _ -> ()
+  | exception Sys_error _ -> []
   | names ->
-      Array.iter
+      List.filter_map
         (fun name ->
           match int_of_string_opt name with
-          | Some n when n > 2 -> (
-              match Unix.set_close_on_exec (fd_of_int n) with
-              | () -> ()
-              | exception Unix.Unix_error _ -> ())
-          | Some _ | None -> ())
-        names
+          | Some n when n > 2 -> Some (fd_of_int n)
+          | Some _ | None -> None)
+        (Array.to_list names)
+
+let close_inherited_on_exec () =
+  List.iter
+    (fun fd ->
+      match Unix.set_close_on_exec fd with
+      | () -> ()
+      | exception Unix.Unix_error _ -> ())
+    (descriptors_above_2 ())
+
+let keep_dev_null_on_exec () =
+  match Unix.stat "/dev/null" with
+  | exception Unix.Unix_error _ -> ()
+  | null ->
+      List.iter
+        (fun fd ->
+          match Unix.fstat fd with
+          | st ->
+              if st.st_kind = S_CHR && st.st_rdev = null.st_rdev then
+                Unix.clear_close_on_exec fd
+          | exception Unix.Unix_error _ -> ())
+        (descriptors_above_2 ())

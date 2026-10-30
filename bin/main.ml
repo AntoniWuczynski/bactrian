@@ -589,6 +589,7 @@ let sandbox_user_cmd =
         | Error m -> fail Exit_code.environment m
         | Ok () -> (
             let failed code e = fail code (exe ^ ": " ^ Unix.error_message e) in
+            Launch_env.keep_dev_null_on_exec ();
             (* A shell's codes for a missing and an unusable command. *)
             try Unix.execvp exe (Array.of_list (exe :: args)) with
             | Unix.Unix_error ((ENOENT as e), _, _) -> failed 127 e
