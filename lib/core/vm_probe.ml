@@ -130,8 +130,10 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
         [
           Printf.sprintf
             "the container's limit on %s is %s, not %s, so the runtime did not \
-             apply %s (a rootless one needs control groups version 2 with the \
-             pids and memory controllers delegated to the user)"
+             apply %s (a rootless runtime needs the pids and memory \
+             controllers delegated to the user, and a container in the host's \
+             control group namespace, as with cgroupns=host, or in none, as \
+             with Podman's cgroups = \"disabled\", has no limit files to read)"
             what value expected flag;
         ]
     in

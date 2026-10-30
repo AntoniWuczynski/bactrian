@@ -147,8 +147,10 @@ let test_limits () =
   let dropped what value flag =
     Printf.sprintf
       "the container's limit on %s is %s, not %s, so the runtime did not apply \
-       %s (a rootless one needs control groups version 2 with the pids and \
-       memory controllers delegated to the user)"
+       %s (a rootless runtime needs the pids and memory controllers delegated \
+       to the user, and a container in the host's control group namespace, as \
+       with cgroupns=host, or in none, as with Podman's cgroups = \
+       \"disabled\", has no limit files to read)"
       what value
       (if String.equal what "processes" then "1024" else "4294967296")
       flag
