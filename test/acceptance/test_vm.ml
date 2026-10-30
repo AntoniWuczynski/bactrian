@@ -705,8 +705,9 @@ let relay_full_buffer () =
   Unix.close null;
   Fun.protect ~finally:(fun () -> Unix.close w) @@ fun () ->
   (* Data frames for an agent that never reads, until nothing more is taken
-     for a while: the relay's queue for it, and every pipe on the way, are full
-     and a frame waits. *)
+     for a while, or 4 MiB are (container's client takes far more without
+     passing it on): the relay's queue for it is 256 KiB, so with that much on
+     the way a frame waits. *)
   Unix.set_nonblock w;
   let frame =
     Bactrian_core.Vm_frame.(
@@ -714,13 +715,21 @@ let relay_full_buffer () =
         (List.map encode (data ~channel:0 (String.make 16384 'x'))))
   in
   let sent = ref 0 and quiet_since = ref (Unix.gettimeofday ()) in
-  let deadline = Unix.gettimeofday () +. 120. in
+  let deadline = Unix.gettimeofday () +. 60. in
   (* A write that took only part of a frame goes on from there, so the relay
      never sees half of one followed by another. *)
-  let off = ref 0 in
+  let off = ref 0 and touched = ref 0. in
   while
-    Unix.gettimeofday () < !quiet_since +. 5. && Unix.gettimeofday () < deadline
+    Unix.gettimeofday () < !quiet_since +. 5.
+    && Unix.gettimeofday () < deadline
+    && !sent < 4 * 1024 * 1024
   do
+    (* The container may take seconds to start, and the relay is already
+       watching the file. *)
+    if Unix.gettimeofday () -. !touched >= 1. then begin
+      Unix.utimes beat 0. 0.;
+      touched := Unix.gettimeofday ()
+    end;
     match Unix.write_substring w frame !off (String.length frame - !off) with
     | n ->
         sent := !sent + n;
@@ -728,6 +737,8 @@ let relay_full_buffer () =
         quiet_since := Unix.gettimeofday ()
     | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK | EINTR), _, _) ->
         Unix.sleepf 0.05
+    | exception Unix.Unix_error (EPIPE, _, _) ->
+        Alcotest.fail "the relay stopped while its input was being filled"
   done;
   Printf.printf "the relay's input took %d bytes before it stopped\n" !sent;
   Alcotest.(check bool)
