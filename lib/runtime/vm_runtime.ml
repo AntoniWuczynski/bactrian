@@ -370,10 +370,15 @@ let faketime_archive = "libfaketime-0.9.13.tar.gz"
 let glibc_build_image =
   "debian:bookworm-20261005-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
 
+(* The archive is handed to the user, as the relay and the libraries are: left
+   to root, which a rootful Docker on Linux makes it, it would fail [owned] at
+   the next build and keep every run on the other C library contract-only. *)
 let faketime_fetch_script =
   Printf.sprintf
-    "set -eu; wget -q -O /out/%s %s && echo '%s  /out/%s' | sha256sum -c >&2"
+    "set -eu; wget -q -O /out/%s %s && echo '%s  /out/%s' | sha256sum -c >&2 \
+     && chown %d:%d /out/%s"
     faketime_archive faketime_url faketime_sha256 faketime_archive
+    (Unix.getuid ()) (Unix.getgid ()) faketime_archive
 
 (* The same steps in each builder: check the archive, build only the
    multi-thread library (the other targets do not build with musl), and hand
