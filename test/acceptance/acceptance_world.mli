@@ -79,3 +79,12 @@ val with_world :
 
 val strict : string -> Run.replay
 val contains : string -> string -> bool
+
+val shell_agent : string
+(** A POSIX shell agent, which needs only the image's [sh], [sed] and [tr]: it
+    answers each turn with the output of [sh -c "$PROBE"], letters, digits,
+    spaces, [=] and [_] only. Run it as [sh FILE] with [PROBE] in [variant_env].
+*)
+
+val reply_text : Run.result -> string
+(** The content of the run's one reply. *)

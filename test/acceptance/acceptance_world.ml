@@ -308,3 +308,20 @@ let contains s sub =
     && (String.equal (String.sub s i n) sub || go (i + 1))
   in
   go 0
+
+let shell_agent =
+  {|while IFS= read -r line; do
+  case "$line" in
+    *'"type":"turn"'*)
+      n=$(printf '%s' "$line" | sed 's/.*"turn":\([0-9]*\).*/\1/')
+      out=$(sh -c "$PROBE" 2>/dev/null | tr -cd 'a-zA-Z0-9=_ ')
+      printf '{"v":1,"type":"reply","turn":%s,"content":"%s"}\n' "$n" "$out" ;;
+    *'"type":"end"'*) exit 0 ;;
+  esac
+done
+|}
+
+let reply_text (r : Run.result) =
+  match entries "reply" r with
+  | [ j ] -> Yojson.Safe.Util.(to_string (member "content" j))
+  | _ -> Alcotest.fail "expected exactly one reply"
