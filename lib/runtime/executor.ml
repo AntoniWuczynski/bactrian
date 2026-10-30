@@ -347,20 +347,36 @@ let real_keys_strict ~experiment_file ~find experiment sandbox_override =
   | Error _, _ ->
       []
 
-(* What the user has accepted by writing [agent.real_keys] (design §5.2). *)
-let real_keys_warning ~applied ~keys =
-  let variables =
-    String.concat ", " (List.map (fun (p, _) -> Run.key_variable p) keys)
+(* What the user has accepted by writing [agent.real_keys] (design §5.2, decision
+   0016). A sandbox keeps the agent off the network but for the proxy, and the
+   proxy forwards what the agent sends: a key written into a prompt or into a
+   call to an HTTP MCP server leaves the machine. *)
+let real_keys_warning ~(label : Sandbox.label) ~keys =
+  let reach =
+    match (label.applied, label.backend) with
+    | false, _ | true, None ->
+        "Nothing stops it from reading a key or sending it anywhere."
+    | true, Some Seatbelt_backend | true, Some Bubblewrap_backend ->
+        "The sandbox stops it from connecting anywhere but to bactrian's \
+         proxy, but the proxy forwards what it sends, so a key in a prompt or \
+         in a call to an HTTP MCP server still leaves this machine, and \
+         another process of yours outside the sandbox (an MCP stdio server, a \
+         checker that is not sandboxed) can read the key from its environment."
+    | true, Some (Vm_backend _) ->
+        "The sandbox stops it from connecting anywhere but to bactrian's \
+         proxy, but the proxy forwards what it sends, so a key in a prompt or \
+         in a call to an HTTP MCP server still leaves this machine. The key is \
+         also in the run's agent.env and in the container's configuration \
+         (docker inspect shows it, and Apple's container keeps it under \
+         ~/Library) while the run lasts, where any process of yours can read \
+         it."
   in
   Printf.sprintf
     "agent.real_keys: the agent's environment holds the real %s, not \
      placeholders. %s It can also write a key into its replies, its trace and \
      its standard error. The runs are labelled real_keys."
-    variables
-    (if applied then
-       "The sandbox still stops it from sending a key anywhere but to \
-        bactrian's proxy, but it can read it."
-     else "Nothing stops it from reading a key or sending it anywhere.")
+    (Run.key_variable_names (List.map fst keys))
+    reach
 
 (* Every stage reports, so one round shows every mistake: the experiment, its
    globs, each scenario and the price file. A stage that needs a field of an
@@ -712,7 +728,13 @@ let run_experiment ?seatbelt_hint ?root
   if has_checkers then on_checker_sandbox (Sandbox.label checker_sandbox);
   Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
   if experiment.real_keys && not (List.is_empty keys) then
-    warn (real_keys_warning ~applied:(Sandbox.label sandbox).applied ~keys);
+    warn (real_keys_warning ~label:(Sandbox.label sandbox) ~keys);
+  (match (experiment.real_keys, keys, l.agent) with
+  | true, _ :: _, Http { url; _ } ->
+      Option.iter
+        (fun c -> warn ("agent.real_keys: " ^ c))
+        (Live_preflight.real_keys_cleartext ~agent_url:url)
+  | true, [], _ | false, _, _ | true, _ :: _, Command _ -> ());
   let* jobs =
     List.mapi
       (fun i (p : planned) ->

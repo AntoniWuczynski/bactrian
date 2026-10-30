@@ -22,6 +22,9 @@ val key_variable : Model_proxy.provider -> string
 (** The environment variable holding bactrian's real key for the provider, and
     the one that carries the placeholder in the agent's environment. *)
 
+val key_variable_names : Model_proxy.provider list -> string
+(** The {!key_variable} of each provider, comma-separated, for messages. *)
+
 type outcome =
   | Passed
       (** The run completed and, when it has {!type-checks}, every assertion and

@@ -53,6 +53,15 @@ val funded : (string * float) list -> (Model_proxy.provider * string) list
 (** The providers (with their names) whose spend cap in [caps_usd] is above 0:
     the ones an experiment calls live. *)
 
+val real_keys_warning :
+  label:Sandbox.label -> keys:(Model_proxy.provider * string) list -> string
+(** The warning for [agent.real_keys] (decision 0016), naming the variables of
+    [keys] ({!Run.keys_from_environment}). What it says the agent can do with
+    them depends on the sandbox [label] of the runs: nothing stops an
+    unsandboxed agent, a sandboxed one still reaches whatever the proxy forwards
+    to, and a virtual machine keeps the keys in [agent.env] and the container's
+    configuration. *)
+
 type error =
   | Configuration of Config_loader.located_error list
   | Environment of string

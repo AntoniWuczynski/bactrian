@@ -95,6 +95,9 @@ let key_variable : P.provider -> string = function
   | Gemini -> "GEMINI_API_KEY"
   | Openrouter -> "OPENROUTER_API_KEY"
 
+let key_variable_names providers =
+  String.concat ", " (List.map key_variable providers)
+
 let overridden_upstreams upstream =
   List.filter_map
     (fun (p, name) ->
