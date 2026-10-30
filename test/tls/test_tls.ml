@@ -132,6 +132,36 @@ let cut_off ending =
   | Error ((Connect_failed _ | Failed_after_send _ | Timed_out) as e) ->
       Alcotest.failf "expected Truncated, got %s" (Upstream.describe_error e)
 
+(* A record that does not decrypt, inside the body or before the head, ends
+   the call with the TLS failure as its reason, not an exception. *)
+let tls_reason what reason =
+  Alcotest.(check bool)
+    (what ^ " names the TLS failure: " ^ reason)
+    true
+    (contains reason "TLS failure")
+
+let bad_record_in_body =
+  run_server ~ending:H.Bad_record
+    [ json_reply ~ending:F.Drop [ {|{"a":|}; {|1|} ] ]
+  @@ fun env ca port ->
+  match (call env (connector ca) (url port "localhost")).result with
+  | Error (Truncated { bytes; reason }) ->
+      Alcotest.(check int) "bytes passed on" 6 bytes;
+      tls_reason "Truncated" reason
+  | Ok () -> Alcotest.fail "a body ended by a bad record was taken as whole"
+  | Error ((Connect_failed _ | Failed_after_send _ | Timed_out) as e) ->
+      Alcotest.failf "expected Truncated, got %s" (Upstream.describe_error e)
+
+let bad_record_before_head =
+  run_server ~ending:H.Bad_record ~relay:false [ json_reply [ "{}" ] ]
+  @@ fun env ca port ->
+  match (call env (connector ca) (url port "localhost")).result with
+  | Error (Failed_after_send reason) -> tls_reason "Failed_after_send" reason
+  | Ok () -> Alcotest.fail "a call with no response succeeded"
+  | Error ((Connect_failed _ | Truncated _ | Timed_out) as e) ->
+      Alcotest.failf "expected Failed_after_send, got %s"
+        (Upstream.describe_error e)
+
 let split_records =
   let events = List.init 4 (fun i -> Printf.sprintf "data: {\"n\":%d}\n\n" i) in
   run_server ~record_size:5
@@ -232,6 +262,53 @@ let system_with_extra () =
       ok (call env c (url port "localhost")))
     ()
 
+(* The variables other tools read for their trust bundle do not reach
+   bactrian's: a CA named only there is not trusted. *)
+let with_variables vars f =
+  let before = List.map (fun (v, _) -> (v, Sys.getenv_opt v)) vars in
+  List.iter (fun (v, value) -> Unix.putenv v value) vars;
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun (v, value) -> Unix.putenv v (Option.value value ~default:""))
+        before)
+    f
+
+let foreign_variables_ignored () =
+  let ca =
+    Mirage_crypto_rng_unix.use_default ();
+    H.ca ()
+  in
+  let file = Filename.temp_file "bactrian-test-ca" ".pem" in
+  Out_channel.with_open_bin file (fun oc -> output_string oc (H.ca_pem ca));
+  Fun.protect ~finally:(fun () -> Sys.remove file) @@ fun () ->
+  with_variables
+    [
+      ("SSL_CERT_FILE", file);
+      ("NIX_SSL_CERT_FILE", file);
+      ("OCAML_EXTRA_CA_CERTS", file);
+      (Bactrian_tls.Trust.extra_variable, "");
+    ]
+  @@ fun () ->
+  run_server ~ca
+    [ json_reply [ "{}" ] ]
+    (fun env _ port ->
+      let c =
+        Bactrian_tls.Tls_connector.system
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+      in
+      (match Upstream.tls_ready c with
+      | Ok { extra = None; _ } -> ()
+      | Ok { extra = Some _; _ } -> Alcotest.fail "extra certificates counted"
+      | Error e -> Alcotest.fail e);
+      let reason =
+        connect_failed "a CA named only by SSL_CERT_FILE and the others"
+          (call env c (url port "localhost"))
+      in
+      Alcotest.(check bool)
+        ("names TLS: " ^ reason) true (contains reason "TLS"))
+    ()
+
 (* A stream through the model proxy to an https upstream reaches the agent
    event by event, with events split across TLS records on the way. *)
 let proxy_stream =
@@ -286,6 +363,10 @@ let () =
             (cut_off H.Close_notify);
           Alcotest.test_case "a cut-off chunked body, TCP close" `Quick
             (cut_off H.Tcp_close);
+          Alcotest.test_case "a bad record inside the body" `Quick
+            bad_record_in_body;
+          Alcotest.test_case "a bad record before the head" `Quick
+            bad_record_before_head;
           Alcotest.test_case "a stream split across records" `Quick
             split_records;
           Alcotest.test_case "an http URL stays plain" `Quick http_stays_plain;
@@ -297,5 +378,7 @@ let () =
           Alcotest.test_case "a missing extra file" `Quick bad_extra;
           Alcotest.test_case "the system connector with an extra CA" `Quick
             system_with_extra;
+          Alcotest.test_case "SSL_CERT_FILE and the others are ignored" `Quick
+            foreign_variables_ignored;
         ] );
     ]
