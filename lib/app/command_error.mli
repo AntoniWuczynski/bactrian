@@ -5,7 +5,7 @@ type t =
   | Usage of string  (** Bad arguments, or a missing or unusable input. *)
   | Environment of string
       (** The host is not ready, for example a spend cap of 0, a missing API key
-          or no TLS support for a live call. *)
+          or root certificates that cannot be loaded for a live HTTPS call. *)
   | Internal of string
       (** A fault inside bactrian, such as unreadable results. *)
   | Configuration of Bactrian_runtime.Config_loader.located_error list
