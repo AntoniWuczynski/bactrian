@@ -80,22 +80,26 @@ let read path =
   | text -> Ok text
   | exception Sys_error reason -> Error reason
 
-(* Written beside the target and renamed over it, so a reader never sees half a
-   file. *)
-let write ~perm path text =
-  let temp = path ^ ".new" in
-  match
-    (try Sys.remove temp with Sys_error _ -> ());
-    Out_channel.with_open_gen
-      [ Open_wronly; Open_creat; Open_excl; Open_binary ] perm temp (fun oc ->
-        output_string oc text);
-    Unix.chmod temp perm;
-    Unix.rename temp path
-  with
-  | () -> Ok ()
+let unix_error path f =
+  match f () with
+  | v -> Ok v
   | exception Sys_error reason -> Error reason
   | exception Unix.Unix_error (e, _, _) ->
       Error (Printf.sprintf "%s: %s" path (Unix.error_message e))
+
+(* Written beside the target, to be renamed over it, so a reader never sees half
+   a file. *)
+let stage ~perm path text =
+  let temp = path ^ ".new" in
+  unix_error path (fun () ->
+      (try Sys.remove temp with Sys_error _ -> ());
+      Out_channel.with_open_gen
+        [ Open_wronly; Open_creat; Open_excl; Open_binary ] perm temp (fun oc ->
+          output_string oc text);
+      Unix.chmod temp perm;
+      temp)
+
+let install ~temp path = unix_error path (fun () -> Unix.rename temp path)
 
 let make ~dir ~signer ~cert =
   {
@@ -121,16 +125,18 @@ let create ~dir ~now =
   let* () = ensure_dir dir in
   let* () = private_to_us "the CA directory" dir in
   let* signer, cert = mint now in
-  let* () =
-    write ~perm:0o600
-      (Filename.concat dir key_file)
-      (X509.Private_key.encode_pem signer)
+  let key_path = Filename.concat dir key_file
+  and cert_path = Filename.concat dir certificate_file in
+  (* Both are written before either is renamed, so that a failure leaves the
+     old pair, and the two renames are as close together as they can be. *)
+  let* key_temp =
+    stage ~perm:0o600 key_path (X509.Private_key.encode_pem signer)
   in
-  let* () =
-    write ~perm:0o644
-      (Filename.concat dir certificate_file)
-      (X509.Certificate.encode_pem cert)
+  let* cert_temp =
+    stage ~perm:0o644 cert_path (X509.Certificate.encode_pem cert)
   in
+  let* () = install ~temp:key_temp key_path in
+  let* () = install ~temp:cert_temp cert_path in
   Ok (make ~dir ~signer ~cert)
 
 let rotate = create
@@ -150,8 +156,9 @@ let load ~dir ~now =
          (public (X509.Certificate.public_key cert)))
   then
     Error
-      (Printf.sprintf "%s and %s do not belong together" key_file
-         certificate_file)
+      (Printf.sprintf
+         "%s and %s in %s do not belong together: run bactrian ca rotate"
+         key_file certificate_file dir)
   else if Ptime.is_later now ~than:(snd (X509.Certificate.validity cert)) then
     Error
       (Printf.sprintf "the project CA in %s has expired: run bactrian ca rotate"

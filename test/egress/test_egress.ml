@@ -148,6 +148,20 @@ let test_ca_files =
   Alcotest.(check int)
     "key still 0600" 0o600
     (mode (Filename.concat dir Ca.key_file));
+  Alcotest.(check bool)
+    "no staged file is left" false
+    (Sys.file_exists (Filename.concat dir (Ca.key_file ^ ".new")));
+  let pem = Filename.concat dir Ca.certificate_file in
+  let old = In_channel.with_open_bin pem In_channel.input_all in
+  ignore (Ca.rotate ~dir ~now:(now ()));
+  Out_channel.with_open_bin pem (fun oc -> output_string oc old);
+  (match Ca.load_or_create ~dir ~now:(now ()) with
+  | Error m ->
+      Alcotest.(check bool)
+        "a pair that does not match names rotate" true
+        (Re.execp (Re.compile (Re.str "ca rotate")) m)
+  | Ok _ -> Alcotest.fail "a key and another CA's certificate are refused");
+  ignore (Ca.rotate ~dir ~now:(now ()));
   Unix.chmod (Filename.concat dir Ca.key_file) 0o644;
   (match Ca.load_or_create ~dir ~now:(now ()) with
   | Error m ->
