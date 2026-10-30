@@ -8,8 +8,10 @@ type t = {
   process_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
   clock : float Eio.Time.clock_ty Eio.Resource.t;
   lock : Eio.Mutex.t;  (** Held while the image is probed or a library built. *)
-  executables : (string * string * string, executable) Hashtbl.t;
-      (** By image ID, working directory and command name. *)
+  executables :
+    (string * string * string, (executable, string) result) Hashtbl.t;
+      (** What the probe found, or why it failed, by image ID, working directory
+          and command name. *)
   libraries : (Vm_exec_probe.libc, bool) Hashtbl.t;
       (** Whether libfaketime was built for a C library, this process. *)
 }
@@ -469,26 +471,29 @@ let library_ready t libc =
       Hashtbl.replace t.libraries libc built;
       built
 
+let probed t key probe =
+  match Hashtbl.find_opt t.executables key with
+  | Some found -> found
+  | None ->
+      let found = probe () in
+      Hashtbl.replace t.executables key found;
+      found
+
+(* Not protected from cancellation: the probe and the build take minutes, and
+   an interrupt must not wait for them. The tables stay consistent, because
+   an answer is only recorded when it is complete. *)
 let clock ~env ~wanted t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent
     : Agent_clock.vm =
   match (wanted, agent) with
   | false, _ -> Agent_clock.Vm_unprobed
   | true, [] -> Agent_clock.Vm_image { library = false; executable = Not_elf }
   | true, argv0 :: _ -> (
-      Eio.Mutex.use_rw ~protect:true t.lock @@ fun () ->
-      let key = (t.image_id, cwd, argv0) in
-      let found =
-        match Hashtbl.find_opt t.executables key with
-        | Some e -> Ok e
-        | None ->
-            let* e =
-              executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir
-                ~cwd argv0
-            in
-            Hashtbl.replace t.executables key e;
-            Ok e
-      in
-      match found with
+      Eio.Mutex.use_rw ~protect:false t.lock @@ fun () ->
+      match
+        probed t (t.image_id, cwd, argv0) (fun () ->
+            executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir
+              ~cwd argv0)
+      with
       | Error _ -> Agent_clock.Vm_unavailable
       | Ok { libc; kind } -> (
           match (kind, libc) with
