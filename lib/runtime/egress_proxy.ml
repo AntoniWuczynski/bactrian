@@ -239,7 +239,7 @@ let normalised_query raw =
   |> List.sort (fun (k1, v1) (k2, v2) ->
       match String.compare k1 k2 with 0 -> String.compare v1 v2 | n -> n)
 
-let handle r ~host ~port ~authority act request body : response =
+let answer r ~host ~port ~authority act request body : response =
   let meth = Http.Method.to_string (Http.Request.meth request) in
   let resource = Http.Request.resource request in
   let target = Egress.target ~host ~port resource in
@@ -305,6 +305,17 @@ let handle r ~host ~port ~authority act request body : response =
           | Go_live -> live r ~host ~port ~authority x ~record:true ~log)
       | No_recording, _ | From_recording, Live _ ->
           miss r ~log (Missing_request { request = x.request; nearest = None }))
+
+(* Neither the answer to a HEAD nor a 204 or 304 has a body, so writing one
+   would be read as the start of the next response. *)
+let handle r ~host ~port ~authority act request body =
+  let reply = answer r ~host ~port ~authority act request body in
+  let head, _ = reply in
+  if
+    String.equal (Http.Method.to_string (Http.Request.meth request)) "HEAD"
+    || not (Http.Status.body_allowed (Http.Response.status head))
+  then bodiless reply
+  else reply
 
 let serve r ~conn ~host ~port ~authority act tls =
   let server =

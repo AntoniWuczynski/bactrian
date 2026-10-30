@@ -46,6 +46,14 @@ let respond ?on_exn ~status ~headers (next : unit -> item) : response =
       | (Eio.Cancel.Cancelled _ | Upstream_dropped) as ex -> raise ex
       | ex -> raise (attribute ex) )
 
+let bodiless ((head, _) : response) : response =
+  ( Http.Response.make
+      ~status:(Http.Response.status head)
+      ~headers:
+        (Http.Header.remove (Http.Response.headers head) "transfer-encoding")
+      (),
+    fun _ic oc -> Eio.Buf_write.flush oc )
+
 let of_list pieces =
   let rest = ref pieces in
   fun () ->

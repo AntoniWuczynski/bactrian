@@ -127,6 +127,40 @@ let test_path_redacted =
         (Re.execp secret (Bactrian_core.Canon.to_string e.canonical)))
     (recording w.ctx run).exchanges
 
+(* The answer to a HEAD carries the length of a body it does not have, and a
+   204 has none: both reach the agent whole and without a body. *)
+let bodiless_answers line =
+  if String.starts_with ~prefix:"HEAD " line then
+    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\n"
+  else "HTTP/1.1 204 No Content\r\n\r\n"
+
+let test_bodiless =
+  with_world ~raw:bodiless_answers "bodiless" @@ fun w ->
+  let run =
+    register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ]))
+  in
+  List.iter
+    (fun (meth, status) ->
+      let a = through ~creds:(creds token_a) w ~meth ~path:"/thing" () in
+      Alcotest.(check (pair int string)) meth (status, "") (a.status, a.body);
+      Alcotest.(check bool)
+        (meth ^ ": no body framing")
+        false
+        (Re.execp (Re.compile (Re.str "transfer-encoding")) a.head))
+    [ ("HEAD", 200); ("DELETE", 204) ];
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check (list string)) "no failure" [] f.errors;
+  Alcotest.(check (list bool))
+    "recorded whole" [ true; true ]
+    (List.map
+       (fun (e : Bactrian_core.Cassette.exchange) ->
+         match e.outcome with
+         | Response { body = Whole { complete; _ } | Stream { complete; _ }; _ }
+           ->
+             complete
+         | Transport_error _ -> false)
+       (recording w.ctx run).exchanges)
+
 let () =
   Alcotest.run "egress requests"
     [
@@ -136,6 +170,9 @@ let () =
           Alcotest.test_case "requests stay on the tunnel's host" `Quick
             test_targets_stay_on_the_tunnel;
         ] );
+      ( "framing",
+        [ Alcotest.test_case "HEAD and 204 have no body" `Quick test_bodiless ]
+      );
       ( "redaction",
         [ Alcotest.test_case "a secret in the path" `Quick test_path_redacted ]
       );

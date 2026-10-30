@@ -26,6 +26,10 @@ val respond :
     [Dropped]. [on_exn] notes a failure to write to the agent, which is then
     raised as [Attributed]. *)
 
+val bodiless : response -> response
+(** The same status and headers with no body and no [transfer-encoding], for the
+    answer to a [HEAD] and for 204 and 304. *)
+
 val of_list : string list -> unit -> item
 (** The pieces, then [Finished]. *)
 

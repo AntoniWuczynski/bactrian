@@ -82,9 +82,11 @@ let header_value headers name =
       else None)
     headers
 
-let framing ~status headers =
-  if status = 204 || status = 304 || (status >= 100 && status < 200) then
-    Fixed 0
+let framing ~meth ~status headers =
+  if
+    String.equal meth "HEAD" || status = 204 || status = 304
+    || (status >= 100 && status < 200)
+  then Fixed 0
   else
     match header_value headers "transfer-encoding" with
     | Some te when String.equal (String.lowercase_ascii te) "chunked" -> Chunked
@@ -254,7 +256,7 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
             let t_head = Eio.Time.now clock in
             on_head { status; headers = allowed_headers raw_headers };
             read_body ~clock ~t_head ~on_chunk ~failure
-              (framing ~status raw_headers)
+              (framing ~meth:req.meth ~status raw_headers)
               r
       in
       try

@@ -63,15 +63,41 @@ let backend (r : F.request) : F.reply =
     ending = Complete;
   }
 
-let with_world name f =
+(* A backend that answers each connection with the bytes [answer] gives for
+   its request line, then closes it: for heads no HTTP library would send. *)
+let raw_backend ctx answer =
+  let socket =
+    Eio.Net.listen ~sw:ctx.sw ~backlog:8 ~reuse_addr:true
+      (Eio.Stdenv.net ctx.env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  Eio.Fiber.fork_daemon ~sw:ctx.sw (fun () ->
+      Eio.Net.run_server socket ~on_error:raise (fun flow _ ->
+          let r = Eio.Buf_read.of_flow ~max_size:65_536 flow in
+          let line = Eio.Buf_read.line r in
+          let rec skip () =
+            if not (String.equal (Eio.Buf_read.line r) "") then skip ()
+          in
+          skip ();
+          Eio.Flow.copy_string (answer line) flow));
+  match Eio.Net.listening_addr socket with
+  | `Tcp (_, port) -> port
+  | `Unix _ -> Alcotest.fail "a TCP listener"
+
+(* [handler] answers behind the fake HTTPS front, or [raw] does when given. *)
+let with_world ?(handler = backend) ?raw name f =
   with_ctx name @@ fun ctx ->
-  let up = fake ctx (F.Handler backend) in
+  let up = fake ctx (F.Handler handler) in
   let test_ca = Fake_https.ca () in
   let https =
     Fake_https.port
       (Fake_https.start ~sw:ctx.sw ~net:(Eio.Stdenv.net ctx.env)
          ~chain:(Fake_https.leaf test_ca [ Ip "127.0.0.1"; Dns "localhost" ])
-         ~backend:(F.port up) ())
+         ~backend:
+           (match raw with
+           | Some answer -> raw_backend ctx answer
+           | None -> F.port up)
+         ())
   in
   let project_ca, _ = load (Eio.Path.native_exn Eio.Path.(ctx.dir / "ca")) in
   f { ctx; up; https; connector = Fake_https.connector test_ca; project_ca }
@@ -95,7 +121,11 @@ let register w ?connector ?(mode = Model_proxy.Record) ?(record = true) ?redact
   Model_proxy.register w.ctx.proxy run;
   run
 
-type answer = { status : int; body : string }
+type answer = {
+  status : int;
+  head : string;  (** The status line and headers, lowercased. *)
+  body : string;
+}
 
 (* A flow that sends the CONNECT head with its first write and skips the
    proxy's 200 head on its first read, so the ClientHello travels in the same
@@ -176,13 +206,14 @@ let split_response text =
     | _ -> 0
   in
   match Re.exec_opt (Re.compile (Re.str "\r\n\r\n")) text with
-  | None -> { status; body = "" }
+  | None -> { status; head = String.lowercase_ascii text; body = "" }
   | Some g ->
       let stop = Re.Group.stop g 0 in
       let head = String.lowercase_ascii (String.sub text 0 stop) in
       let rest = String.sub text stop (String.length text - stop) in
       {
         status;
+        head;
         body =
           (if Re.execp (Re.compile (Re.str "chunked")) head then dechunk rest
            else rest);
@@ -256,7 +287,7 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
         Ok (pipe ~head:None ~skipped:true))
   in
   match flow with
-  | Error status -> { status; body = "" }
+  | Error status -> { status; head = ""; body = "" }
   | Ok flow ->
       let tls =
         match Ipaddr.of_string target_host with
