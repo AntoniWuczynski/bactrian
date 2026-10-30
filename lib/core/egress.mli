@@ -28,12 +28,19 @@ val host_port : string -> int -> string
 (** [host:port], with brackets around an IPv6 address. *)
 
 val canonical :
-  authority:string -> content_type:string option -> string -> Canon.t
-(** The canonical request of an intercepted call, from which its key is made
-    with the method, path and query (design §7):
-    [{"authority", "content-type", "body"}]. The body is its canonical JSON when
-    it parses as JSON, [null] when empty, and otherwise [{"blake2b-256": <hex>}]
-    of its bytes. [content-type] is [null] when the request has none. *)
+  authority:string ->
+  meth:string ->
+  path:string ->
+  query:(string * string) list ->
+  content_type:string option ->
+  string ->
+  Canon.t
+(** The canonical request of an intercepted call (design §7):
+    [{"authority", "method", "path", "query", "content-type", "body"}], so that
+    the diff of a replay miss names what changed. [query] is given sorted. The
+    body is its canonical JSON when it parses as JSON, [null] when empty, and
+    otherwise [{"blake2b-256": <hex>}] of its bytes. [content-type] is [null]
+    when the request has none. *)
 
 val to_json : t -> Yojson.Safe.t
 (** [{"default": <policy>, "hosts": {<host>: <policy>}}], as [meta.json] keeps

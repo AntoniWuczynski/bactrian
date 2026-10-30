@@ -86,7 +86,9 @@ let test_flags () =
 
 let test_canonical () =
   let c body ct =
-    Canon.to_string (E.canonical ~authority:"h:443" ~content_type:ct body)
+    Canon.to_string
+      (E.canonical ~authority:"h:443" ~meth:"POST" ~path:"/p" ~query:[]
+         ~content_type:ct body)
   in
   Alcotest.(check string)
     "JSON is canonical"
@@ -98,7 +100,8 @@ let test_canonical () =
      String.length s < 200 && not (String.equal s (c "\x00\x02" None)));
   Alcotest.(check string)
     "an empty body is null"
-    {|{"authority":"h:443","body":null,"content-type":null}|} (c "" None)
+    {|{"authority":"h:443","body":null,"content-type":null,"method":"POST","path":"/p","query":[]}|}
+    (c "" None)
 
 let test_node_versions () =
   List.iter

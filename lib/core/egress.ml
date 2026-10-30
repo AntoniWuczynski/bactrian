@@ -52,7 +52,7 @@ let authority target =
         Ok (String.lowercase_ascii (String.sub target 0 i), port)
     | Some _ | None -> bad ()
 
-let canonical ~authority ~content_type body =
+let canonical ~authority ~meth ~path ~query ~content_type body =
   let body =
     if String.equal body "" then Canon.null
     else
@@ -68,6 +68,13 @@ let canonical ~authority ~content_type body =
   Canon.of_fields
     [
       ("authority", Canon.string authority);
+      ("method", Canon.string meth);
+      ("path", Canon.string path);
+      ( "query",
+        Canon.list
+          (List.map
+             (fun (k, v) -> Canon.list [ Canon.string k; Canon.string v ])
+             query) );
       ( "content-type",
         match content_type with Some c -> Canon.string c | None -> Canon.null );
       ("body", body);

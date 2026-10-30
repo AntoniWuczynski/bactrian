@@ -256,14 +256,14 @@ let handle r ~host ~authority act request body : response =
         "bactrian does not intercept WebSocket or other upgraded connections"
   | Body body -> (
       let scrubbed = r.shared.scrub body in
-      let canonical =
-        r.shared.mask
-          (Egress.canonical ~authority
-             ~content_type:(header "content-type" headers)
-             scrubbed)
-      in
       let query =
         List.map (fun (k, v) -> (k, r.shared.scrub v)) (normalised_query uri)
+      in
+      let canonical =
+        r.shared.mask
+          (Egress.canonical ~authority ~meth ~path ~query
+             ~content_type:(header "content-type" headers)
+             scrubbed)
       in
       let key = Matcher.key ~meth ~path ~query canonical in
       let x =
