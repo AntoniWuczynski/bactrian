@@ -50,6 +50,7 @@ type target = {
   faketime : bool;
   faketime_requested : bool;
   checkers : bool;
+  real_keys : bool;
   funded : (P.provider * string) list;
 }
 
@@ -68,6 +69,7 @@ let target ~dir ~checkers (e : Experiment.t) =
     faketime = e.faketime;
     faketime_requested = e.faketime_requested;
     checkers;
+    real_keys = e.real_keys;
     funded = Live_preflight.funded e.caps_usd;
   }
 
@@ -109,6 +111,27 @@ let caps_check (t : target) =
       check "caps" Pass
         ("a spend cap above 0 for " ^ String.concat ", " (List.map snd t.funded))
 
+(* agent.real_keys *)
+
+let real_keys_check ~keys (t : target) =
+  match keys with
+  | [] ->
+      check "real-keys" Skip
+        "no provider key is set, so the agent gets placeholders"
+  | _ :: _ ->
+      let cleartext =
+        match t.agent with
+        | Http { url; _ } -> Live_preflight.real_keys_cleartext ~agent_url:url
+        | Command _ -> None
+      in
+      check "real-keys" Warn
+        (Printf.sprintf
+           "agent.real_keys puts the real %s in the agent's environment, so \
+            the agent can read and repeat %s%s"
+           (Run.key_variable_names keys)
+           (if List.compare_length_with keys 1 = 0 then "it" else "them")
+           (match cleartext with Some c -> ", and " ^ c | None -> ""))
+
 (* Upstream overrides *)
 
 let upstream_checks ~upstream =
@@ -116,13 +139,12 @@ let upstream_checks ~upstream =
     (fun (name, url) ->
       let shown = Uri.to_string url in
       let check_name = "upstream-" ^ name in
-      if Upstream.is_https url || Live_preflight.is_loopback url then
-        check check_name Pass shown
-      else
+      if Live_preflight.is_cleartext url then
         check check_name Warn
           (shown
          ^ " is plain HTTP to another machine: the real API key is sent \
-            unencrypted"))
+            unencrypted")
+      else check check_name Pass shown)
     (Run.overridden_upstreams upstream)
 
 (* The agent *)
@@ -487,6 +509,9 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
   in
   key_checks ~keys ~funded:(Option.map (fun (t : target) -> t.funded) target)
   @ (match target with Some t -> [ caps_check t ] | None -> [])
+  @ (match target with
+    | Some t when t.real_keys -> [ real_keys_check ~keys t ]
+    | Some _ | None -> [])
   @ upstream_checks ~upstream
   @ [ loopback_check () ]
   @ (match target with

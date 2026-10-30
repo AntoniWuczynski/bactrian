@@ -36,7 +36,7 @@ let http url : Experiment.agent =
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
     ?(faketime_requested = false) ?(deny_read = []) ?(checkers = false)
-    ?(funded = []) ~dir agent : Doctor.target =
+    ?(funded = []) ?(real_keys = false) ~dir agent : Doctor.target =
   {
     agent;
     dir;
@@ -48,6 +48,7 @@ let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
     faketime;
     faketime_requested;
     checkers;
+    real_keys;
     funded;
   }
 
@@ -112,6 +113,37 @@ let test_agent () =
     (url "http://user:secret@h:9/agent?token=t#f").message;
   check_status "no scheme" Fail (url "127.0.0.1:9/agent");
   check_status "another scheme" Fail (url "ftp://agent.example/run")
+
+(* agent.real_keys *)
+
+let test_real_keys () =
+  let check ?(keys = [ P.Openai ]) agent =
+    Doctor.real_keys_check ~keys (target ~real_keys:true ~dir:"/" agent)
+  in
+  let warn = check (command ()) in
+  check_status "warns" Warn warn;
+  Alcotest.(check bool)
+    "names the variable, not a value" true
+    (contains ~sub:"OPENAI_API_KEY" warn.message
+    && not (contains ~sub:"unencrypted" warn.message));
+  check_status "no key set" Skip (check ~keys:[] (command ()));
+  Alcotest.(check bool)
+    "plain http to another machine" true
+    (contains ~sub:"unencrypted"
+       (check (http "http://user:secret@agent.example/run")).message);
+  Alcotest.(check bool)
+    "the credentials are not shown" false
+    (contains ~sub:"secret"
+       (check (http "http://user:secret@agent.example/run")).message);
+  List.iter
+    (fun url ->
+      Alcotest.(check bool)
+        (url ^ " is not cleartext")
+        false
+        (contains ~sub:"unencrypted" (check (http url)).message))
+    [
+      "https://agent.example/run"; "http://127.0.0.1:9/a"; "http://localhost/a";
+    ]
 
 (* The sandbox *)
 
@@ -458,6 +490,7 @@ let () =
           Alcotest.test_case "keys with an experiment" `Quick
             test_keys_with_experiment;
           Alcotest.test_case "agent" `Quick test_agent;
+          Alcotest.test_case "real keys" `Quick test_real_keys;
           Alcotest.test_case "sandbox" `Quick test_sandbox;
           Alcotest.test_case "checkers' sandbox" `Quick test_checkers_sandbox;
           Alcotest.test_case "virtual machine" `Quick test_vm;

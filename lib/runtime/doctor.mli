@@ -38,6 +38,7 @@ type target = {
       (** The experiment says [faketime: auto] by name
           ({!Bactrian_core.Experiment.t}). *)
   checkers : bool;  (** Some scenario of the experiment has checkers. *)
+  real_keys : bool;  (** [agent.real_keys]. *)
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
 }
@@ -57,6 +58,13 @@ val key_checks :
     never its value. [keys] are the providers whose variable is set and
     non-empty. Without an experiment ([funded = None]) a missing key is [Warn].
     With one, it is [Fail] for a funded provider and [Skip] for the others. *)
+
+val real_keys_check : keys:Model_proxy.provider list -> target -> check
+(** For an experiment with [agent.real_keys], named [real-keys]: [Warn] naming
+    the key variables that will hold the real keys ([keys] are the providers
+    whose variable is set), and for an HTTP-mode agent at a URL that is not
+    [https] or on this machine ({!Live_preflight.is_cleartext}) that they travel
+    unencrypted. [Skip] when no key is set. *)
 
 val upstream_checks : upstream:(Model_proxy.provider -> Uri.t) -> check list
 (** One check per provider whose upstream is not the real one
@@ -135,8 +143,10 @@ val clock_check :
     experiment sandboxes the agent. Without a target, whether this host can
     enforce the clock at all. Contract-only on macOS is expected, so it is
     [Pass], unless the experiment names [clock: {faketime: auto}] itself: then
-    it is [Warn], as is any other reason the host cannot meet (an HTTP-mode
-    agent, the virtual machine). *)
+    it is [Warn]. The same holds for the other reasons the host is not expected
+    to meet: an HTTP-mode agent is [Skip] and the virtual machine [Pass], and
+    both are [Warn] only when [faketime: auto] is written explicitly. Any other
+    reason is [Warn]. *)
 
 val tls_check :
   available:bool ->

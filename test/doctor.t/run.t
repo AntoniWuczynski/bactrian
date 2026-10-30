@@ -160,7 +160,29 @@ A command agent's checkers share its sandbox, so they get no line of their own.
   $ run bactrian doctor --experiment exp.yaml | grep -c ' sandbox-checkers:'
   0
   [1]
+
+A scenario that does not load is reported, and does not hide that line.
+
+  $ printf 'version: 1\nsurprise: 1\n' > s/broken.yaml
+  $ run bactrian doctor --experiment http.yaml; echo "exit $?"
+  s/broken.yaml:1:1: id: missing required field
+  s/broken.yaml:1:1: turns: missing required field
+  s/broken.yaml:2:1: surprise: unknown field
+  exit 64
   $ rm -r s
+
+An experiment with agent.real_keys gets a line of its own, and one with an
+HTTP-mode agent on another machine over plain http says the keys travel
+unencrypted. Only the variable names are shown.
+
+  $ sed 's#^sandbox: off#sandbox: off\nagent: { protocol: command, command: ["sh"], real_keys: true }#; /^agent: { protocol: command, command: \["sh"\] }/d' exp.yaml > keys.yaml
+  $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment keys.yaml | grep -e ' real-keys:' -e SENTINEL
+  warn  real-keys: agent.real_keys puts the real OPENAI_API_KEY in the agent's environment, so the agent can read and repeat it
+  $ run bactrian doctor --experiment keys.yaml | grep ' real-keys:'
+  skip  real-keys: no provider key is set, so the agent gets placeholders
+  $ sed 's#protocol: http, url: "http://127.0.0.1:9/agent", namespace_header: X-Run#protocol: http, url: "http://user:pw@agent.example/run", namespace_header: X-Run, real_keys: true#' http.yaml > cleartext.yaml
+  $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment cleartext.yaml | grep -e ' real-keys:' -e SENTINEL
+  warn  real-keys: agent.real_keys puts the real OPENAI_API_KEY in the agent's environment, so the agent can read and repeat it, and the start message carries the real provider keys to agent.example unencrypted: use https, or an agent on this machine
 
 A configuration error in the experiment is reported with its location, as
 for run, and exits 64.
