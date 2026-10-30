@@ -51,8 +51,8 @@ val created_at : job -> float
 (** When the job started, by the table's clock. *)
 
 val updated_at : job -> float
-(** When the job last changed: it started, a run of it finished (as {!progress}
-    last saw) or it finished. *)
+(** When the job last changed: it started, a run of it finished (as
+    {!val-progress} last saw) or it finished. *)
 
 val expires_at : job -> float option
 (** When a finished job is forgotten, at the latest. [None] while it runs. *)
