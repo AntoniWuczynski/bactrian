@@ -229,8 +229,6 @@ let header_value v =
     Result.to_option (Base64.decode (String.sub v p (String.length v - p - s)))
   else Some v
 
-let version_key = "io.modelcontextprotocol/protocolVersion"
-
 let mismatch id message : Mcp_msg.message =
   Error_response
     {
@@ -268,12 +266,7 @@ let era_of_request headers (msg : Mcp_msg.message) :
   | Response _ | Error_response _ | Notification _ -> Ok Mcp_dispatch.Undecided
   | Request { id; method_; params } -> (
       let str key = Option.bind params (Canon.str_member key) in
-      let body_version =
-        Option.bind
-          (Option.bind params (Canon.member "_meta"))
-          (Canon.str_member version_key)
-      in
-      match (method_, body_version) with
+      match (method_, Mcp_msg.protocol_version msg) with
       | "initialize", _ -> Ok Mcp_dispatch.Undecided
       | _, Some v ->
           let* () = matching headers id "MCP-Protocol-Version" ~body:v in

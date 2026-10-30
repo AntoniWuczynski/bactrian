@@ -155,15 +155,17 @@ let encode ?(short_floats = false) message =
 
 (* {1 Protocol knowledge} *)
 
+let protocol_version = function
+  | Request { params; _ } ->
+      Option.bind params (fun p ->
+          Option.bind (Canon.member "_meta" p)
+            (Canon.str_member protocol_version_key))
+  | Notification _ | Response _ | Error_response _ -> None
+
 let era_of_request = function
   | Request { method_ = "initialize"; _ } -> Some Legacy
-  | Request { params; _ } -> (
-      let version =
-        Option.bind params (fun p ->
-            Option.bind (Canon.member "_meta" p)
-              (Canon.str_member protocol_version_key))
-      in
-      match version with Some _ -> Some Modern | None -> None)
+  | Request _ as msg ->
+      Option.map (fun (_ : string) -> Modern) (protocol_version msg)
   | Notification _ | Response _ | Error_response _ -> None
 
 let strip_varying_meta params =
