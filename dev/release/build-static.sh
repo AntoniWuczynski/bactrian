@@ -9,6 +9,9 @@ apk add --no-cache build-base git curl bash opam m4 patch unzip rsync \
 # --no-cache keeps no package index, and without one opam reports system
 # packages such as linux-headers (needed by uring) as unavailable.
 apk update
+# The mounted checkout is owned by the runner user, not root, and git refuses it
+# otherwise, which breaks opam's file listing.
+git config --global --add safe.directory '*'
 export OPAMROOT="${OPAMROOT:-/opam-root}"
 export OPAMYES=1 OPAMCONFIRMLEVEL=unsafe-yes
 
