@@ -584,20 +584,15 @@ let sandbox_user_cmd =
     in
     match Sandbox_init.parse_user (raw_arguments "__sandbox-user") with
     | Error m -> fail Exit_code.usage m
-    | Ok (id, agent) -> (
+    | Ok (id, exe, args) -> (
         match Sandbox_init.enter_user_namespace id with
         | Error m -> fail Exit_code.environment m
         | Ok () -> (
-            match agent with
-            | [] -> fail Exit_code.environment "no agent command"
-            | exe :: _ -> (
-                let failed code e =
-                  fail code (exe ^ ": " ^ Unix.error_message e)
-                in
-                (* A shell's codes for a missing and an unusable command. *)
-                try Unix.execvp exe (Array.of_list agent) with
-                | Unix.Unix_error ((ENOENT as e), _, _) -> failed 127 e
-                | Unix.Unix_error (e, _, _) -> failed 126 e)))
+            let failed code e = fail code (exe ^ ": " ^ Unix.error_message e) in
+            (* A shell's codes for a missing and an unusable command. *)
+            try Unix.execvp exe (Array.of_list (exe :: args)) with
+            | Unix.Unix_error ((ENOENT as e), _, _) -> failed 127 e
+            | Unix.Unix_error (e, _, _) -> failed 126 e))
   in
   let info =
     Cmd.info "__sandbox-user" ~docs:Manpage.s_none ~exits:Cli.exits

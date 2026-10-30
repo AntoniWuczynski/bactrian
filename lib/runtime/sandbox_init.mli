@@ -119,8 +119,9 @@ val run :
 
 (** {2 [bactrian __sandbox-user UID:GID -- AGENT ARGV...]} *)
 
-val parse_user : string list -> (identity * string list, string) result
-(** The arguments after the subcommand name: the IDs and the agent. *)
+val parse_user : string list -> (identity * string * string list, string) result
+(** The arguments after the subcommand name: the IDs, the agent's executable and
+    its arguments. *)
 
 val enter_user_namespace : identity -> (unit, string) result
 (** Moves the calling process into a new user namespace in which it is

@@ -387,8 +387,8 @@ let enter_user_namespace { uid; gid } =
   write_proc "gid_map" (Printf.sprintf "%d 0 1\n" gid)
 
 let parse_user = function
-  | text :: "--" :: (_ :: _ as agent) ->
+  | text :: "--" :: exe :: args ->
       Result.map
-        (fun id -> (id, agent))
+        (fun id -> (id, exe, args))
         (Result.map_error describe_parse_error (parse_identity text))
   | [] | [ _ ] | _ :: _ :: _ -> Error "expected UID:GID -- AGENT..."

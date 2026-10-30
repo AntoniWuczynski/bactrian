@@ -100,15 +100,15 @@ let parses_user () =
   let t =
     Alcotest.(
       result
-        (pair
+        (triple
            (of_pp (fun ppf (id : S.identity) ->
                 Format.fprintf ppf "%d:%d" id.uid id.gid))
-           (list string))
+           string (list string))
         string)
   in
   let ok = Alcotest.check t in
   ok "the IDs and the agent"
-    (Ok ({ uid = 1001; gid = 118 }, [ "x"; "--"; "y" ]))
+    (Ok ({ uid = 1001; gid = 118 }, "x", [ "--"; "y" ]))
     (S.parse_user [ "1001:118"; "--"; "x"; "--"; "y" ]);
   List.iter
     (fun args ->
