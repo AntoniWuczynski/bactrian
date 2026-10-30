@@ -97,6 +97,36 @@ let test_targets_stay_on_the_tunnel =
        (fun (c : Bactrian_core.Trace_builder.http_call) -> (c.host, c.status))
        f.http_calls)
 
+(* A secret in the path is redacted wherever it is kept, and sent as it is. *)
+let test_path_redacted =
+  with_world "path-redacted" @@ fun w ->
+  let run =
+    register w ~redact:[ "tok-[0-9]+" ] ~token:token_a
+      (Some (policy [ ("127.0.0.1", Record) ]))
+  in
+  let a =
+    through ~creds:(creds token_a) w ~meth:"GET"
+      ~path:"/bot/tok-12345/send?x=tok-999" ()
+  in
+  Alcotest.(check int) "answered" 200 a.status;
+  Alcotest.(check (list string))
+    "the host got the real path" [ "/bot/tok-12345/send" ]
+    (List.map (fun (r : F.request) -> r.path) (F.requests w.up));
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  let secret = Re.compile (Re.str "tok-") in
+  List.iter
+    (fun (c : Bactrian_core.Trace_builder.http_call) ->
+      Alcotest.(check bool) ("trace: " ^ c.path) false (Re.execp secret c.path))
+    f.http_calls;
+  List.iter
+    (fun (e : Bactrian_core.Cassette.exchange) ->
+      Alcotest.(check bool)
+        ("cassette: " ^ e.path) false (Re.execp secret e.path);
+      Alcotest.(check bool)
+        "canonical" false
+        (Re.execp secret (Bactrian_core.Canon.to_string e.canonical)))
+    (recording w.ctx run).exchanges
+
 let () =
   Alcotest.run "egress requests"
     [
@@ -106,4 +136,7 @@ let () =
           Alcotest.test_case "requests stay on the tunnel's host" `Quick
             test_targets_stay_on_the_tunnel;
         ] );
+      ( "redaction",
+        [ Alcotest.test_case "a secret in the path" `Quick test_path_redacted ]
+      );
     ]

@@ -78,13 +78,13 @@ let with_world name f =
 
 let policy hosts : E.t = { default = Block; hosts }
 
-let register w ?connector ?(mode = Model_proxy.Record) ?(record = true) ~token
-    egress =
+let register w ?connector ?(mode = Model_proxy.Record) ?(record = true) ?redact
+    ~token egress =
   let run =
     {
       (make_run
          ~connector:(Option.value connector ~default:w.connector)
-         ~mode ~record w.ctx ~token ~upstream:"http://127.0.0.1:9")
+         ~mode ~record ?redact w.ctx ~token ~upstream:"http://127.0.0.1:9")
       with
       egress =
         Option.map

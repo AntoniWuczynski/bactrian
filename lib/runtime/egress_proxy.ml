@@ -105,7 +105,8 @@ let forwarded headers =
 (* One request on a tunnel. *)
 type pending = {
   meth : string;
-  path : string;
+  path : string;  (** Redacted, as it is stored and logged. *)
+  raw_path : string;  (** As sent, for the upstream call. *)
   raw_query : string option;
   headers : (string * string) list;
   body : string;
@@ -136,7 +137,9 @@ let exchange r x outcome : Cassette.exchange =
    that the request goes nowhere else. *)
 let live r ~host ~port ~authority x ~record ~log =
   let url =
-    let base = Uri.with_path (Uri.make ~scheme:"https" ~host ~port ()) x.path in
+    let base =
+      Uri.with_path (Uri.make ~scheme:"https" ~host ~port ()) x.raw_path
+    in
     match x.raw_query with
     | Some q -> Uri.with_query base (Uri.query_of_encoded q)
     | None -> base
@@ -240,7 +243,8 @@ let handle r ~host ~port ~authority act request body : response =
   let meth = Http.Method.to_string (Http.Request.meth request) in
   let resource = Http.Request.resource request in
   let target = Egress.target ~host ~port resource in
-  let path = match target with Ok (p, _) -> p | Error _ -> resource in
+  let raw_path = match target with Ok (p, _) -> p | Error _ -> resource in
+  let path = r.shared.scrub raw_path in
   let headers = Http.Header.to_list (Http.Request.headers request) in
   let t_ms = r.shared.t_ms () in
   let log status = r.logged { t_ms; meth; host; path; status } in
@@ -281,6 +285,7 @@ let handle r ~host ~port ~authority act request body : response =
         {
           meth;
           path;
+          raw_path;
           raw_query;
           headers;
           body;
