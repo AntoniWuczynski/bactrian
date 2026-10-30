@@ -15,10 +15,10 @@
         "event": { "const": "reserve" },
         "id": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
         "model": { "type": "string" },
-        "owner": { "type": "string" },
+        "owner": { "description": "Absent in ledgers written before spend was attributed to runs, read as empty.", "type": "string" },
         "reserved_usd": { "type": "number", "minimum": 0 }
       },
-      "required": ["event", "id", "model", "owner", "reserved_usd"]
+      "required": ["event", "id", "model", "reserved_usd"]
     },
     {
       "properties": {
