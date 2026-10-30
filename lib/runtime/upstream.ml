@@ -27,6 +27,7 @@ let tls_ready = function
 type request = {
   meth : string;
   url : Uri.t;
+  target : string option;
   headers : (string * string) list;
   body : string;
 }
@@ -204,7 +205,12 @@ let read_body ~clock ~t_head ~on_chunk ~failure framing r =
       | None -> Printexc.raise_with_backtrace e backtrace)
 
 let request_text (req : request) ~host =
-  let target = match Uri.path_and_query req.url with "" -> "/" | t -> t in
+  let target =
+    match (req.target, Uri.path_and_query req.url) with
+    | Some t, _ -> t
+    | None, "" -> "/"
+    | None, t -> t
+  in
   let head =
     Printf.sprintf
       "%s %s HTTP/1.1\r\n\

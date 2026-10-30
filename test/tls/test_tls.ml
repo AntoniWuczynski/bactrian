@@ -28,7 +28,13 @@ let call env connector url =
     Eio.Switch.run @@ fun sw ->
     Upstream.call ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
       ~timeout:10. connector
-      { meth = "POST"; url = Uri.of_string url; headers = []; body = "{}" }
+      {
+        meth = "POST";
+        url = Uri.of_string url;
+        target = None;
+        headers = [];
+        body = "{}";
+      }
       ~on_head:(fun h -> status := h.status)
       ~on_chunk:(fun ~dt_ms:_ s ->
         incr reads;

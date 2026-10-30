@@ -35,7 +35,7 @@ let url port path =
   Uri.of_string (Printf.sprintf "http://127.0.0.1:%d%s" port path)
 
 let get u : Upstream.request =
-  { meth = "GET"; url = u; headers = []; body = "" }
+  { meth = "GET"; url = u; target = None; headers = []; body = "" }
 
 type outcome = {
   result : (unit, Upstream.error) result;
@@ -110,6 +110,7 @@ let test_whole_body env sw =
     {
       meth = "POST";
       url = url port "/v1/x";
+      target = None;
       body = "{\"a\":1}";
       headers = [ ("x-api-key", "k"); ("content-type", "application/json") ];
     }

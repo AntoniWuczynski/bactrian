@@ -29,6 +29,7 @@ let model_call ~sw ~net ~clock ~model_request (s : session) =
       {
         meth = "POST";
         url = Uri.of_string (var "OPENAI_BASE_URL" ^ "/chat/completions");
+        target = None;
         headers =
           [
             ("Content-Type", "application/json");

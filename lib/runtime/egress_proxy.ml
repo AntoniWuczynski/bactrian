@@ -134,22 +134,26 @@ let exchange r x outcome : Cassette.exchange =
     outcome;
   }
 
-(* Built from the CONNECT host and port, never from text the agent sent, so
-   that the request goes nowhere else. *)
+(* The URL is built from the CONNECT host and port, never from text the agent
+   sent, so that the request goes nowhere else. The path and query, which
+   [Egress.target] has checked, are sent as they came: an API that signs the
+   query, or reads a literal [+], needs their bytes. *)
 let live r ~host ~port ~authority x ~record ~log =
-  let url =
-    let base =
-      Uri.with_path (Uri.make ~scheme:"https" ~host ~port ()) x.raw_path
-    in
-    match x.raw_query with
-    | Some q -> Uri.with_query base (Uri.query_of_encoded q)
-    | None -> base
+  let url = Uri.make ~scheme:"https" ~host ~port () in
+  let target =
+    match x.raw_query with Some q -> x.raw_path ^ "?" ^ q | None -> x.raw_path
   in
   let head = ref None and chunks = ref [] in
   let result =
     Eio.Switch.run @@ fun sw ->
     r.call ~sw r.shared.connector
-      { meth = x.meth; url; headers = forwarded x.headers; body = x.body }
+      {
+        meth = x.meth;
+        url;
+        target = Some target;
+        headers = forwarded x.headers;
+        body = x.body;
+      }
       ~on_head:(fun h -> head := Some h)
       ~on_chunk:(fun ~dt_ms:_ c -> chunks := c :: !chunks)
   in

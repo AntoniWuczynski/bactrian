@@ -13,6 +13,7 @@ let post ~net ~clock ~target line =
       {
         meth = "POST";
         url = target;
+        target = None;
         headers = [ ("content-type", "application/json") ];
         body = line;
       }

@@ -163,6 +163,27 @@ let test_bodiless =
          | Transport_error _ -> false)
        (recording w.ctx run).exchanges)
 
+(* The path and query reach the host byte for byte: a literal [+] is not a
+   space, and an escape is not decoded. *)
+let lines_seen = ref []
+
+let test_raw_target =
+  with_world
+    ~raw:(fun line ->
+      lines_seen := line :: !lines_seen;
+      "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    "raw-target"
+  @@ fun w ->
+  let _ = register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ])) in
+  let path = "/a%2e%2e/b%2Fc?sig=a+b%2Bc&q=x%20y&q=1" in
+  let a = through ~creds:(creds token_a) w ~meth:"GET" ~path () in
+  Alcotest.(check int) "answered" 200 a.status;
+  Alcotest.(check (list string))
+    "the request line as sent"
+    [ "GET " ^ path ^ " HTTP/1.1" ]
+    !lines_seen;
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
+
 (* An agent whose clock libfaketime set to the run's SIM_NOW, a month back,
    still accepts the tunnel's certificate. *)
 let test_past_sim_now =
@@ -305,6 +326,7 @@ let () =
       ( "targets",
         [
           Alcotest.test_case "request target forms" `Quick test_target;
+          Alcotest.test_case "the path and query as sent" `Quick test_raw_target;
           Alcotest.test_case "requests stay on the tunnel's host" `Quick
             test_targets_stay_on_the_tunnel;
         ] );

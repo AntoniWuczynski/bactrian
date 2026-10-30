@@ -78,5 +78,6 @@ val connect :
     ({!Bactrian_core.Egress.target}) 400 with [bactrian_bad_request]. A request
     after the run has ended gets 403 with [bactrian_forbidden], and the tunnel
     is closed. Forwarded requests go to the [CONNECT] host and port, with the
-    request's path and query, through the run's TLS connector, without the hop
-    by hop and proxy headers (the [Host] header is the tunnel's). *)
+    request's path and query byte for byte, through the run's TLS connector,
+    without the hop by hop and proxy headers (the [Host] header is the
+    tunnel's). *)

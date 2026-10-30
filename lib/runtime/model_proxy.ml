@@ -445,6 +445,7 @@ let live t ~conn_sw st x ~record =
             {
               Upstream.meth = x.meth;
               url = upstream_url run x;
+              target = None;
               headers = forward_headers x.headers x.provider real_key;
               body = x.body;
             }
