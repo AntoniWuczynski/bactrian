@@ -17,6 +17,7 @@ let runs j =
 
 let statuses j = List.map (string_field "status") (runs j)
 let reasons j = List.filter_map (Canon.str_member "reason") (runs j)
+let int_field name j = get name (Canon.int_member name j)
 
 let check_named name j =
   List.find_opt
@@ -206,12 +207,22 @@ let through_https agent () =
     "strict replay: no call" before
     (List.length (upstream_requests up));
   (* A changed prompt diverges, and the rest of the run goes live over HTTPS. *)
-  let code, _ =
+  let code, replayed =
     replay
       [ "--mode"; "until-divergence"; "--env"; prompt_variable ]
       ((prompt_variable, terse) :: live)
   in
-  Alcotest.(check bool) "until-divergence: not refused" true (code <> 69);
+  Alcotest.(check int) "until-divergence: exit status, diverged" 1 code;
+  Alcotest.(check string)
+    "until-divergence: outcome" "diverged"
+    (string_field "kind" (field "outcome" replayed));
+  let findings = field "findings" replayed in
+  Alcotest.(check int)
+    "until-divergence: both calls answered" 2
+    (int_field "exchanges" findings);
+  Alcotest.(check int)
+    "until-divergence: no transport error" 0
+    (int_field "transport_errors" findings);
   Alcotest.(check bool)
     "until-divergence: live calls over HTTPS" true
     (List.length (upstream_requests up) > before)
@@ -223,10 +234,19 @@ let untrusted_https () =
   with_https_project "https-untrusted" @@ fun ~project ~ca:_ up ->
   write_experiment project (agent.argv ());
   let code, printed = cli ~dir:project ~env:(env_of up) run_flags in
-  Alcotest.(check bool) "not refused before the runs" true (code <> 69);
-  Alcotest.(check bool)
-    "no run passes" false
-    (List.exists (String.equal "passed") (statuses printed));
+  Alcotest.(check int) "exit status: the runs failed" 1 code;
+  Alcotest.(check (list string))
+    "every run fails"
+    (List.init 4 (fun _ -> "failed"))
+    (statuses printed);
+  List.iter
+    (fun reason ->
+      Alcotest.(check bool)
+        ("the reason names the TLS failure: " ^ reason)
+        true
+        (contains reason "TLS failure"))
+    (reasons printed);
+  Alcotest.(check int) "a reason for each run" 4 (List.length (reasons printed));
   Alcotest.(check (list string)) "no request was sent" [] (upstream_requests up)
 
 (* A bad value is a usage error that names the variable, in every command that
