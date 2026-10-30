@@ -575,6 +575,39 @@ let dns_lines_are_read_back () =
       | Error m -> Alcotest.failf "%s: %s" line m)
     [ (`Udp, dns_query [ "a\"b"; "c" ]); (`Tcp, "\000") ]
 
+(* 192.0.2.1 is a documentation address, assigned to no interface. *)
+let dns_bind_fails () =
+  with_ctx @@ fun ctx ->
+  match
+    Dns_server.serve ~sw:ctx.sw ~net:(Eio.Stdenv.net ctx.env) ~record:ignore
+      [ (Eio.Net.Ipaddr.of_raw "\192\000\002\001", 0) ]
+  with
+  | Error { address; _ } ->
+      Alcotest.(check string) "address" "192.0.2.1:0" address
+  | Ok () -> Alcotest.fail "bound an address no interface has"
+
+(* Port 53 needs root on Linux, and macOS has no 127.0.0.53, so the forwarder
+   stops before the agent starts. *)
+let dns_needs_port_53 () =
+  if Unix.geteuid () = 0 then Alcotest.skip ();
+  with_ctx @@ fun ctx ->
+  match
+    S.run ~net:(Eio.Stdenv.net ctx.env)
+      ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
+      {
+        forwards = [];
+        dns = Some { uid = 1; gid = 1 };
+        agent = sh ("touch " ^ path ctx "ran");
+      }
+  with
+  | Error (S.Dns_failed _) ->
+      Alcotest.(check bool)
+        "the agent did not start" false
+        (Sys.file_exists (path ctx "ran"))
+  | Error ((S.Listen_failed _ | S.Spawn_failed _) as e) ->
+      Alcotest.failf "failed: %s" (S.describe_error e)
+  | Ok code -> Alcotest.failf "ran and exited %d" code
+
 let signal_reaches_whole_group () =
   with_ctx @@ fun ctx ->
   (* The helper dies from the forwarded SIGTERM, not from the cleanup. *)
@@ -830,6 +863,8 @@ let () =
           Alcotest.test_case "over UDP" `Quick dns_over_udp;
           Alcotest.test_case "over TCP" `Quick dns_over_tcp;
           Alcotest.test_case "lines read back" `Quick dns_lines_are_read_back;
+          Alcotest.test_case "an address it cannot bind" `Quick dns_bind_fails;
+          Alcotest.test_case "port 53 refused" `Quick dns_needs_port_53;
         ] );
       ( "subcommand",
         [
