@@ -10,17 +10,17 @@ let nt_go_build_id = 4
 
 (* Bounds-checked little-endian reads. *)
 let u16 s off =
-  if off >= 0 && off + 2 <= String.length s then
+  if off >= 0 && off <= String.length s - 2 then
     Some (String.get_uint16_le s off)
   else None
 
 let u32 s off =
-  if off >= 0 && off + 4 <= String.length s then
+  if off >= 0 && off <= String.length s - 4 then
     Some (Int32.to_int (String.get_int32_le s off) land 0xffff_ffff)
   else None
 
 let u64 s off =
-  if off >= 0 && off + 8 <= String.length s then
+  if off >= 0 && off <= String.length s - 8 then
     let v = String.get_int64_le s off in
     if Int64.compare v 0L >= 0 && Int64.compare v (Int64.of_int max_int) <= 0
     then Some (Int64.to_int v)
@@ -31,14 +31,16 @@ type segment = { kind : int; offset : int; size : int }
 
 (* The program header table of a little-endian ELF file, or [None] when the
    file is not one or the table is cut off. *)
-let segments s =
+(* Whether a little-endian ELF file is 64-bit, [None] when it is not one. *)
+let class64 s =
   let* () = if String.starts_with ~prefix:"\x7fELF" s then Some () else None in
-  let* class64 =
-    match u16 s 4 with
-    | Some c when c land 0xff = 2 && c lsr 8 = 1 -> Some true
-    | Some c when c land 0xff = 1 && c lsr 8 = 1 -> Some false
-    | Some _ | None -> None
-  in
+  match u16 s 4 with
+  | Some c when c land 0xff = 2 && c lsr 8 = 1 -> Some true
+  | Some c when c land 0xff = 1 && c lsr 8 = 1 -> Some false
+  | Some _ | None -> None
+
+let segments s =
+  let* class64 = class64 s in
   let word off = if class64 then u64 s off else u32 s off in
   let phoff, phentsize, phnum, minimum =
     if class64 then (32, 54, 56, 56) else (28, 42, 44, 32)
@@ -85,7 +87,9 @@ let rec has_go_note s pos stop =
 let go_note s { kind; offset; size } =
   kind = pt_note
   && Option.value
-       (has_go_note s offset (min (offset + size) (String.length s)))
+       (has_go_note s offset
+          (if size > String.length s - offset then String.length s
+           else offset + size))
        ~default:false
 
 let probe s =
@@ -95,3 +99,19 @@ let probe s =
       if List.exists (go_note s) segs then Go
       else if List.exists (fun seg -> seg.kind = pt_interp) segs then Dynamic
       else Static
+
+let interpreter s =
+  let* segs = segments s in
+  let* seg = List.find_opt (fun seg -> seg.kind = pt_interp) segs in
+  if seg.offset >= 0 && seg.size > 0 && seg.offset <= String.length s - seg.size
+  then
+    let raw = String.sub s seg.offset seg.size in
+    Some
+      (match String.index_opt raw '\000' with
+      | Some n -> String.sub raw 0 n
+      | None -> raw)
+  else None
+
+let machine s =
+  let* _ = class64 s in
+  u16 s 18

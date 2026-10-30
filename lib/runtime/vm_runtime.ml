@@ -230,7 +230,13 @@ let relay_cache_dir () =
 
 let relay_name t =
   Printf.sprintf "relay-%s-%s"
-    (String.sub Digest.BLAKE256.(to_hex (string Relay_source.text)) 0 16)
+    (String.sub
+       Digest.BLAKE256.(
+         to_hex
+           (string
+              (String.concat "\000"
+                 (List.concat_map (fun (n, t) -> [ n; t ]) Relay_source.files))))
+       0 16)
     (String.map
        (fun c ->
          match c with
@@ -251,6 +257,46 @@ let rec mkdirs path =
     try Unix.mkdir path 0o700 with Unix.Unix_error (EEXIST, _, _) -> ()
   end
 
+let label_run = "bactrian.run"
+let label_pid = "bactrian.pid"
+let label_host = "bactrian.host"
+
+let labels ~run_id =
+  [
+    (label_run, run_id);
+    (label_pid, string_of_int (Unix.getpid ()));
+    (label_host, Unix.gethostname ());
+  ]
+
+let remove ~process_mgr ~clock t name =
+  ignore
+    (run_client ~process_mgr ~clock t
+       (match t.kind with
+       | `Docker -> [ "rm"; "-f"; name ]
+       | `Container -> [ "delete"; "--force"; name ])
+      : (string, string) result)
+
+(* Runs [args], an image and its command, in a build container with a name and
+   the labels of a run's, so {!remove_stale} finds one that a killed bactrian
+   left behind. A timeout or a cancel kills the client and leaves the container
+   running, so it is removed by name after, whatever happened. *)
+let run_builder ~process_mgr ~clock t args =
+  let name = "bactrian-build-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6) in
+  let run =
+    match t.kind with
+    | `Docker -> [ "run"; "--rm" ]
+    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
+  in
+  Fun.protect ~finally:(fun () ->
+      Eio.Cancel.protect (fun () -> remove ~process_mgr ~clock t name))
+  @@ fun () ->
+  run_client ~process_mgr ~clock ~timeout:build_timeout t
+    (run @ [ "--name"; name ]
+    @ List.concat_map
+        (fun (k, v) -> [ "--label"; k ^ "=" ^ v ])
+        (labels ~run_id:name)
+    @ args)
+
 (* Built into a directory of its own and renamed into place, so two bactrian
    processes building at once never see half a file. *)
 let build ~process_mgr ~clock t ~dir ~target =
@@ -263,19 +309,17 @@ let build ~process_mgr ~clock t ~dir ~target =
       with Unix.Unix_error _ | Sys_error _ -> ())
   @@ fun () ->
   List.iter (fun d -> Unix.mkdir d 0o755) [ work; src; out ];
-  Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
-      output_string oc Relay_source.text);
+  List.iter
+    (fun (name, text) ->
+      Out_channel.with_open_bin (Filename.concat src name) (fun oc ->
+          output_string oc text))
+    Relay_source.files;
   let script =
     Printf.sprintf
       "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
-       /out/relay /src/relay.c && chown %d:%d /out/relay"
+       /out/relay /src/relay.c /src/relay_image.c && chown %d:%d /out/relay"
       (String.concat " " build_packages)
       (Unix.getuid ()) (Unix.getgid ())
-  in
-  let run =
-    match t.kind with
-    | `Docker -> [ "run"; "--rm" ]
-    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
   in
   let* _ =
     Result.map_error
@@ -284,18 +328,17 @@ let build ~process_mgr ~clock t ~dir ~target =
           "the relay could not be built in %s (%s). It needs the network once, \
            for Alpine's packages"
           build_image why)
-      (run_client ~process_mgr ~clock ~timeout:build_timeout t
-         (run
-         @ [
-             "--mount";
-             Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
-             "--mount";
-             Printf.sprintf "type=bind,source=%s,target=/out" out;
-             build_image;
-             "sh";
-             "-c";
-             script;
-           ]))
+      (run_builder ~process_mgr ~clock t
+         [
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/out" out;
+           build_image;
+           "sh";
+           "-c";
+           script;
+         ])
   in
   Unix.rename (Filename.concat out "relay") target;
   Ok target
@@ -350,16 +393,210 @@ let relay ~process_mgr ~clock t =
         (Printf.sprintf "the relay could not be built in %s: %s" dir
            (Printexc.to_string e))
 
-let label_run = "bactrian.run"
-let label_pid = "bactrian.pid"
-let label_host = "bactrian.host"
+(* libfaketime *)
 
-let labels ~run_id =
-  [
-    (label_run, run_id);
-    (label_pid, string_of_int (Unix.getpid ()));
-    (label_host, Unix.gethostname ());
-  ]
+(* Version 0.9.13, published 2026-08-31. The archive's checksum is of the
+   tarball GitHub serves for the tag (github.com and codeload give the same
+   bytes), checked in the container that downloads it and again before each
+   build. *)
+let faketime_url =
+  "https://github.com/wolfcw/libfaketime/archive/refs/tags/v0.9.13.tar.gz"
+
+let faketime_sha256 =
+  "8e56deeb805682b025107e095f1d94a6ea677472f05824cd475f5c5e6e1a5ddf"
+
+let faketime_archive = "libfaketime-0.9.13.tar.gz"
+
+(* Debian bookworm of 2026-10-05, pushed 2026-10-06 (glibc 2.36). The library
+   needs only GLIBC_2.34 ({!Vm_exec_probe.glibc_floor}), which the relay checks
+   in the image before it is preloaded. The multi-architecture index. *)
+let glibc_build_image =
+  "debian:bookworm-20261005-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+
+(* The archive is handed to the user, as the relay and the libraries are: left
+   to root, which a rootful Docker on Linux makes it, it would fail [owned] at
+   the next build and keep every run on the other C library contract-only. *)
+let faketime_fetch_script =
+  Printf.sprintf
+    "set -eu; wget -q -O /out/%s %s && echo '%s  /out/%s' | sha256sum -c >&2 \
+     && chown %d:%d /out/%s"
+    faketime_archive faketime_url faketime_sha256 faketime_archive
+    (Unix.getuid ()) (Unix.getgid ()) faketime_archive
+
+(* The same steps in each builder: check the archive, build only the
+   multi-thread library (the other targets do not build with musl), run
+   [check] on it, and hand it to the user. *)
+let faketime_build_script ~install ~check =
+  Printf.sprintf
+    "set -eu; %s; echo '%s  /src/%s' | sha256sum -c >&2 && mkdir /tmp/lf && \
+     tar xzf /src/%s -C /tmp/lf --strip-components=1 && make -C /tmp/lf/src \
+     libfaketimeMT.so.1 >&2 && %s && cp /tmp/lf/src/libfaketimeMT.so.1 /out/ \
+     && chown %d:%d /out/libfaketimeMT.so.1"
+    install faketime_sha256 faketime_archive faketime_archive check
+    (Unix.getuid ()) (Unix.getgid ())
+
+(* The glibc library asks for no version of glibc newer than
+   {!Vm_exec_probe.glibc_floor}, which is what the relay checks the image for.
+   A build that needs more fails here, not in an agent that will not start. *)
+let glibc_floor_check =
+  "newest=$(objdump -T /tmp/lf/src/libfaketimeMT.so.1 | grep -o \
+   'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1) && [ \
+   \"$(printf '%s\\n' \"$newest\" " ^ Vm_exec_probe.glibc_floor
+  ^ " | sort -V | tail -1)\" = " ^ Vm_exec_probe.glibc_floor ^ " ]"
+
+let faketime_builder : Vm_exec_probe.libc -> string * string = function
+  | Musl ->
+      ( build_image,
+        faketime_build_script
+          ~install:"apk add --no-cache make gcc musl-dev >&2" ~check:"true" )
+  | Glibc ->
+      ( glibc_build_image,
+        faketime_build_script
+          ~install:
+            "apt-get update -qq >&2 && apt-get install -y -qq \
+             --no-install-recommends gcc make libc6-dev binutils >&2"
+          ~check:glibc_floor_check )
+
+(* A directory beside the relay, named for everything the build depends on, so
+   a changed version or script is built again. *)
+let faketime_name t =
+  Printf.sprintf "faketime-%s-%s"
+    (String.sub
+       Digest.BLAKE256.(
+         to_hex
+           (string
+              (String.concat "\000"
+                 ([ faketime_url; faketime_sha256; faketime_fetch_script ]
+                 @ List.concat_map
+                     (fun libc ->
+                       let image, script = faketime_builder libc in
+                       [ image; script ])
+                     [ Vm_exec_probe.Musl; Glibc ]))))
+       0 16)
+    (String.map
+       (fun c ->
+         match c with
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> c
+         | _ -> '-')
+       t.arch)
+
+let library_file = "libfaketimeMT.so.1"
+
+let library_path ~parent libc =
+  Filename.concat
+    (Filename.concat parent (Vm_exec_probe.libc_name libc))
+    library_file
+
+(* A run command in the build image of a container, with [src] read-only and
+   [out] writable. *)
+let build_in ~process_mgr ~clock t ~what ~image ~src ~out script =
+  Result.map_error
+    (fun why ->
+      Printf.sprintf "%s could not be built in %s (%s). It needs the network"
+        what image why)
+    (run_builder ~process_mgr ~clock t
+       [
+         "--mount";
+         Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+         "--mount";
+         Printf.sprintf "type=bind,source=%s,target=/out" out;
+         image;
+         "sh";
+         "-c";
+         script;
+       ])
+
+(* The archive, downloaded once into the cache. *)
+let faketime_source ~process_mgr ~clock t ~dir ~work =
+  let target = Filename.concat dir faketime_archive in
+  match owned ~kind:S_REG ~what:"a regular file" target with
+  | Error why -> Error why
+  | Ok true -> Ok target
+  | Ok false ->
+      let src = Filename.concat work "fetch-src"
+      and out = Filename.concat work "fetch-out" in
+      List.iter (fun d -> Unix.mkdir d 0o755) [ src; out ];
+      let* (_ : string) =
+        build_in ~process_mgr ~clock t ~what:"libfaketime's source"
+          ~image:build_image ~src ~out faketime_fetch_script
+      in
+      Unix.rename (Filename.concat out faketime_archive) target;
+      Ok target
+
+let faketime_trusted ~parent libc =
+  let lib = library_path ~parent libc in
+  let* parent_ok = owned ~kind:S_DIR ~what:"a directory" parent in
+  if not parent_ok then Ok false
+  else
+    let* dir_ok =
+      owned ~kind:S_DIR ~what:"a directory" (Filename.dirname lib)
+    in
+    if not dir_ok then Ok false
+    else owned ~kind:S_REG ~what:"a regular file" lib
+
+let untrusted_faketime ~parent why =
+  Error
+    (Printf.sprintf
+       "the cached libfaketime cannot be trusted: %s. Fix: remove %s" why parent)
+
+let faketime_cached t libc =
+  let parent = Filename.concat (relay_cache_dir ()) (faketime_name t) in
+  match faketime_trusted ~parent libc with
+  | Ok _ as result -> result
+  | Error why -> untrusted_faketime ~parent why
+  | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
+
+let faketime ~process_mgr ~clock t libc =
+  let dir = relay_cache_dir () in
+  let parent = Filename.concat dir (faketime_name t) in
+  let untrusted = untrusted_faketime ~parent in
+  match
+    mkdirs dir;
+    match owned ~kind:S_DIR ~what:"a directory" dir with
+    | Error why -> untrusted why
+    | Ok (_ : bool) -> (
+        match faketime_trusted ~parent libc with
+        | Error why -> untrusted why
+        | Ok true -> Ok parent
+        | Ok false -> (
+            let work =
+              Filename.concat dir
+                ("build-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6))
+            in
+            Fun.protect ~finally:(fun () ->
+                try Proc_util.remove_tree work
+                with Unix.Unix_error _ | Sys_error _ -> ())
+            @@ fun () ->
+            Unix.mkdir work 0o755;
+            let* archive = faketime_source ~process_mgr ~clock t ~dir ~work in
+            let src = Filename.concat work "src"
+            and out = Filename.concat work "out" in
+            List.iter (fun d -> Unix.mkdir d 0o755) [ src; out ];
+            Out_channel.with_open_bin (Filename.concat src faketime_archive)
+              (fun oc ->
+                output_string oc
+                  (In_channel.with_open_bin archive In_channel.input_all));
+            let image, script = faketime_builder libc in
+            let* (_ : string) =
+              build_in ~process_mgr ~clock t ~what:"libfaketime" ~image ~src
+                ~out script
+            in
+            mkdirs (Filename.dirname (library_path ~parent libc));
+            Unix.rename
+              (Filename.concat out library_file)
+              (library_path ~parent libc);
+            match faketime_trusted ~parent libc with
+            | Ok true -> Ok parent
+            | Ok false ->
+                untrusted
+                  (library_path ~parent libc ^ " is missing after the build")
+            | Error why -> untrusted why))
+  with
+  | result -> result
+  | exception ((Unix.Unix_error _ | Sys_error _) as e) ->
+      Error
+        (Printf.sprintf "libfaketime could not be built in %s: %s" dir
+           (Printexc.to_string e))
 
 (* By its process ID only, never by a port: a process that cannot be signalled
    for want of permission is alive. *)
@@ -416,14 +653,6 @@ let labelled ~process_mgr ~clock t =
              | Some pid, Some host -> Some (c.id, pid, host)
              | Some _, None | None, (Some _ | None) -> None)
            listed)
-
-let remove ~process_mgr ~clock t name =
-  ignore
-    (run_client ~process_mgr ~clock t
-       (match t.kind with
-       | `Docker -> [ "rm"; "-f"; name ]
-       | `Container -> [ "delete"; "--force"; name ])
-      : (string, string) result)
 
 let remove_stale ~process_mgr ~clock t =
   match labelled ~process_mgr ~clock t with

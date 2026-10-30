@@ -16,14 +16,15 @@ let interp = "/lib64/ld-linux-x86-64.so.2\000"
 let go_note = note ~name:"Go\000\000" ~kind:4 ~desc:(String.make 40 'x')
 let gnu_note = note ~name:"GNU\000" ~kind:3 ~desc:(String.make 20 'y')
 
-let elf ?(class64 = true) segments =
+let elf ?(class64 = true) ?machine segments =
   let word = if class64 then le 8 else le 4 in
   let header_size, entry_size = if class64 then (64, 56) else (52, 32) in
   let ident = "\x7fELF" ^ (if class64 then "\002" else "\001") ^ "\001\001" in
   let ident = ident ^ String.make (16 - String.length ident) '\000' in
   let header =
     ident ^ le 2 2
-    ^ le 2 (if class64 then 0x3e else 3)
+    ^ le 2
+        (match machine with Some m -> m | None -> if class64 then 0x3e else 3)
     ^ le 4 1 ^ word 0 ^ word header_size ^ word 0 ^ le 4 0 ^ le 2 header_size
     ^ le 2 entry_size
     ^ le 2 (List.length segments)

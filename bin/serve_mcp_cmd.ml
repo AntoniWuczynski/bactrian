@@ -127,10 +127,11 @@ let cmd ~bactrian_exe =
              sandbox: scenario checkers, MCP servers ($(b,mcp_stdio), \
              $(b,mcp_http) and an experiment's $(b,mcp)), passing the server's \
              environment variables to an agent ($(b,env), \
-             $(b,agent.env_passthrough)) and $(b,sandbox.allow_write) paths \
-             outside the working directory. This makes the server as powerful \
-             as a shell in this project: anything that can write a file here \
-             and call a tool can run any program as you.")
+             $(b,agent.env_passthrough)) and $(b,sandbox.allow_read) and \
+             $(b,sandbox.allow_write) paths outside the working directory. \
+             This makes the server as powerful as a shell in this project: \
+             anything that can write a file here and call a tool can run any \
+             program as you.")
   in
   Cmd.v info
     Term.(

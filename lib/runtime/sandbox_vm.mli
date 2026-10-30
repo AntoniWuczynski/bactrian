@@ -30,6 +30,8 @@ val prepare :
 type layout = {
   project_root : string;
   bactrian_dir : string;
+  allow_read : string list;
+      (** Resolved; those that do not exist are skipped. *)
   allow_write : string list;
       (** Resolved; those that do not exist are skipped. *)
   read_only : string list;
@@ -69,6 +71,30 @@ val make_stages :
     inode), or the staging stops with [Error] and that link is removed. The
     caller removes the rest. *)
 
+val clock :
+  env:Eio_unix.Stdenv.base ->
+  wanted:bool ->
+  t ->
+  layout ->
+  run_id:string ->
+  run_dir:string ->
+  state_dir:string ->
+  temp_dir:string ->
+  cwd:string ->
+  string list ->
+  Agent_clock.vm
+(** What decides the agent's clock in the image (decision 0025). Without
+    [wanted] (the experiment turns the clock off), {!Agent_clock.Vm_unprobed}.
+    Otherwise the relay is run once in a container built like the run's, with
+    [cwd] as its working directory, to report the image's C library and the
+    start of the executable [argv0] leads to (a [#!] line followed one level, in
+    a second container), and libfaketime is built for that C library when the
+    executable can take a preload and it is not cached ({!Vm_runtime.faketime}).
+    An answer is kept for the image, [cwd] and [argv0], and one build is not
+    repeated, so an experiment's runs probe once. A probe or a build that fails
+    gives {!Agent_clock.Vm_unavailable}. The container, its staging directory
+    and its environment file are gone when it returns. *)
+
 type session = {
   argv : string list;
       (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...],
@@ -90,6 +116,7 @@ val start :
   cwd:string ->
   port:int ->
   agent_env:(string * string) list ->
+  faketime:int option ->
   string list ->
   (session, string) result
 (** Writes the agent's environment, minus [PATH] (the image's own applies), to

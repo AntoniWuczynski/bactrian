@@ -13,83 +13,7 @@
 
 open Bactrian_runtime
 open Acceptance_world
-
-(* Pinned by digest: node 24 on Alpine 3.24 (2026-09-18), and uv 0.12.21 with
-   Python 3.12 on Debian trixie (2026-09-29). *)
-let node_image =
-  "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
-
-let python_image =
-  "ghcr.io/astral-sh/uv:0.12.21-python3.12-trixie-slim@sha256:5ae92e4d35b8d586d50ddf4aba6ecdd9f744237284d31c86bf45077e4e17e4bd"
-
-let quiet cmd = Sys.command (cmd ^ " > /dev/null 2>&1") = 0
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
-let runtime = vm_runtime_name
-
-let runtime_works =
-  lazy
-    ( Eio_main.run @@ fun env ->
-      Result.is_ok
-        (Vm_runtime.detect
-           ~process_mgr:(Eio.Stdenv.process_mgr env)
-           ~clock:(Eio.Stdenv.clock env) (Some vm_runtime)) )
-
-(* The runtime's own command for each thing the tests do beside bactrian. *)
-let image_present image =
-  match vm_runtime with
-  | `Docker -> quiet ("docker image inspect " ^ Filename.quote image)
-  | `Container -> quiet ("container image inspect " ^ Filename.quote image)
-
-let pull image =
-  match vm_runtime with
-  | `Docker -> quiet ("docker pull -q " ^ Filename.quote image)
-  | `Container ->
-      quiet ("container image pull --progress none " ^ Filename.quote image)
-
-let run_prefix =
-  match vm_runtime with
-  | `Docker -> [ "docker"; "run" ]
-  | `Container -> [ "container"; "run"; "--progress"; "none" ]
-
-let remove_command name =
-  match vm_runtime with
-  | `Docker -> "docker rm -f " ^ name
-  | `Container -> "container delete --force " ^ name
-
-let required =
-  match Sys.getenv_opt "BACTRIAN_REQUIRE_VM" with
-  | Some "1" -> true
-  | Some _ | None -> false
-
-(* Pulled before the tests, which never pull: a run refuses a missing image. *)
-let pulled = Hashtbl.create 2
-
-let gate images =
-  if not (Lazy.force runtime_works) then
-    if required then
-      Alcotest.fail "BACTRIAN_REQUIRE_VM is 1, but no container runtime works"
-    else begin
-      print_endline "no container runtime on this host: skipped";
-      Alcotest.skip ()
-    end;
-  List.iter
-    (fun image ->
-      if not (Hashtbl.mem pulled image) then begin
-        if not (image_present image || pull image) then
-          Alcotest.failf "cannot pull %s" image;
-        Hashtbl.replace pulled image ()
-      end)
-    images
-
-let run_or_fail cmd =
-  if Sys.command cmd <> 0 then Alcotest.failf "failed: %s" cmd
-
-let copy ~into paths =
-  run_or_fail
-    (Printf.sprintf "mkdir -p %s && cp -R %s %s" (Filename.quote into)
-       (String.concat " "
-          (List.map (fun p -> Filename.quote (in_repo p)) paths))
-       (Filename.quote into))
+open Vm_support
 
 (* The agents, prepared in a world's directory. *)
 
@@ -151,23 +75,6 @@ let python =
                   ])));
         [ Filename.concat venv "bin/python"; Filename.concat into "agent.py" ]);
   }
-
-let container_exists name =
-  match vm_runtime with
-  | `Container -> quiet ("container inspect " ^ Filename.quote name)
-  | `Docker ->
-      let out = Filename.temp_file "docker-ps" ".txt" in
-      Fun.protect ~finally:(fun () -> Sys.remove out) @@ fun () ->
-      run_or_fail
-        (Printf.sprintf "docker ps -a --filter %s --format '{{.Names}}' > %s"
-           (Filename.quote ("name=^" ^ name ^ "$"))
-           (Filename.quote out));
-      String.length (String.trim (read out)) > 0
-
-let no_container (r : Run.result) =
-  Alcotest.(check bool)
-    "no container left" false
-    (container_exists ("bactrian-" ^ r.run_id))
 
 let cycle agent () =
   gate [ agent.image ];
@@ -345,83 +252,133 @@ let seatbelt_control () =
    a tmpfs, where only the exact name of a neighbour is there. container's is a
    staging directory on the host, so a neighbour's other spellings read it. *)
 
-let neighbours_agent =
-  {|import errno, json, os, sys
-world = os.environ["WORLD"]
-
-def read(name):
-    try:
-        with open(os.path.join(world, name)) as h:
-            return h.read().strip()
-    except OSError as e:
-        return errno.errorcode.get(e.errno, str(e.errno))
-
-def write(name):
-    try:
-        with open(os.path.join(world, name), "w"):
-            return "written"
-    except OSError as e:
-        return errno.errorcode.get(e.errno, str(e.errno))
-
-for line in sys.stdin:
-    m = json.loads(line)
-    if m["type"] == "turn":
-        reply = {n: read(n) for n in (".env", ".ENV", ".Env", "sibling.txt", "SIBLING.TXT", "sub/inner.txt")}
-        reply["new.txt"] = write("new.txt")
-        sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
-                                     "content": json.dumps(reply)}) + "\n")
-        sys.stdout.flush()
-    elif m["type"] == "end":
-        break
-|}
-
 let neighbours () =
-  gate [ python_image ];
-  with_world ~vm:python_image "vm-neighbours" @@ fun w ->
-  let file name text =
-    Out_channel.with_open_bin (Filename.concat w.dir name) (fun oc ->
-        output_string oc text)
+  let w, seen =
+    probed "vm-neighbours"
+      ~files:(fun w ->
+        Unix.mkdir (Filename.concat w.dir "sub") 0o700;
+        [
+          (".env", "OPENAI_API_KEY=sk-masked-file\n");
+          ("sibling.txt", "visible\n");
+          ("sub/inner.txt", "inner\n");
+        ])
+      (fun w ->
+        List.map (Filename.concat w.dir)
+          [
+            ".env";
+            ".ENV";
+            ".Env";
+            "sibling.txt";
+            "SIBLING.TXT";
+            "sub/inner.txt";
+          ]
+        @ [ "w:" ^ Filename.concat w.dir "new.txt" ])
   in
-  Unix.mkdir (Filename.concat w.dir "sub") 0o700;
-  file ".env" "OPENAI_API_KEY=sk-masked-file\n";
-  file "sibling.txt" "visible\n";
-  file "sub/inner.txt" "inner\n";
-  file "neighbours.py" neighbours_agent;
-  let r =
-    w.execute
-      ~agent:
-        (Command [ "python3"; "-I"; Filename.concat w.dir "neighbours.py" ])
-      ~variant_env:[ ("WORLD", w.dir) ]
-      ()
-  in
-  Alcotest.(check string) "outcome" "passed" (outcome_name r);
-  check_sandboxed w r;
-  let seen =
-    match entries "reply" r with
-    | [ j ] ->
-        Yojson.Safe.Util.(
-          List.map
-            (fun (k, v) -> (k, to_string v))
-            (to_assoc
-               (Yojson.Safe.from_string (to_string (member "content" j)))))
-    | _ -> Alcotest.fail "expected exactly one reply"
-  in
-  Alcotest.(check (list (pair string string)))
+  Alcotest.(check (list string))
     "what the agent saw"
     [
-      (".env", "ENOENT");
-      (".ENV", "ENOENT");
-      (".Env", "ENOENT");
-      ("sibling.txt", "visible");
-      ( "SIBLING.TXT",
-        match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible" );
-      ("sub/inner.txt", "inner");
-      ("new.txt", "EROFS");
+      "ENOENT";
+      "ENOENT";
+      "ENOENT";
+      "visible";
+      (match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible");
+      "inner";
+      "EROFS";
     ]
-    seen;
+    (List.map snd seen);
   Alcotest.(check bool)
     "nothing written beside it" false
-    (Sys.file_exists (Filename.concat w.dir "new.txt"));
+    (Sys.file_exists (Filename.concat w.dir "new.txt"))
+
+(* sandbox.allow_read: a directory outside the project is there, read-only,
+   with its own .env hidden as the project's is, and its neighbour that the
+   experiment does not name is not there at all. *)
+let readable () =
+  let dir = Filename.concat (Sys.getcwd ()) "tmp-vm-allow-read" in
+  let other = dir ^ "-other" in
+  let remove () =
+    ignore
+      (Sys.command
+         ("rm -rf " ^ Filename.quote dir ^ " " ^ Filename.quote other))
+  in
+  remove ();
+  Fun.protect ~finally:remove @@ fun () ->
+  List.iter
+    (fun d -> Unix.mkdir d 0o700)
+    [ dir; Filename.concat dir "sub"; other ];
+  List.iter
+    (fun (p, text) ->
+      Out_channel.with_open_bin p (fun oc -> output_string oc text))
+    [
+      (Filename.concat dir "data.txt", "shared\n");
+      (Filename.concat dir ".env", "OPENAI_API_KEY=sk-allowed-dir\n");
+      (Filename.concat dir "sub/inner.txt", "inner\n");
+      (Filename.concat other "data.txt", "not allowed\n");
+    ];
+  let _, seen =
+    probed ~allow_read:[ dir ] "vm-allow-read"
+      ~files:(fun _ -> [])
+      (fun _ ->
+        List.map (Filename.concat dir)
+          [ "data.txt"; "sub/inner.txt"; ".env"; ".ENV" ]
+        @ [
+            Filename.concat other "data.txt";
+            "w:" ^ Filename.concat dir "new.txt";
+          ])
+  in
+  Alcotest.(check (list string))
+    "what the agent saw"
+    [ "shared"; "inner"; "ENOENT"; "ENOENT"; "ENOENT"; "EROFS" ]
+    (List.map snd seen);
+  Alcotest.(check bool)
+    "nothing written there" false
+    (Sys.file_exists (Filename.concat dir "new.txt"))
+
+(* The clock (decision 0025). The relay starts the agent's clock at SIM_NOW
+   with libfaketime for the image's C library: musl in the node image, glibc in
+   the Python one. An agent, and the program it starts, read SIM_NOW (give or
+   take the seconds a run takes) instead of the host's clock. *)
+
+let clock_musl () =
+  ignore
+    (clocked ~image:node_image ~name:"vm-clock-musl"
+       ~files:[ ("clock.js", clock_node, 0o644) ]
+       (fun w -> [ "node"; Filename.concat w.dir "clock.js" ])
+      : Yojson.Safe.t)
+
+let clock_glibc () =
+  let reply =
+    clocked ~image:python_image ~name:"vm-clock-glibc"
+      ~files:[ ("clock.py", clock_python, 0o644) ]
+      (fun w -> [ "python3"; "-I"; Filename.concat w.dir "clock.py" ])
+  in
+  (* Python 3.11 and later sleep on CLOCK_MONOTONIC (decision 0009). *)
+  let slept = Yojson.Safe.Util.(to_float (member "slept" reply)) in
+  Alcotest.(check bool)
+    (Printf.sprintf "time.sleep still sleeps (%.1f s)" slept)
+    true
+    (slept >= 0.1 && slept < 5.)
+
+(* A script is followed to its interpreter, in the image. *)
+let clock_script () =
+  ignore
+    (clocked ~image:python_image ~name:"vm-clock-script"
+       ~files:[ ("clock.py", "#!/usr/bin/env python3\n" ^ clock_python, 0o755) ]
+       (fun w -> [ Filename.concat w.dir "clock.py" ])
+      : Yojson.Safe.t)
+
+(* An executable that cannot take a preload is not labelled enforced. *)
+let clock_refused () =
+  gate [ node_image ];
+  with_world ~vm:node_image "vm-clock-refused" @@ fun w ->
+  let r =
+    w.execute ~agent:(Command [ "/bin/does-not-exist-in-the-image" ])
+      ~sim_now:sim_now_text ()
+  in
+  Alcotest.(check string)
+    "contract-only, with the reason"
+    {|{"mode":"contract_only","reason":"unreadable-executable"}|}
+    (Yojson.Safe.to_string (Bactrian_core.Clock_label.to_json r.clock));
   no_container r
 
 (* Teardown from outside: bactrian record, through the command line, with an
@@ -754,7 +711,17 @@ let () =
           (fun a -> Alcotest.test_case a.name `Slow (escapes a))
           [ typescript; python ] );
       ( "masks",
-        [ Alcotest.test_case "a hidden file's neighbours" `Slow neighbours ] );
+        [
+          Alcotest.test_case "a hidden file's neighbours" `Slow neighbours;
+          Alcotest.test_case "allow_read" `Slow readable;
+        ] );
+      ( "clock",
+        [
+          Alcotest.test_case "musl image" `Slow clock_musl;
+          Alcotest.test_case "glibc image" `Slow clock_glibc;
+          Alcotest.test_case "a script" `Slow clock_script;
+          Alcotest.test_case "an executable the image lacks" `Slow clock_refused;
+        ] );
       ( "host processes",
         [
           Alcotest.test_case "none visible in the virtual machine" `Slow

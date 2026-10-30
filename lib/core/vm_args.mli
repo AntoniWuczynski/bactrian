@@ -5,18 +5,18 @@
 
     Every host path is mounted at the same absolute path inside, so the agent's
     command and the paths in its arguments and environment work unchanged: the
-    project root read-only, the run's state and temporary directories and the
-    [allow_write] paths read-write. The deny-list is masked where it is visible:
-    an empty tmpfs over a directory, and for a file a replacement of its
-    directory with every other entry of that directory there again, so the file
-    is not there under any spelling of its name (a bind over the file alone
-    covers one name, and a case-insensitive host has others). Docker's
-    replacement is an empty read-only tmpfs with each entry bound back.
-    container mounts directories only, so its replacement is a staging directory
-    ({!stage}) bound read-only, holding a hard link of each other file and an
-    empty directory for each mount beneath. Nothing outside those mounts is
-    there at all, so the deny-list entries under the user's home need no mask
-    unless a mount shows them. *)
+    project root and the [allow_read] paths read-only, the run's state and
+    temporary directories and the [allow_write] paths read-write. The deny-list
+    is masked where it is visible: an empty tmpfs over a directory, and for a
+    file a replacement of its directory with every other entry of that directory
+    there again, so the file is not there under any spelling of its name (a bind
+    over the file alone covers one name, and a case-insensitive host has
+    others). Docker's replacement is an empty read-only tmpfs with each entry
+    bound back. container mounts directories only, so its replacement is a
+    staging directory ({!stage}) bound read-only, holding a hard link of each
+    other file and an empty directory for each mount beneath. Nothing outside
+    those mounts is there at all, so the deny-list entries under the user's home
+    need no mask unless a mount shows them. *)
 
 type probe = {
   outside : string;  (** To create, outside every writable mount. *)
@@ -32,6 +32,19 @@ type probe = {
 type command =
   | Agent of string list  (** The agent's command and arguments. Non-empty. *)
   | Probe of probe  (** The relay's own probe instead of an agent. *)
+  | Probe_exec of string
+      (** The relay's probe of the image and of the executable a command name
+          leads to ({!Vm_exec_probe}). *)
+
+type faketime = {
+  epoch : int;  (** Unix seconds the agent's clock starts at. *)
+  dir : string;
+      (** The host directory that holds [musl/libfaketimeMT.so.1] and
+          [glibc/libfaketimeMT.so.1], beside the relay. *)
+  libc : Vm_exec_probe.libc;
+      (** The C library the agent's executable is linked against, which picks
+          the library to preload. *)
+}
 
 type entry_kind =
   | File  (** A regular file. *)
@@ -52,6 +65,10 @@ type entry = {
           or a symbolic link to it. *)
 }
 (** An entry of a directory that holds a masked file. *)
+
+type read_kind = [ Sandbox_policy.kind | `Special ]
+(** What is at an [allow_read] path: a socket, a pipe or a device is [`Special].
+*)
 
 type input = {
   kind : Experiment.sandbox_runtime;
@@ -79,6 +96,11 @@ type input = {
           [temp_dir] visible, and no other mask does. *)
   state_dir : string;
   temp_dir : string;
+  allow_read : (string * read_kind) list;
+      (** Existing paths only, each with what is at it. Shown read-only. A path
+          that is another mount's, under a directory mask or under a writable
+          path ([allow_write], the run's own directories) is not mounted again.
+      *)
   allow_write : (string * Sandbox_policy.kind) list;
       (** Existing paths only, each with what is at it. *)
   read_only : string list;
@@ -91,6 +113,11 @@ type input = {
       (** Where container's staging directories go, one numbered directory each:
           in the run's directory, which no mount shows. *)
   forwards : int list;  (** Ports the relay listens on, from 1 to 65535. *)
+  faketime : faketime option;
+      (** For an [Agent]: the relay starts its clock at [epoch], with the
+          library of the image's C library (decision 0025). Docker mounts [dir]
+          read-only at [/bactrian/faketime]. container shows it through the
+          mount of the relay's directory, so [dir] must lie beside the relay. *)
   command : command;
   list_dir : string -> (entry list, string) result;
       (** The entries of a directory that holds a masked file. *)
@@ -120,6 +147,20 @@ type error =
           staging directory would make read-only. *)
   | File_allow_write of string
       (** container, with an [allow_write] path that is a file. *)
+  | Root_allow_read  (** An [allow_read] path of [/]. *)
+  | File_allow_read of string
+      (** container, with an [allow_read] path that is a file. *)
+  | Special_allow_read of string
+      (** An [allow_read] path that is a socket, a pipe or a device. *)
+  | System_allow_read of string
+      (** An [allow_read] path at or under [/run], [/var/run], [/tmp], [/proc],
+          [/sys] or [/dev]: a read-only bind does not stop [connect()] on a
+          socket the user owns there (the D-Bus session bus, a rootless
+          container runtime's socket, an agent's), and the container runs as the
+          host's user. Sockets elsewhere under an [allow_read] path stay
+          reachable. *)
+  | Bactrian_allow_read of string
+      (** An [allow_read] path at or under [.bactrian]. *)
 
 val describe_error : error -> string
 
@@ -128,6 +169,9 @@ val relay_path : string
 
 val relay_dir : string
 (** [/bactrian], where container mounts the relay's directory. *)
+
+val faketime_dir : string
+(** [/bactrian/faketime], where Docker mounts the libraries' directory. *)
 
 type link = {
   name : string;  (** In the staging directory. *)
@@ -159,7 +203,7 @@ val argv : input -> (invocation, error) result
      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
      --memory-swap 4g --log-driver none --pull never --workdir DIR --env-file
      FILE --entrypoint /bactrian/relay --mount|--tmpfs... -- IMAGE --forward
-     PORT... -- AGENT...] (or
+     PORT... [--faketime EPOCH DIR LIBC] -- AGENT...] (or
     [--probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN] in place
     of [-- AGENT...]).
 

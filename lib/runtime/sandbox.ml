@@ -66,6 +66,7 @@ type host = {
   home : string;
   project_root : string;
   bactrian_dir : string;
+  allow_read : string list;
   allow_write : string list;
   deny_read : string list;
 }
@@ -110,6 +111,7 @@ type settings = {
   backend : backend;
   image : string option;
   runtime : Experiment.sandbox_runtime option;
+  allow_read : string list;
   allow_write : string list;
   deny_read : string list;
   bactrian_exe : string;
@@ -182,6 +184,7 @@ let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
     bactrian_dir = host.bactrian_dir;
     state_dir = Option.map resolved state_dir;
     temp_dir = resolved temp_dir;
+    allow_read = host.allow_read;
     allow_write = host.allow_write;
     deny_read = host.deny_read;
     listeners;
@@ -426,6 +429,7 @@ let make_host ~env settings engine =
     home = resolved (home ());
     project_root = Filename.dirname bactrian_dir;
     bactrian_dir;
+    allow_read = List.map resolved settings.allow_read;
     allow_write = List.map resolved settings.allow_write;
     deny_read = List.map resolved settings.deny_read;
   }
@@ -459,6 +463,7 @@ let vm_layout ?(extra = []) ?(read_only = []) (host : host) : Sandbox_vm.layout
   {
     project_root = host.project_root;
     bactrian_dir = host.bactrian_dir;
+    allow_read = host.allow_read;
     allow_write = host.allow_write;
     read_only;
     deny =
@@ -640,6 +645,7 @@ type run = {
   preload : string option;
   cwd : string;
   agent_env : (string * string) list;
+  faketime : int option;
 }
 
 type session = {
@@ -740,7 +746,8 @@ let start ~sw t run agent =
               ~bactrian_exe:host.bactrian_exe ~run_id:run.run_id
               ~run_dir:run.run_dir ~state_dir:(resolved run.state_dir)
               ~temp_dir:(resolved run.temp_dir) ~cwd:(resolved run.cwd)
-              ~port:run.port ~agent_env:run.agent_env agent
+              ~port:run.port ~agent_env:run.agent_env ~faketime:run.faketime
+              agent
           in
           relay_log ~sw run ~argv:bridge.argv ~env:bridge.env ~replaces_env:true
       )
@@ -799,6 +806,17 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
            (String.concat ", " exposed))
   | Sandboxed { host = { engine = Seatbelt | Bubblewrap _ | Vm _; _ }; _ }, _
   | Unsandboxed _, _ ->
+      None
+
+let vm_clock ~env ~wanted t ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent =
+  match t with
+  | Sandboxed { host = { engine = Vm vm; _ } as host; _ } ->
+      Some
+        (Sandbox_vm.clock ~env ~wanted vm (vm_layout host) ~run_id ~run_dir
+           ~state_dir:(resolved state_dir) ~temp_dir:(resolved temp_dir)
+           ~cwd:(resolved cwd) agent)
+  | Sandboxed { host = { engine = Seatbelt | Bubblewrap _; _ }; _ }
+  | Unsandboxed _ ->
       None
 
 (* A deny-list mask is applied after the library is bound, so a library under

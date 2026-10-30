@@ -757,6 +757,11 @@ let test_named_paths () =
        ~extra:{|, "sandbox": {"mode": "strict", "allow_write": ["/tmp"]}|}
        "scen/*.json");
   refused "write" "sandbox.allow_write";
+  write "exp/read.json"
+    (experiment
+       ~extra:{|, "sandbox": {"mode": "strict", "allow_read": ["/tmp"]}|}
+       "scen/*.json");
+  refused "read" "sandbox.allow_read";
   write "exp/s2/s.json"
     {|{"version": 1, "id": "s2", "turns": [{"user": "hi"}], "fixtures": "../../../"}|};
   write "exp/fixtures.json" (experiment "s2/*.json");

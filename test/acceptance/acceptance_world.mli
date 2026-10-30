@@ -54,6 +54,7 @@ type world = {
     ?replay:Run.replay ->
     ?mcp:Mcp_proxy.config list ->
     ?variant_env:(string * string) list ->
+    ?sim_now:string ->
     unit ->
     Run.result;
 }
@@ -64,15 +65,26 @@ val check_sandboxed : world -> Run.result -> unit
 
 val with_world :
   ?vm:string ->
+  ?allow_read:string list ->
   ?deny_read:string list ->
   ?rounds:int ->
   string ->
   (world -> 'a) ->
   'a
-(** [deny_read] names directories to create in the world and deny to the agent.
-    The fake upstream answers [rounds] (default 1) times the two replies of the
-    weather conversation. With [vm] the agents run in the virtual machine
-    sandbox with that image, in the world's directory. *)
+(** [allow_read] names absolute paths the agent may also read. [deny_read] names
+    directories to create in the world and deny to the agent. The fake upstream
+    answers [rounds] (default 1) times the two replies of the weather
+    conversation. With [vm] the agents run in the virtual machine sandbox with
+    that image, in the world's directory. *)
 
 val strict : string -> Run.replay
 val contains : string -> string -> bool
+
+val shell_agent : string
+(** A POSIX shell agent, which needs only the image's [sh], [sed] and [tr]: it
+    answers each turn with the output of [sh -c "$PROBE"], letters, digits,
+    spaces, [=] and [_] only. Run it as [sh FILE] with [PROBE] in [variant_env].
+*)
+
+val reply_text : Run.result -> string
+(** The content of the run's one reply. *)

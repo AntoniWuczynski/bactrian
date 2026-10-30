@@ -25,15 +25,20 @@
    is bounded: a destination that does not drain stops the reading of its
    source.
 
-   relay --forward PORT... -- AGENT ARGV...
+   relay --forward PORT... [--faketime EPOCH DIR LIBC] -- AGENT ARGV...
    relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT
          OTHER_RUN
+   relay --probe-exec NAME
 
    The probe form runs the sandbox checks instead of an agent and writes one
    JSON line on channel 0: the outcome of a connection to a public address and
    to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
    reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
-   no_new_privs is set. */
+   no_new_privs is set.
+
+   --faketime EPOCH DIR LIBC starts the agent's clock at EPOCH (Unix seconds)
+   with the libfaketime of LIBC (musl or glibc) in DIR, and --probe-exec NAME
+   reports on NAME in the image in place of an agent: see relay_image.h. */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -50,10 +55,13 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "relay_image.h"
 
 enum kind {
   K_DATA = 0,
@@ -314,6 +322,12 @@ static void reset_child_signals(void) {
   sigaction(SIGPIPE, &sa, NULL);
 }
 
+static int faketime_set;
+static long long faketime_epoch;
+static const char *faketime_dir;
+static const char *faketime_libc;
+static const char *exec_probe_name;
+
 #define PROBE_ARGS 7
 
 static int run_probe(int port, const char **paths);
@@ -331,6 +345,9 @@ static void start_agent(char **argv, const char **probe, int probe_port) {
     if (dup2(in_pipe[0], 0) < 0 || dup2(out_pipe[1], 1) < 0) _exit(126);
     close_from(3);
     if (probe != NULL) _exit(run_probe(probe_port, probe));
+    if (exec_probe_name != NULL) _exit(relay_probe_exec(exec_probe_name));
+    if (faketime_set)
+      relay_apply_faketime(faketime_epoch, faketime_dir, faketime_libc);
     execvp(argv[0], argv);
     fprintf(stderr, "bactrian relay: cannot start %s: %s\n", argv[0],
             strerror(errno));
@@ -904,9 +921,11 @@ static int parse_port(const char *s) {
 
 static void usage(void) {
   fprintf(stderr,
-          "usage: relay --forward PORT... -- AGENT ARGV...\n"
+          "usage: relay --forward PORT... [--faketime EPOCH DIR LIBC] -- AGENT "
+          "ARGV...\n"
           "       relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED "
-          "MASKED_CASE ROOT OTHER_RUN\n");
+          "MASKED_CASE ROOT OTHER_RUN\n"
+          "       relay --probe-exec NAME\n");
   exit(EXIT_PROTOCOL);
 }
 
@@ -925,6 +944,23 @@ int main(int argc, char **argv) {
       probing = 1;
       for (int k = 0; k < PROBE_ARGS; k++) probe[k] = argv[i + 1 + k];
       i += 1 + PROBE_ARGS;
+    } else if (strcmp(argv[i], "--faketime") == 0 && i + 3 < argc) {
+      char *end;
+      errno = 0;
+      faketime_epoch = strtoll(argv[i + 1], &end, 10);
+      if (errno != 0 || *end != '\0' || end == argv[i + 1] ||
+          faketime_epoch < 0 || faketime_epoch > 253402300799LL ||
+          argv[i + 2][0] != '/' ||
+          (strcmp(argv[i + 3], "musl") != 0 &&
+           strcmp(argv[i + 3], "glibc") != 0))
+        usage();
+      faketime_set = 1;
+      faketime_dir = argv[i + 2];
+      faketime_libc = argv[i + 3];
+      i += 4;
+    } else if (strcmp(argv[i], "--probe-exec") == 0 && i + 1 < argc) {
+      exec_probe_name = argv[i + 1];
+      i += 2;
     } else if (strcmp(argv[i], "--") == 0) {
       i++;
       break;
@@ -932,7 +968,11 @@ int main(int argc, char **argv) {
       usage();
     }
   }
-  if (probing ? (nports != 1 || i < argc) : i >= argc) usage();
+  if (exec_probe_name != NULL) {
+    if (probing || faketime_set || nports != 0 || i < argc) usage();
+  } else if (probing ? (nports != 1 || i < argc || faketime_set) : i >= argc) {
+    usage();
+  }
   /* exec makes the agent dumpable again: this holds for the relay alone. */
   if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) < 0) die("prctl");
   /* Inherited across fork and exec: the agent cannot gain privileges. */

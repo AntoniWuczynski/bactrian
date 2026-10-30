@@ -65,47 +65,78 @@ let probe_executable ~path ~cwd argv0 =
 
 (* The decision *)
 
-type injection = { library : string; epoch : int }
+(* [library] is the host's file to preload, [None] where the virtual machine's
+   relay preloads the image's own. *)
+type injection = { library : string option; epoch : int }
 type t = { label : Clock_label.t; injection : injection option }
+
+type vm =
+  | Vm_unprobed
+  | Vm_unavailable
+  | Vm_image of { library : bool; executable : Elf_probe.kind }
 
 let label t = t.label
 let http_mode = { label = Contract_only Http_mode; injection = None }
-let library t = Option.map (fun i -> i.library) t.injection
+let library t = Option.bind t.injection (fun i -> i.library)
+let epoch t = Option.map (fun i -> i.epoch) t.injection
 
-let decide ?candidates ?(vm = false) ?(hidden = fun (_ : string) -> false)
+let valid_epoch sim_now =
+  match Rfc3339.epoch sim_now with
+  | Some e when e >= 0 -> Ok e
+  | Some _ | None -> Error Clock_label.Invalid_sim_now
+
+(* In the virtual machine the libraries are the image's to load and the relay's
+   to preload, so the host has no library, no sandbox that hides one and no
+   setuid [bwrap]: the image's C library and the agent's executable, probed in
+   the image, decide. *)
+let of_checked = function
+  | Ok injection -> { label = Clock_label.Enforced; injection = Some injection }
+  | Error reason -> { label = Contract_only reason; injection = None }
+
+let decide_vm ~faketime ~sim_now vm =
+  let ( let* ) = Result.bind in
+  of_checked
+    (let* () = if faketime then Ok () else Error Clock_label.Faketime_off in
+     let* epoch = valid_epoch sim_now in
+     match vm with
+     | Vm_unprobed | Vm_unavailable -> Error Clock_label.Vm
+     | Vm_image { library; executable } -> (
+         match Clock_label.of_kind executable with
+         | Contract_only reason -> Error reason
+         | Enforced ->
+             if library then Ok { library = None; epoch }
+             else Error Clock_label.Library_not_found))
+
+let decide ?candidates ?vm ?(hidden = fun (_ : string) -> false)
     ?(stripped = false) ~linux ~faketime ~library_override ~env ~cwd ~agent
     ~sim_now () =
-  let ( let* ) = Result.bind in
-  let checked =
-    let* () = if vm then Error Clock_label.Vm else Ok () in
-    let* () = if linux then Ok () else Error Clock_label.Macos in
-    let* () = if faketime then Ok () else Error Clock_label.Faketime_off in
-    let* library =
-      Option.to_result ~none:Clock_label.Library_not_found
-        (locate ?candidates ~override:library_override ())
-    in
-    let* () =
-      if hidden library then Error Clock_label.Library_hidden else Ok ()
-    in
-    let* () = if stripped then Error Clock_label.Setuid_sandbox else Ok () in
-    let* epoch =
-      match Rfc3339.epoch sim_now with
-      | Some e when e >= 0 -> Ok e
-      | Some _ | None -> Error Clock_label.Invalid_sim_now
-    in
-    let kind =
-      match agent with
-      | [] -> Elf_probe.Not_elf
-      | argv0 :: _ ->
-          probe_executable ~path:(List.assoc_opt "PATH" env) ~cwd argv0
-    in
-    match Clock_label.of_kind kind with
-    | Enforced -> Ok { library; epoch }
-    | Contract_only reason -> Error reason
-  in
-  match checked with
-  | Ok injection -> { label = Enforced; injection = Some injection }
-  | Error reason -> { label = Contract_only reason; injection = None }
+  match vm with
+  | Some vm -> decide_vm ~faketime ~sim_now vm
+  | None ->
+      let ( let* ) = Result.bind in
+      of_checked
+        (let* () = if linux then Ok () else Error Clock_label.Macos in
+         let* () = if faketime then Ok () else Error Clock_label.Faketime_off in
+         let* library =
+           Option.to_result ~none:Clock_label.Library_not_found
+             (locate ?candidates ~override:library_override ())
+         in
+         let* () =
+           if hidden library then Error Clock_label.Library_hidden else Ok ()
+         in
+         let* () =
+           if stripped then Error Clock_label.Setuid_sandbox else Ok ()
+         in
+         let* epoch = valid_epoch sim_now in
+         let kind =
+           match agent with
+           | [] -> Elf_probe.Not_elf
+           | argv0 :: _ ->
+               probe_executable ~path:(List.assoc_opt "PATH" env) ~cwd argv0
+         in
+         match Clock_label.of_kind kind with
+         | Enforced -> Ok { library = Some library; epoch }
+         | Contract_only reason -> Error reason)
 
 (* Injection *)
 
@@ -121,7 +152,8 @@ let preload ~library existing =
 let inject t env =
   match t.injection with
   | None -> env
-  | Some { library; epoch } ->
+  | Some { library = None; epoch = _ } -> env
+  | Some { library = Some library; epoch } ->
       let set =
         [
           ("LD_PRELOAD", preload ~library (List.assoc_opt "LD_PRELOAD" env));

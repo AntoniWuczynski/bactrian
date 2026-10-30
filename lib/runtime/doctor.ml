@@ -212,6 +212,7 @@ let sandbox_probe ~env ~bactrian_exe (target : target option) () =
             backend;
             image;
             runtime;
+            allow_read = [];
             allow_write = [];
             deny_read = [];
             bactrian_exe;
@@ -233,6 +234,7 @@ type vm_host = {
       (** The runtime's name and architecture, or why it does not work. *)
   image_present : string -> (unit, string) result;
   relay_cached : unit -> (bool, string) result;
+  faketime_cached : Vm_exec_probe.libc -> (bool, string) result;
 }
 
 let no_runtime_fix =
@@ -323,6 +325,10 @@ let vm_host ~env runtime : vm_host =
             Result.map ignore (Vm_runtime.image_id ~process_mgr ~clock r image)));
     relay_cached =
       (fun () -> Result.bind (Lazy.force runtime) Vm_runtime.relay_cached);
+    faketime_cached =
+      (fun libc ->
+        Result.bind (Lazy.force runtime) (fun r ->
+            Vm_runtime.faketime_cached r libc));
   }
 
 (* The clock *)
@@ -331,9 +337,9 @@ let vm_host ~env runtime : vm_host =
 let any_sim_now = "2000-01-01T00:00:00Z"
 
 let reason_status : Clock_label.reason -> status = function
-  | Macos | Vm -> Pass
+  | Macos -> Pass
   | Faketime_off | Http_mode -> Skip
-  | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
+  | Vm | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
   | Static_binary | Go_binary | Unreadable_executable ->
       Warn
 
@@ -352,9 +358,67 @@ let reason_text : Clock_label.reason -> string = function
       "the agent's executable is missing, unreadable or not a little-endian \
        ELF file"
   | Http_mode -> "bactrian does not start an HTTP-mode agent"
-  | Vm -> "the agent runs in the virtual machine sandbox"
+  | Vm ->
+      "the virtual machine could not look at the image or build libfaketime \
+       for it"
 
-let clock_check ~linux ~library_override ~path target =
+(* In the virtual machine the relay starts the clock with a libfaketime built
+   for the C library of the agent's executable. The executable and the image
+   are looked at by each run, so all this can say is whether the libraries are
+   there: a missing one is built on the first run that needs it, if the network
+   and the image allow, and otherwise that run is contract-only. A cache that
+   cannot be trusted is not built over, so it warns with its fix. Which library
+   an image needs is only known from the image, so one that is built is enough
+   for a pass. *)
+let vm_clock_check ~(vm : vm_host) ~faketime =
+  if not faketime then
+    check "clock" Skip
+      "contract-only (faketime-off): the experiment turns faketime off"
+  else
+    let found =
+      List.map
+        (fun libc -> (Vm_exec_probe.libc_name libc, vm.faketime_cached libc))
+        [ Vm_exec_probe.Musl; Glibc ]
+    in
+    let names f = List.filter_map f found in
+    let built =
+      names (function n, Ok true -> Some n | _, (Ok false | Error _) -> None)
+    and missing =
+      names (function n, Ok false -> Some n | _, (Ok true | Error _) -> None)
+    and refused =
+      names (function
+        | n, Error why -> Some (Printf.sprintf "for %s images, %s" n why)
+        | _, Ok (_ : bool) -> None)
+    in
+    let images = String.concat " or " in
+    match (refused, built, missing) with
+    | _ :: _, _, _ ->
+        check "clock" Warn
+          (Printf.sprintf
+             "libfaketime cannot be used, so the runs that need it are \
+              contract-only (vm): %s"
+             (String.concat "; " refused))
+    | [], _, [] ->
+        check "clock" Pass
+          "libfaketime is built for musl and glibc images (each run looks at \
+           the agent's executable in the image, and a static or Go one stays \
+           contract-only)"
+    | [], _ :: _, _ :: _ ->
+        check "clock" Pass
+          (Printf.sprintf
+             "libfaketime is built for %s images, and for %s images the first \
+              run that needs it builds it, which needs the network once, and \
+              is contract-only (vm) if that fails"
+             (images built) (images missing))
+    | [], [], _ :: _ ->
+        check "clock" Warn
+          (Printf.sprintf
+             "libfaketime is not built for %s images yet: the first run that \
+              needs it builds it, which needs the network once, and is \
+              contract-only (vm) if that fails"
+             (images missing))
+
+let clock_check ~vm ~linux ~library_override ~path target =
   let contract_only reason =
     check "clock" (reason_status reason)
       (Printf.sprintf "contract-only (%s): %s"
@@ -363,12 +427,13 @@ let clock_check ~linux ~library_override ~path target =
   in
   match target with
   | Some { agent = Http _; _ } -> contract_only Http_mode
-  | Some ({ agent = Command { argv; _ }; dir; faketime; _ } as t) -> (
+  | Some ({ agent = Command _; faketime; _ } as t)
+    when uses_vm ~macos:(not linux) t ->
+      vm_clock_check ~vm ~faketime
+  | Some { agent = Command { argv; _ }; dir; faketime; _ } -> (
       let label =
         Agent_clock.label
-          (Agent_clock.decide
-             ~vm:(uses_vm ~macos:(not linux) t)
-             ~linux ~faketime ~library_override
+          (Agent_clock.decide ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
@@ -460,7 +525,7 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       sandbox_check ~mode ~http_agent ~relay_pending
         ~probe:(sandbox_probe ~env ~bactrian_exe target);
       vm_check ~host:vm target;
-      clock_check ~linux:(Agent_clock.linux ())
+      clock_check ~vm ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;
       tls_check ~available:tls_available ~upstream target;

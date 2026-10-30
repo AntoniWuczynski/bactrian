@@ -8,7 +8,8 @@ type probe = {
   other_run : string;
 }
 
-type command = Agent of string list | Probe of probe
+type command = Agent of string list | Probe of probe | Probe_exec of string
+type faketime = { epoch : int; dir : string; libc : Vm_exec_probe.libc }
 type entry_kind = File | Dir | Special | Link_to_file of string | Other_link
 
 type entry = {
@@ -17,6 +18,8 @@ type entry = {
   identity : (int * int) option;
   masked_file : bool;
 }
+
+type read_kind = [ Sandbox_policy.kind | `Special ]
 
 type input = {
   kind : Experiment.sandbox_runtime;
@@ -34,11 +37,13 @@ type input = {
   runs_dir : string;
   state_dir : string;
   temp_dir : string;
+  allow_read : (string * read_kind) list;
   allow_write : (string * Sandbox_policy.kind) list;
   read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
   staging_dir : string;
   forwards : int list;
+  faketime : faketime option;
   command : command;
   list_dir : string -> (entry list, string) result;
 }
@@ -73,6 +78,16 @@ type error =
   | Root_user
   | Writable_mask_dir of { file : string; dir : string }
   | File_allow_write of string
+  | Root_allow_read
+  | File_allow_read of string
+  | Special_allow_read of string
+  | System_allow_read of string
+  | Bactrian_allow_read of string
+
+(* Directories that hold the sockets of a user's daemons (the D-Bus session bus
+   and a rootless Docker or Podman socket under /run/user/UID, ssh-agent's in
+   /tmp) or are the kernel's own. *)
+let system_dirs = [ "/run"; "/var/run"; "/tmp"; "/proc"; "/sys"; "/dev" ]
 
 let describe_error = function
   | Bad_path { what; path } ->
@@ -88,8 +103,9 @@ let describe_error = function
   | Empty_agent -> "no agent command"
   | Hidden_workdir d ->
       Printf.sprintf
-        "the agent's working directory %s is outside the project, its run and \
-         sandbox.allow_write, so the virtual machine does not show it"
+        "the agent's working directory %s is outside the project, its run, \
+         sandbox.allow_read and sandbox.allow_write, so the virtual machine \
+         does not show it"
         d
   | Mask_in_root f ->
       Printf.sprintf
@@ -120,9 +136,37 @@ let describe_error = function
         "sandbox.allow_write %s is a file, which container cannot mount (it \
          mounts directories only). Fix: name its directory"
         path
+  | Root_allow_read ->
+      "sandbox.allow_read / would replace the image's whole file system. Fix: \
+       name the directories the agent reads"
+  | File_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is a file, which container cannot mount (it \
+         mounts directories only). Fix: name its directory"
+        path
+  | Special_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is a socket, a pipe or a device, and a \
+         read-only mount does not stop connect() on a socket. Fix: name a \
+         directory of files"
+        path
+  | System_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is in a directory where the system keeps its \
+         sockets (%s). A read-only mount does not stop connect() on a socket, \
+         so the agent would reach a daemon of this user. Fix: name a directory \
+         of files"
+        path
+        (String.concat ", " system_dirs)
+  | Bactrian_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is in .bactrian, which the virtual machine \
+         hides apart from the run's own directories and sandbox.allow_write"
+        path
 
 let relay_path = "/bactrian/relay"
 let relay_dir = "/bactrian"
+let faketime_dir = "/bactrian/faketime"
 
 (* Fixed limits, so an agent that forks without end or fills memory or /tmp
    starves neither the virtual machine's other containers nor, on Linux, the
@@ -257,16 +301,54 @@ let plain_mounts i =
       dirs
   in
   let masked path = List.exists (String.equal path) (dirs @ files) in
+  (* One bind to a path, where the first is listed: writable when any bind of
+     that path is (an allow_write of the project root or of a read-only path
+     wins), and the project root is shown once. *)
+  let once binds =
+    let writable path =
+      List.exists
+        (function
+          | Bind { path = p; writable } -> writable && String.equal p path
+          | Mask_dir _ | Mask_file _ | Mask_parent _ -> false)
+        binds
+    in
+    List.fold_left
+      (fun kept b ->
+        if
+          List.exists (fun k -> String.equal (mount_path k) (mount_path b)) kept
+        then kept
+        else
+          kept
+          @ [
+              (match b with
+              | Bind { path; writable = false } when writable path ->
+                  Bind { path; writable = true }
+              | Bind _ | Mask_dir _ | Mask_file _ | Mask_parent _ -> b);
+            ])
+      [] binds
+  in
   let binds =
-    (if masked i.project_root then []
-     else [ Bind { path = i.project_root; writable = false } ])
-    @ List.filter_map
-        (fun (own, writable, path) ->
-          if hidden ~own path || masked path then None
-          else Some (Bind { path; writable }))
-        (List.map (fun p -> (true, true, p)) [ i.state_dir; i.temp_dir ]
-        @ List.map (fun p -> (true, false, p)) i.read_only
-        @ List.map (fun (p, _) -> (false, true, p)) i.allow_write)
+    once
+      ((if masked i.project_root then []
+        else [ Bind { path = i.project_root; writable = false } ])
+      @ List.filter_map
+          (fun (own, writable, path) ->
+            if hidden ~own path || masked path then None
+            else Some (Bind { path; writable }))
+          (List.map (fun p -> (true, true, p)) [ i.state_dir; i.temp_dir ]
+          @ List.map (fun p -> (true, false, p)) i.read_only
+          @ List.map (fun (p, _) -> (false, true, p)) i.allow_write
+          @ List.filter_map
+              (fun (p, _) ->
+                (* On Seatbelt and bubblewrap an allow_read under a writable
+                   path stays writable, so it is not made read-only here. *)
+                if
+                  List.exists
+                    (fun w -> (not (String.equal w p)) && within ~dir:w p)
+                    (i.state_dir :: i.temp_dir :: List.map fst i.allow_write)
+                then None
+                else Some (false, false, p))
+              i.allow_read))
   in
   let masks =
     List.map (fun d -> Mask_dir d) dirs @ List.map (fun f -> Mask_file f) files
@@ -446,21 +528,46 @@ let argv i =
          ("the temporary directory", i.temp_dir);
          ("the staging directory", i.staging_dir);
        ]
+      @ List.map
+          (fun (f : faketime) -> ("the libfaketime directory", f.dir))
+          (Option.to_list i.faketime)
+      @ List.map (fun (p, _) -> ("sandbox.allow_read", p)) i.allow_read
       @ List.map (fun (p, _) -> ("sandbox.allow_write", p)) i.allow_write
       @ List.map (fun p -> ("a read-only path", p)) i.read_only
       @ List.map (fun (p, _) -> ("the deny-list path", p)) i.deny)
+  in
+  let* () =
+    all
+      (fun (p, k) ->
+        if String.equal p "/" then Error Root_allow_read
+        else if List.exists (fun d -> within ~dir:d p) system_dirs then
+          Error (System_allow_read p)
+        else if within ~dir:i.bactrian_dir p then Error (Bactrian_allow_read p)
+        else
+          match k with
+          | `Special -> Error (Special_allow_read p)
+          | `Dir | `File | `Absent -> Ok ())
+      i.allow_read
   in
   let* () =
     match i.kind with
     | `Docker -> Ok ()
     | `Container ->
         let* () = if i.uid = 0 then Error Root_user else Ok () in
+        let* () =
+          all
+            (fun (p, k) ->
+              match k with
+              | `File -> Error (File_allow_write p)
+              | `Dir | `Absent -> Ok ())
+            i.allow_write
+        in
         all
           (fun (p, k) ->
             match k with
-            | `File -> Error (File_allow_write p)
-            | `Dir | `Absent -> Ok ())
-          i.allow_write
+            | `File -> Error (File_allow_read p)
+            | `Dir | `Absent | `Special -> Ok ())
+          i.allow_read
   in
   let* () = all check_port i.forwards in
   let* mounts, stages = mounts i in
@@ -489,6 +596,9 @@ let argv i =
         in
         let* () = all check_argument paths in
         Ok ("--probe" :: paths)
+    | Probe_exec name ->
+        let* () = check_argument name in
+        Ok [ "--probe-exec"; name ]
   in
   let* () =
     all check_argument
@@ -499,6 +609,37 @@ let argv i =
     Option.map
       (fun (s : stage) -> s.dir)
       (List.find_opt (fun (s : stage) -> String.equal s.over path) stages)
+  in
+  (* The clock is the agent's alone. Docker mounts the libraries' directory
+     beside the relay. container's mount of the relay's directory shows it,
+     because the cache keeps them side by side. *)
+  let faketime =
+    match (i.command, i.faketime) with
+    | Agent _, Some f -> Some f
+    | (Agent _ | Probe _ | Probe_exec _), _ -> None
+  in
+  let faketime_mount, faketime_flags =
+    match (i.kind, faketime) with
+    | _, None -> ([], [])
+    | `Docker, Some f ->
+        ( [
+            "--mount";
+            bind_value ~source:f.dir ~target:faketime_dir ~writable:false;
+          ],
+          [
+            "--faketime";
+            string_of_int f.epoch;
+            faketime_dir;
+            Vm_exec_probe.libc_name f.libc;
+          ] )
+    | `Container, Some f ->
+        ( [],
+          [
+            "--faketime";
+            string_of_int f.epoch;
+            Filename.concat relay_dir (Filename.basename f.dir);
+            Vm_exec_probe.libc_name f.libc;
+          ] )
   in
   let start, flags, entrypoint, relay_mount =
     match i.kind with
@@ -536,11 +677,11 @@ let argv i =
         @ [ "--network"; "none"; "--read-only"; "--cap-drop"; "ALL" ]
         @ flags @ [ "--workdir"; i.workdir ]
         @ [ "--env-file"; i.env_file; "--entrypoint"; entrypoint ]
-        @ [ "--mount"; relay_mount ]
+        @ [ "--mount"; relay_mount ] @ faketime_mount
         @ List.concat_map (mount_args i.kind ~stage_of) mounts
         @ [ "--"; i.image ]
         @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
-        @ tail;
+        @ faketime_flags @ tail;
       stages;
     }
 

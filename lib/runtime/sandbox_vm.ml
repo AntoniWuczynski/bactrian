@@ -7,7 +7,17 @@ type t = {
   relay : string;
   process_mgr : Eio_unix.Process.mgr_ty Eio.Resource.t;
   clock : float Eio.Time.clock_ty Eio.Resource.t;
+  lock : Eio.Mutex.t;  (** Held while the image is probed or a library built. *)
+  executables :
+    (string * string * string, (executable, string) result) Hashtbl.t;
+      (** What the probe found, or why it failed, by image ID, working directory
+          and command name. *)
+  libraries : (Vm_exec_probe.libc, bool) Hashtbl.t;
+      (** Whether libfaketime was built for a C library, this process. *)
 }
+
+and executable = { libc : Vm_exec_probe.libc option; kind : Elf_probe.kind }
+(** [libc]: the library to preload ({!Vm_exec_probe.libc}). *)
 
 let runtime_name t = Vm_runtime.name t.runtime
 let kind t = Vm_runtime.kind t.runtime
@@ -25,11 +35,23 @@ let prepare ~env requested ~image =
   let (_ : string list) = Vm_runtime.remove_stale ~process_mgr ~clock runtime in
   let* image_id = Vm_runtime.image_id ~process_mgr ~clock runtime image in
   let* relay = Vm_runtime.relay ~process_mgr ~clock runtime in
-  Ok { runtime; image; image_id; relay; process_mgr; clock }
+  Ok
+    {
+      runtime;
+      image;
+      image_id;
+      relay;
+      process_mgr;
+      clock;
+      lock = Eio.Mutex.create ();
+      executables = Hashtbl.create 4;
+      libraries = Hashtbl.create 2;
+    }
 
 type layout = {
   project_root : string;
   bactrian_dir : string;
+  allow_read : string list;
   allow_write : string list;
   read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
@@ -93,14 +115,15 @@ let list_dir ~masked dir =
              { name; kind; identity; masked_file })
            (List.sort String.compare (Array.to_list names)))
 
-(* What is at each existing allow_write path: container mounts directories
-   only. *)
-let allow_write_kinds paths =
+(* What is at each existing allow_read or allow_write path: container mounts
+   directories only. *)
+let path_kinds ~special paths =
   List.filter_map
     (fun p ->
       match (Unix.stat p).st_kind with
       | S_DIR -> Some (p, `Dir)
-      | S_REG | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> Some (p, `File)
+      | S_REG | S_LNK -> Some (p, `File)
+      | S_CHR | S_BLK | S_FIFO | S_SOCK -> Some (p, special)
       | exception Unix.Unix_error _ -> None)
     paths
 
@@ -130,8 +153,8 @@ let remove_stale_staging ~runs_dir =
               | _ -> None))
         (Array.to_list runs)
 
-let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
-    ~forwards command =
+let invocation t layout ~run_id ~name ~run_dir ~env_file ~state_dir ~temp_dir
+    ~cwd ~forwards ?faketime command =
   let masked =
     List.filter_map
       (fun (p, k) ->
@@ -143,7 +166,7 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
        {
          kind = Vm_runtime.kind t.runtime;
          runtime = Vm_runtime.exe t.runtime;
-         name = "bactrian-" ^ run_id;
+         name;
          labels = Vm_runtime.labels ~run_id;
          uid = Unix.getuid ();
          gid = Unix.getgid ();
@@ -159,11 +182,13 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          runs_dir = Filename.concat layout.bactrian_dir "runs";
          state_dir;
          temp_dir;
-         allow_write = allow_write_kinds layout.allow_write;
+         allow_read = path_kinds ~special:`Special layout.allow_read;
+         allow_write = path_kinds ~special:`File layout.allow_write;
          read_only = layout.read_only;
          deny = layout.deny;
          staging_dir = staging_dir ~run_dir;
          forwards;
+         faketime;
          command;
          list_dir = list_dir ~masked;
        })
@@ -300,26 +325,37 @@ let last_line text =
   |> List.filter (fun l -> not (String.equal (String.trim l) ""))
   |> List.fold_left (fun _ l -> Some l) None
 
-let probe ~env t layout ~dir (paths : Vm_args.probe) =
-  let id = Filename.basename dir in
-  let name = "bactrian-" ^ id in
-  let state_dir = Filename.concat dir "state"
-  and temp_dir = Filename.concat dir "tmp" in
-  Fun.protect ~finally:(fun () -> clean_up t ~run_dir:dir ~name) @@ fun () ->
+(* Runs the relay in place of an agent, in a container built like a run's, and
+   gives the last line it wrote on channel 0. With [listener] it has a probe
+   listener of its own to connect to. The container, its staging directory and
+   the environment file are removed after. *)
+let relay_line ~env t layout ~run_id ~name ~dir ~state_dir ~temp_dir ~cwd
+    ~listener command =
+  (* Protected, as a switch's release is: after a cancel, the container would
+     not be removed, and the exception would escape as [Fun.Finally_raised]. *)
+  Fun.protect ~finally:(fun () ->
+      Eio.Cancel.protect (fun () -> clean_up t ~run_dir:dir ~name))
+  @@ fun () ->
   let* env_file = write_env_file ~dir [] in
+  Fun.protect ~finally:(fun () -> remove_file env_file) @@ fun () ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
-  let listener =
-    Eio.Net.listen ~sw ~backlog:8 ~reuse_addr:true net
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
-  greet ~sw listener;
-  let port =
-    match Eio.Net.listening_addr listener with `Tcp (_, p) -> p | `Unix _ -> 0
+  let forwards =
+    if listener then begin
+      let listener =
+        Eio.Net.listen ~sw ~backlog:8 ~reuse_addr:true net
+          (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+      in
+      greet ~sw listener;
+      match Eio.Net.listening_addr listener with
+      | `Tcp (_, p) -> [ p ]
+      | `Unix _ -> [ 0 ]
+    end
+    else []
   in
   let* invocation =
-    invocation t layout ~run_id:id ~run_dir:dir ~env_file ~state_dir ~temp_dir
-      ~cwd:state_dir ~forwards:[ port ] (Probe paths)
+    invocation t layout ~run_id ~name ~run_dir:dir ~env_file ~state_dir
+      ~temp_dir ~cwd ~forwards command
   in
   let* argv = launch t ~run_dir:dir ~name invocation in
   let out = Buffer.create 256 and err = Buffer.create 256 in
@@ -329,7 +365,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
           Ok
             (Vm_bridge.run ~net ~clock:t.clock ~process_mgr:t.process_mgr
                ~env:(Vm_runtime.client_env t.runtime)
-               ~forwards:[ port ]
+               ~forwards
                ~stdin:(Eio.Flow.string_source "")
                ~stdout:(Eio.Flow.buffer_sink out)
                ~stderr:(Eio.Flow.buffer_sink err)
@@ -349,15 +385,22 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
           | None -> "")
     | Ok (Ok code) -> Ok code
   in
+  match last_line (Buffer.contents out) with
+  | Some l -> Ok l
+  | None ->
+      Error
+        (Printf.sprintf "the probe gave no report (exit status %d)%s" code
+           (match last_line (Buffer.contents err) with
+           | Some l -> ": " ^ l
+           | None -> ""))
+
+let probe ~env t layout ~dir (paths : Vm_args.probe) =
+  let id = Filename.basename dir in
+  let state_dir = Filename.concat dir "state" in
   let* line =
-    match last_line (Buffer.contents out) with
-    | Some l -> Ok l
-    | None ->
-        Error
-          (Printf.sprintf "the probe gave no report (exit status %d)%s" code
-             (match last_line (Buffer.contents err) with
-             | Some l -> ": " ^ l
-             | None -> ""))
+    relay_line ~env t layout ~run_id:id ~name:("bactrian-" ^ id) ~dir ~state_dir
+      ~temp_dir:(Filename.concat dir "tmp")
+      ~cwd:state_dir ~listener:true (Probe paths)
   in
   let* report =
     Result.map_error
@@ -383,12 +426,114 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
         ("the virtual machine sandbox does not enforce its policy: "
        ^ String.concat "; " wrong)
 
+(* The clock *)
+
+(* What the relay finds of [name] in the image, run in a container built like
+   the run's. *)
+let exec_report ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd name =
+  let* line =
+    relay_line ~env t layout ~run_id
+      ~name:("bactrian-" ^ run_id ^ "-exec")
+      ~dir:run_dir ~state_dir ~temp_dir ~cwd ~listener:false (Probe_exec name)
+  in
+  Result.map_error
+    (fun m ->
+      Printf.sprintf "the executable probe's report is unreadable (%s)" m)
+    (Vm_exec_probe.of_line line)
+
+(* The kind and the C library of the executable that [argv0] leads to in the
+   image, following a [#!] line one level as {!Agent_clock.probe_executable}
+   does on the host. *)
+let executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd argv0
+    =
+  let report =
+    exec_report ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
+  in
+  let* first = report argv0 in
+  let* last =
+    match Option.map Shebang.parse first.executable with
+    | Some (Some (Interpreter program | Env_program program)) -> report program
+    | Some None | None -> Ok first
+  in
+  Ok
+    {
+      libc = Vm_exec_probe.libc ~arch:(Vm_runtime.arch t.runtime) last;
+      kind =
+        (match last.executable with
+        | Some prefix -> Elf_probe.probe prefix
+        | None -> Elf_probe.Not_elf);
+    }
+
+let library_ready t libc =
+  match Hashtbl.find_opt t.libraries libc with
+  | Some built -> built
+  | None ->
+      let built =
+        Result.is_ok
+          (Vm_runtime.faketime ~process_mgr:t.process_mgr ~clock:t.clock
+             t.runtime libc)
+      in
+      Hashtbl.replace t.libraries libc built;
+      built
+
+let probed t key probe =
+  match Hashtbl.find_opt t.executables key with
+  | Some found -> found
+  | None ->
+      let found = probe () in
+      Hashtbl.replace t.executables key found;
+      found
+
+(* Not protected from cancellation: the probe and the build take minutes, and
+   an interrupt must not wait for them. The tables stay consistent, because
+   an answer is only recorded when it is complete, so an exception (a cancel
+   included) unlocks the mutex ([use_ro]) instead of poisoning it for every
+   later run ([use_rw]). *)
+let clock ~env ~wanted t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent
+    : Agent_clock.vm =
+  match (wanted, agent) with
+  | false, _ -> Agent_clock.Vm_unprobed
+  | true, [] -> Agent_clock.Vm_image { library = false; executable = Not_elf }
+  | true, argv0 :: _ -> (
+      Eio.Mutex.use_ro t.lock @@ fun () ->
+      match
+        probed t (t.image_id, cwd, argv0) (fun () ->
+            executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir
+              ~cwd argv0)
+      with
+      | Error _ -> Agent_clock.Vm_unavailable
+      | Ok { libc; kind } -> (
+          match (kind, libc) with
+          | Dynamic, Some libc ->
+              if library_ready t libc then
+                Agent_clock.Vm_image { library = true; executable = kind }
+              else Agent_clock.Vm_unavailable
+          | Dynamic, None | (Static | Go | Not_elf), _ ->
+              Agent_clock.Vm_image { library = false; executable = kind }))
+
 (* One run *)
 
 type session = { argv : string list; env : (string * string) list }
 
+let faketime_dir t =
+  Filename.concat
+    (Vm_runtime.relay_cache_dir ())
+    (Vm_runtime.faketime_name t.runtime)
+
+(* The library the clock chose for this agent, kept by {!clock}. *)
+let faketime_libc t ~cwd agent =
+  match agent with
+  | argv0 :: _ -> (
+      match Hashtbl.find_opt t.executables (t.image_id, cwd, argv0) with
+      | Some (Ok { libc = Some libc; _ }) -> Ok libc
+      | Some (Ok { libc = None; _ } | Error _) | None ->
+          Error
+            "the agent's C library was not found, so its clock cannot be \
+             started")
+  | [] -> Error "no agent command"
+
 let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
-    ~port ~agent_env agent =
+    ~port ~agent_env ~faketime agent =
   let name = "bactrian-" ^ run_id in
   let* env_file =
     write_env_file ~dir:run_dir
@@ -397,9 +542,16 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
   Eio.Switch.on_release sw (fun () ->
       clean_up t ~run_dir ~name;
       remove_file env_file);
+  let* faketime =
+    match faketime with
+    | None -> Ok None
+    | Some epoch ->
+        let* libc = faketime_libc t ~cwd agent in
+        Ok (Some ({ epoch; dir = faketime_dir t; libc } : Vm_args.faketime))
+  in
   let* invocation =
-    invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
-      ~forwards:[ port ] (Agent agent)
+    invocation t layout ~run_id ~name ~run_dir ~env_file ~state_dir ~temp_dir
+      ~cwd ~forwards:[ port ] ?faketime (Agent agent)
   in
   let* runtime_argv = launch t ~run_dir ~name invocation in
   Ok

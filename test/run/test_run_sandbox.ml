@@ -35,6 +35,7 @@ let strict ?(deny_read = []) ctx =
         backend = (Sandbox.host_backend () :> Sandbox.backend);
         image = None;
         runtime = None;
+        allow_read = [];
         allow_write = [];
         deny_read;
         bactrian_exe = bactrian_bin;
@@ -529,6 +530,7 @@ let preflight ctx mode ~warn =
       backend = (Sandbox.host_backend () :> Sandbox.backend);
       image = None;
       runtime = None;
+      allow_read = [];
       allow_write = [];
       deny_read = [];
       bactrian_exe = "/usr/bin/false";
@@ -582,6 +584,7 @@ let test_seatbelt_hint =
               backend = `Auto;
               image = None;
               runtime = None;
+              allow_read = [];
               allow_write = [];
               deny_read = [];
               bactrian_exe = bactrian_bin;

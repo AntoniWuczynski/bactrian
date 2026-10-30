@@ -66,6 +66,7 @@ type settings = {
   backend : backend;
   image : string option;  (** The image of the [vm] backend. *)
   runtime : Bactrian_core.Experiment.sandbox_runtime option;
+  allow_read : string list;  (** [sandbox.allow_read], absolute. *)
   allow_write : string list;  (** [sandbox.allow_write], absolute. *)
   deny_read : string list;  (** [sandbox.deny_read], absolute. *)
   bactrian_exe : string;
@@ -140,6 +141,9 @@ type run = {
   agent_env : (string * string) list;
       (** The agent's environment, which the virtual machine passes to the
           container through a file, since its command is the bridge's. *)
+  faketime : int option;
+      (** The Unix time the virtual machine's relay starts the agent's clock at
+          ({!Agent_clock.epoch}). The other backends ignore it. *)
 }
 
 val strips_preload : t -> bool
@@ -239,6 +243,21 @@ val checker :
     Linux it runs under [bactrian __sandbox-init] with nothing to forward.
     Unsandboxed, [argv] unchanged. What the sandbox denies a checker is not
     collected. *)
+
+val vm_clock :
+  env:Eio_unix.Stdenv.base ->
+  wanted:bool ->
+  t ->
+  run_id:string ->
+  run_dir:string ->
+  state_dir:string ->
+  temp_dir:string ->
+  cwd:string ->
+  string list ->
+  Agent_clock.vm option
+(** [Some] what decides the agent's clock when the agent runs in the virtual
+    machine ({!Sandbox_vm.clock}), run before {!start} with the same directories
+    as its [run]. [None] for every other backend. *)
 
 val preload_hidden : t -> string -> bool
 (** [preload_hidden t library] is whether the library, a resolved absolute path,

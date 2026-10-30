@@ -106,11 +106,12 @@ let experiment t root ~sandbox (c : Bactrian_runtime.Executor.contents) =
     if t.trust_project then Ok ()
     else
       all
-        (fun p ->
+        (fun (field, p) ->
           Result.map_error
             (fun m -> m ^ " (serve-mcp --trust-project allows it)")
-            (inside root ~field:"sandbox.allow_write" (in_dir c.dir p)))
-        e.sandbox_allow_write
+            (inside root ~field (in_dir c.dir p)))
+        (List.map (fun p -> ("sandbox.allow_read", p)) e.sandbox_allow_read
+        @ List.map (fun p -> ("sandbox.allow_write", p)) e.sandbox_allow_write)
   in
   all
     (fun (file, (s : Scenario.t)) ->
@@ -137,12 +138,13 @@ let describe t =
       "Checkers (in check and in experiments) run in the sandbox too, with no \
        network and writes only to a temporary directory of their own.";
       (if t.trust_project then
-         "MCP servers, passed environment variables, writable paths outside \
-          this directory and checkers in sandbox auto or off are allowed: they \
-          run or reach outside the sandbox."
+         "MCP servers, passed environment variables, readable or writable \
+          paths outside this directory and checkers in sandbox auto or off are \
+          allowed: they run or reach outside the sandbox."
        else
-         "MCP servers, passed environment variables, writable paths outside \
-          this directory and checkers in sandbox auto or off are refused (the \
-          user allows them by starting serve-mcp with --trust-project).");
+         "MCP servers, passed environment variables, readable or writable \
+          paths outside this directory and checkers in sandbox auto or off are \
+          refused (the user allows them by starting serve-mcp with \
+          --trust-project).");
       Printf.sprintf "At most %d jobs run at once." t.max_jobs;
     ]

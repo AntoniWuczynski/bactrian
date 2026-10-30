@@ -210,6 +210,7 @@ let sandbox ~env ~dir =
         backend = (Sandbox.host_backend () :> Sandbox.backend);
         image = None;
         runtime = None;
+        allow_read = [];
         allow_write = [];
         deny_read = [];
         bactrian_exe = executable "BACTRIAN_EXE";

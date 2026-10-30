@@ -58,6 +58,24 @@ let test_not_elf () =
   check "interpreter name cut off is still an interpreter" Dynamic
     (String.sub whole 0 130)
 
+let test_interpreter () =
+  let interpreter = Alcotest.(option string) in
+  Alcotest.check interpreter "the path, without its NUL"
+    (Some "/lib/ld-musl-aarch64.so.1")
+    (Elf_probe.interpreter
+       (E.elf
+          [ (E.pt_load, "x"); (E.pt_interp, "/lib/ld-musl-aarch64.so.1\000") ]));
+  Alcotest.check interpreter "32-bit" (Some "/lib/ld-linux.so.2")
+    (Elf_probe.interpreter
+       (E.elf ~class64:false [ (E.pt_interp, "/lib/ld-linux.so.2\000") ]));
+  Alcotest.check interpreter "static" None
+    (Elf_probe.interpreter (E.elf [ (E.pt_load, "code") ]));
+  Alcotest.check interpreter "not ELF" None
+    (Elf_probe.interpreter "#!/bin/sh\n");
+  let whole = E.elf [ (E.pt_interp, "/lib/ld-musl-aarch64.so.1\000") ] in
+  Alcotest.check interpreter "cut off by the prefix" None
+    (Elf_probe.interpreter (String.sub whole 0 130))
+
 let test_hostile_notes () =
   (* Sizes that point past the data must end the walk, not loop or raise. *)
   let huge = E.note ~name:"Go\000\000" ~kind:9 ~desc:"" in
@@ -70,6 +88,59 @@ let test_hostile_notes () =
     (E.elf [ (E.pt_interp, E.interp); (E.pt_note, Bytes.to_string huge) ]);
   check "note segment shorter than a note header" Dynamic
     (E.elf [ (E.pt_interp, E.interp); (E.pt_note, "abc") ])
+
+(* Offsets and sizes near [max_int] must not overflow past the bounds checks
+   and make [String.sub] raise. *)
+let test_overflow () =
+  let interp_entry = 64 and note_entry = 64 + 56 in
+  let with_word whole ~at v =
+    let b = Bytes.of_string whole in
+    Bytes.set_int64_le b at v;
+    Bytes.to_string b
+  in
+  let whole = E.elf [ (E.pt_interp, E.interp); (E.pt_note, E.gnu_note) ] in
+  let huge = Int64.of_int max_int in
+  let both =
+    [
+      ("offset", with_word whole ~at:(interp_entry + 8) huge);
+      ("size", with_word whole ~at:(interp_entry + 32) huge);
+      ( "offset and size",
+        with_word
+          (with_word whole ~at:(interp_entry + 8) 16L)
+          ~at:(interp_entry + 32) huge );
+      ("note size", with_word whole ~at:(note_entry + 32) huge);
+      ("note offset", with_word whole ~at:(note_entry + 8) huge);
+      ( "table offset",
+        let b = Bytes.of_string whole in
+        Bytes.set_int64_le b 32 huge;
+        Bytes.to_string b );
+    ]
+  in
+  List.iter
+    (fun (name, s) ->
+      ignore (Elf_probe.probe s : Elf_probe.kind);
+      Alcotest.(check (option string))
+        ("the interpreter, huge " ^ name)
+        (if String.starts_with ~prefix:"note" name then
+           Some "/lib64/ld-linux-x86-64.so.2"
+         else None)
+        (Elf_probe.interpreter s))
+    both
+
+let test_machine () =
+  Alcotest.(check (option int))
+    "x86-64" (Some 62)
+    (Elf_probe.machine (E.elf []));
+  Alcotest.(check (option int))
+    "AArch64" (Some 183)
+    (Elf_probe.machine (E.elf ~machine:183 []));
+  Alcotest.(check (option int))
+    "32-bit" (Some 3)
+    (Elf_probe.machine (E.elf ~class64:false []));
+  Alcotest.(check (option int)) "not ELF" None (Elf_probe.machine "#!/bin/sh\n");
+  Alcotest.(check (option int))
+    "cut off" None
+    (Elf_probe.machine "\x7fELF\002\001")
 
 let shebang =
   Alcotest.testable
@@ -121,7 +192,10 @@ let () =
           Alcotest.test_case "dynamic and static" `Quick test_linking;
           Alcotest.test_case "go build id" `Quick test_go;
           Alcotest.test_case "not an elf file" `Quick test_not_elf;
+          Alcotest.test_case "the interpreter" `Quick test_interpreter;
           Alcotest.test_case "malformed notes" `Quick test_hostile_notes;
+          Alcotest.test_case "sizes that overflow" `Quick test_overflow;
+          Alcotest.test_case "the machine" `Quick test_machine;
         ] );
       ( "shebang",
         [ Alcotest.test_case "the program it starts" `Quick test_shebang ] );

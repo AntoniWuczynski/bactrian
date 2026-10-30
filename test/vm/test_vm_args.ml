@@ -62,8 +62,19 @@ let default_listing =
       ] );
   ]
 
-let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
-    ?(listing = default_listing)
+let kinds =
+  List.map (fun p ->
+      (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
+
+let read_kinds =
+  List.map (fun p ->
+      ( p,
+        if String.ends_with ~suffix:".sock" p then `Special
+        else if String.ends_with ~suffix:".txt" p then `File
+        else `Dir ))
+
+let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
+    ?(read_only = []) ?faketime ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -88,15 +99,13 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
     runs_dir = "/p/.bactrian/runs";
     state_dir = "/p/.bactrian/runs/r1/state";
     temp_dir = "/p/.bactrian/runs/r1/tmp";
-    allow_write =
-      List.map
-        (fun p ->
-          (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
-        allow_write;
-    read_only = [];
+    allow_read = read_kinds allow_read;
+    allow_write = kinds allow_write;
+    read_only;
     deny;
     staging_dir = "/p/.bactrian/runs/r1/staging";
     forwards = [ 4242 ];
+    faketime;
     command;
     list_dir =
       (fun dir ->
@@ -438,8 +447,9 @@ let test_errors () =
     (error (input ~workdir:"p" ()));
   Alcotest.(check string)
     "a working directory the container lacks"
-    "the agent's working directory /elsewhere is outside the project, its run \
-     and sandbox.allow_write, so the virtual machine does not show it"
+    "the agent's working directory /elsewhere is outside the project, its run, \
+     sandbox.allow_read and sandbox.allow_write, so the virtual machine does \
+     not show it"
     (error (input ~workdir:"/elsewhere" ()));
   Alcotest.(check string)
     "no agent" "no agent command"
@@ -759,6 +769,191 @@ let test_container_errors () =
          input ~allow_write:[ "/p/out.txt" ] ();
        ])
 
+(* allow_read: read-only binds of paths outside the project, with the same
+   masks as the project. *)
+let test_readable_paths () =
+  let deny =
+    default_deny
+    @ [ ("/p/secret", `Dir); ("/r/.env", `File); ("/r/.env.local", `Absent) ]
+  in
+  let listing =
+    ("/r", [ plain ".env"; plain "data.txt"; dir "sub"; plain ".envrc" ])
+    :: default_listing
+  in
+  let m =
+    mounts
+      (input ~deny ~listing
+         ~allow_read:[ "/r"; "/p/secret/r"; "/w"; "/p"; "/h/lib" ]
+         ~allow_write:[ "/w" ] ())
+  in
+  let has s = List.mem s m in
+  Alcotest.(check bool)
+    "shown read-only" true
+    (has "type=bind,source=/h/lib,target=/h/lib,readonly");
+  Alcotest.(check bool)
+    "a directory holding a masked .env is replaced, its entries bound back \
+     read-only"
+    true
+    (has "/r:ro,mode=0755"
+    && has "type=bind,source=/r/data.txt,target=/r/data.txt,readonly"
+    && has "type=bind,source=/r/sub,target=/r/sub,readonly"
+    && has "type=bind,source=/r/.envrc,target=/r/.envrc,readonly");
+  Alcotest.(check bool)
+    "the masked file is not there" false
+    (List.exists (fun s -> contains s "source=/r/.env,") m);
+  Alcotest.(check bool)
+    "a mask hides a path under it" false
+    (has "type=bind,source=/p/secret/r,target=/p/secret/r,readonly");
+  Alcotest.(check bool)
+    "a writable path wins over the same path read-only" true
+    (has "type=bind,source=/w,target=/w"
+    && not (has "type=bind,source=/w,target=/w,readonly"));
+  Alcotest.(check int)
+    "the project is mounted once" 1
+    (List.length
+       (List.filter
+          (fun s -> contains s "source=/p,target=/p,")
+          (mounts (input ~allow_read:[ "/p" ] ()))));
+  let project_writable = mounts (input ~allow_write:[ "/p" ] ()) in
+  Alcotest.(check (list string))
+    "allow_write of the project root mounts it writable, once"
+    [ "type=bind,source=/p,target=/p" ]
+    (List.filter (fun s -> contains s "source=/p,target=/p") project_writable);
+  Alcotest.(check (list string))
+    "allow_write of a read-only path mounts it writable, once"
+    [ "type=bind,source=/p/lib,target=/p/lib" ]
+    (List.filter
+       (fun s -> contains s "source=/p/lib,")
+       (mounts (input ~read_only:[ "/p/lib" ] ~allow_write:[ "/p/lib" ] ())))
+
+(* A host backend keeps an allow_read under an allow_write path writable, so the
+   virtual machine does not make it read-only. *)
+let test_readable_under_writable () =
+  Alcotest.(check (list string))
+    "no read-only bind over a writable one"
+    [ "type=bind,source=/w,target=/w" ]
+    (List.filter
+       (fun s -> contains s "source=/w")
+       (mounts (input ~allow_read:[ "/w/ref" ] ~allow_write:[ "/w" ] ())));
+  Alcotest.(check bool)
+    "a sibling stays read-only" true
+    (List.mem "type=bind,source=/w2/ref,target=/w2/ref,readonly"
+       (mounts (input ~allow_read:[ "/w2/ref" ] ~allow_write:[ "/w" ] ())))
+
+let test_readable_workdir () =
+  Alcotest.(check bool)
+    "an agent may work in a directory it can read" true
+    (Result.is_ok
+       (Vm_args.argv (input ~allow_read:[ "/shared" ] ~workdir:"/shared/x" ())))
+
+let test_readable_errors () =
+  Alcotest.(check string)
+    "the root"
+    "sandbox.allow_read / would replace the image's whole file system. Fix: \
+     name the directories the agent reads"
+    (error (input ~allow_read:[ "/" ] ()));
+  List.iter
+    (fun path ->
+      Alcotest.(check bool)
+        (path ^ " holds sockets of the user's daemons")
+        true
+        (contains
+           (error (input ~allow_read:[ path ] ()))
+           "does not stop connect() on a socket"))
+    [
+      "/run";
+      "/run/user/1000";
+      "/var/run/docker";
+      "/tmp";
+      "/tmp/ssh-x";
+      "/proc";
+      "/sys/fs";
+      "/dev";
+    ];
+  Alcotest.(check bool)
+    "a name that only starts like one is fine" true
+    (Result.is_ok
+       (Vm_args.argv (input ~allow_read:[ "/runner/x"; "/tmpfs" ] ())));
+  Alcotest.(check string)
+    "under .bactrian"
+    "sandbox.allow_read /p/.bactrian/runs/x is in .bactrian, which the virtual \
+     machine hides apart from the run's own directories and \
+     sandbox.allow_write"
+    (error (input ~allow_read:[ "/p/.bactrian/runs/x" ] ()));
+  Alcotest.(check string)
+    "a comma"
+    {|sandbox.allow_read "/p/a,b" cannot be mounted: it must be absolute and hold no comma, colon, double quote or control character|}
+    (error (input ~allow_read:[ "/p/a,b" ] ()));
+  Alcotest.(check string)
+    "a file in container"
+    "sandbox.allow_read /r/notes.txt is a file, which container cannot mount \
+     (it mounts directories only). Fix: name its directory"
+    (error (input ~kind:`Container ~allow_read:[ "/r/notes.txt" ] ()));
+  List.iter
+    (fun kind ->
+      Alcotest.(check string)
+        "a socket"
+        "sandbox.allow_read /r/daemon.sock is a socket, a pipe or a device, \
+         and a read-only mount does not stop connect() on a socket. Fix: name \
+         a directory of files"
+        (error (input ~kind ~allow_read:[ "/r/daemon.sock" ] ())))
+    [ `Docker; `Container ];
+  Alcotest.(check bool)
+    "Docker mounts a file" true
+    (List.mem "type=bind,source=/r/notes.txt,target=/r/notes.txt,readonly"
+       (mounts (input ~allow_read:[ "/r/notes.txt" ] ())))
+
+let test_faketime () =
+  let f : Vm_args.faketime =
+    { epoch = 1773577800; dir = "/c/faketime-1a2b-arm64"; libc = Glibc }
+  in
+  let tail n a = List.filteri (fun i _ -> i >= List.length a - n) a in
+  Alcotest.check strings "Docker mounts the libraries and tells the relay"
+    [
+      "--forward";
+      "4242";
+      "--faketime";
+      "1773577800";
+      "/bactrian/faketime";
+      "glibc";
+      "--";
+      "node";
+      "agent.js";
+    ]
+    (tail 9 (argv (input ~faketime:f ())));
+  Alcotest.(check bool)
+    "read-only" true
+    (List.mem
+       "type=bind,source=/c/faketime-1a2b-arm64,target=/bactrian/faketime,readonly"
+       (mounts (input ~faketime:f ())));
+  Alcotest.check strings "container reaches them through the relay's directory"
+    [
+      "--forward";
+      "4242";
+      "--faketime";
+      "1773577800";
+      "/bactrian/faketime-1a2b-arm64";
+      "glibc";
+      "--";
+      "node";
+      "agent.js";
+    ]
+    (tail 9 (argv (input ~kind:`Container ~faketime:f ())));
+  Alcotest.(check bool)
+    "container mounts nothing more" false
+    (List.exists
+       (fun m -> contains m "faketime")
+       (mounts (input ~kind:`Container ~faketime:f ())));
+  Alcotest.check strings "no clock, no flag"
+    [ "--forward"; "4242"; "--"; "node"; "agent.js" ]
+    (tail 5 (argv (input ())));
+  Alcotest.(check bool)
+    "the probes get no clock" false
+    (List.mem "--faketime"
+       (argv (input ~faketime:f ~command:(Probe_exec "node") ())));
+  Alcotest.check strings "the executable probe" [ "--probe-exec"; "node" ]
+    (tail 2 (argv (input ~command:(Probe_exec "node") ~faketime:f ())))
+
 let () =
   Alcotest.run "vm_args"
     [
@@ -766,12 +961,19 @@ let () =
         [
           Alcotest.test_case "flags" `Quick test_command_line;
           Alcotest.test_case "probe" `Quick test_probe;
+          Alcotest.test_case "faketime" `Quick test_faketime;
           Alcotest.test_case "errors" `Quick test_errors;
         ] );
       ( "mounts",
         [
           Alcotest.test_case "deny-list masks" `Quick test_masks;
           Alcotest.test_case "writable paths" `Quick test_writable_paths;
+          Alcotest.test_case "readable paths" `Quick test_readable_paths;
+          Alcotest.test_case "readable working directory" `Quick
+            test_readable_workdir;
+          Alcotest.test_case "readable under writable" `Quick
+            test_readable_under_writable;
+          Alcotest.test_case "readable refusals" `Quick test_readable_errors;
           Alcotest.test_case "masks over mounts" `Quick test_masks_over_mounts;
           Alcotest.test_case "nested masks" `Quick test_nested_masks;
           Alcotest.test_case ".bactrian masked" `Quick test_bactrian_masked;

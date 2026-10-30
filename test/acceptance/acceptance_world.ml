@@ -147,7 +147,7 @@ let vm_runtime =
   | None -> failwith "BACTRIAN_VM_RUNTIME is neither docker nor container"
 
 (* With [vm], the virtual machine sandbox running that image. *)
-let sandbox ?vm ~env ~dir ~deny_read () =
+let sandbox ?vm ~env ~dir ~allow_read ~deny_read () =
   if Option.is_none vm && not sandbox_available then Sandbox.off
   else
     match
@@ -161,6 +161,7 @@ let sandbox ?vm ~env ~dir ~deny_read () =
             | None -> (Sandbox.host_backend () :> Sandbox.backend));
           image = vm;
           runtime = Option.map (fun (_ : string) -> vm_runtime) vm;
+          allow_read;
           allow_write = [];
           deny_read;
           bactrian_exe = executable "BACTRIAN_EXE";
@@ -180,6 +181,7 @@ type world = {
     ?replay:Run.replay ->
     ?mcp:Mcp_proxy.config list ->
     ?variant_env:(string * string) list ->
+    ?sim_now:string ->
     unit ->
     Run.result;
 }
@@ -204,7 +206,7 @@ let check_sandboxed w (r : Run.result) =
     | Some (Seatbelt_backend | Bubblewrap_backend) | None ->
         Alcotest.fail "the run was not in the virtual machine"
 
-let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
+let with_world ?vm ?(allow_read = []) ?(deny_read = []) ?(rounds = 1) name f =
   Eio_main.run @@ fun env ->
   let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
@@ -239,11 +241,12 @@ let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
     (fun name -> Eio.Path.mkdirs ~perm:0o700 Eio.Path.(dir / name))
     deny_read;
   let sandbox =
-    sandbox ?vm ~env ~dir:abs_dir
+    sandbox ?vm ~env ~dir:abs_dir ~allow_read
       ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
       ()
   in
-  let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) () =
+  let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) ?(sim_now = "") ()
+      =
     incr counter;
     let ledger =
       Ledger.create
@@ -259,7 +262,7 @@ let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
         turns = (if replay = None then [ first_turn ] else []);
         scenario = "weather";
         variant = "base";
-        sim_now = "";
+        sim_now;
         timezone = "UTC";
         replay;
         env_passthrough = [ prompt_variable ];
@@ -305,3 +308,20 @@ let contains s sub =
     && (String.equal (String.sub s i n) sub || go (i + 1))
   in
   go 0
+
+let shell_agent =
+  {|while IFS= read -r line; do
+  case "$line" in
+    *'"type":"turn"'*)
+      n=$(printf '%s' "$line" | sed 's/.*"turn":\([0-9]*\).*/\1/')
+      out=$(sh -c "$PROBE" 2>/dev/null | tr -cd 'a-zA-Z0-9=_ ')
+      printf '{"v":1,"type":"reply","turn":%s,"content":"%s"}\n' "$n" "$out" ;;
+    *'"type":"end"'*) exit 0 ;;
+  esac
+done
+|}
+
+let reply_text (r : Run.result) =
+  match entries "reply" r with
+  | [ j ] -> Yojson.Safe.Util.(to_string (member "content" j))
+  | _ -> Alcotest.fail "expected exactly one reply"

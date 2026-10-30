@@ -8,6 +8,7 @@ type input = {
   bactrian_dir : string;
   state_dir : string option;
   temp_dir : string;
+  allow_read : string list;
   allow_write : string list;
   deny_read : string list;
   listeners : listener list;
@@ -99,6 +100,7 @@ let validate i =
          ("temp_dir", i.temp_dir);
        ]
       @ labelled "state_dir" (Option.to_list i.state_dir)
+      @ labelled "allow_read" i.allow_read
       @ labelled "allow_write" i.allow_write
       @ labelled "deny_read" i.deny_read)
   in
@@ -171,6 +173,9 @@ let denies ?(resolve = Fun.id) ?credentials i =
        (fun p -> plain (Filename.concat i.home p))
        (home_credentials credentials)
     @ List.map (fun p -> plain (Filename.concat i.project_root p)) env_files
+    @ List.concat_map
+        (fun dir -> List.map (fun p -> plain (Filename.concat dir p)) env_files)
+        i.allow_read
     @ [
         plain (Filename.concat i.bactrian_dir "ca");
         (* Every run's large payloads, the experiments' manifests and the spend
