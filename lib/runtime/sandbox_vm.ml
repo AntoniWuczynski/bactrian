@@ -54,43 +54,42 @@ let identity path =
   | st -> Some (st.st_dev, st.st_ino)
   | exception Unix.Unix_error _ -> None
 
-(* The entries of a directory holding a masked file, each with what it is and
-   whether it leads to one of [masked] (device and inode) under another name. *)
+(* An entry of a directory holding a masked file: what it is, and whether it
+   leads to one of [masked] (device and inode) under another name. *)
+let describe ~masked dir name : Vm_args.entry =
+  let path = Filename.concat dir name in
+  let kind : Vm_args.entry_kind =
+    match (Unix.lstat path).st_kind with
+    | S_LNK -> (
+        match (Unix.stat path).st_kind with
+        | S_REG -> (
+            match Unix.realpath path with
+            | target -> Link_to_file target
+            | exception Unix.Unix_error _ -> Other_link)
+        | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> Other_link
+        | exception Unix.Unix_error _ -> Other_link)
+    | S_REG -> File
+    | S_DIR -> Dir
+    | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
+    | exception Unix.Unix_error _ -> Other_link
+  in
+  let identity = identity path in
+  let masked_file =
+    match identity with
+    | Some id ->
+        List.exists
+          (fun (dev, ino) -> Int.equal dev (fst id) && Int.equal ino (snd id))
+          masked
+    | None -> false
+  in
+  { name; kind; identity; masked_file }
+
 let list_dir ~masked dir =
   match Sys.readdir dir with
   | exception Sys_error m -> Error m
   | names ->
       Ok
-        (List.map
-           (fun name : Vm_args.entry ->
-             let path = Filename.concat dir name in
-             let kind : Vm_args.entry_kind =
-               match (Unix.lstat path).st_kind with
-               | S_LNK -> (
-                   match (Unix.stat path).st_kind with
-                   | S_REG -> (
-                       match Unix.realpath path with
-                       | target -> Link_to_file target
-                       | exception Unix.Unix_error _ -> Other_link)
-                   | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK ->
-                       Other_link
-                   | exception Unix.Unix_error _ -> Other_link)
-               | S_REG -> File
-               | S_DIR -> Dir
-               | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
-               | exception Unix.Unix_error _ -> Other_link
-             in
-             let identity = identity path in
-             let masked_file =
-               match identity with
-               | Some id ->
-                   List.exists
-                     (fun (dev, ino) ->
-                       Int.equal dev (fst id) && Int.equal ino (snd id))
-                     masked
-               | None -> false
-             in
-             { name; kind; identity; masked_file })
+        (List.map (describe ~masked dir)
            (List.sort String.compare (Array.to_list names)))
 
 (* What is at each existing allow_write path: container mounts directories
@@ -105,6 +104,25 @@ let allow_write_kinds paths =
     paths
 
 let staging_dir ~run_dir = Filename.concat run_dir "staging"
+
+(* The file the bridge touches and the relay watches, in a directory of its
+   own that the container mounts read-only. *)
+let heartbeat_dir ~run_dir = Filename.concat run_dir "heartbeat"
+let heartbeat_file ~run_dir = Filename.concat (heartbeat_dir ~run_dir) "beat"
+
+let make_heartbeat ~run_dir =
+  let failed why =
+    Error
+      (Printf.sprintf "the heartbeat file %s cannot be made: %s"
+         (heartbeat_file ~run_dir) why)
+  in
+  match
+    Unix.mkdir (heartbeat_dir ~run_dir) 0o755;
+    write_file ~perm:0o644 (heartbeat_file ~run_dir) ""
+  with
+  | () -> Ok ()
+  | exception Unix.Unix_error (e, _, _) -> failed (Unix.error_message e)
+  | exception Sys_error m -> failed m
 
 (* Who made a staging directory, "PID\tHOST", in a file beside the numbered
    directories, which no mount shows. *)
@@ -125,19 +143,48 @@ let remove_stale_staging ~runs_dir =
               match String.split_on_char '\t' (String.trim text) with
               | [ pid; host ] when Vm_runtime.owner_gone ~pid ~host -> (
                   match Proc_util.remove_tree (staging_dir ~run_dir) with
-                  | () -> Some (staging_dir ~run_dir)
+                  | () ->
+                      (try Proc_util.remove_tree (heartbeat_dir ~run_dir)
+                       with Unix.Unix_error _ | Sys_error _ -> ());
+                      Some (staging_dir ~run_dir)
                   | exception (Unix.Unix_error _ | Sys_error _) -> None)
               | _ -> None))
         (Array.to_list runs)
 
+let masked_identities deny =
+  List.filter_map
+    (fun (p, k) -> match k with `File -> identity p | `Dir | `Absent -> None)
+    deny
+
+let recheck ~deny rebound =
+  let masked = masked_identities deny in
+  let same_identity a b =
+    match (a, b) with
+    | Some (d, i), Some (d', i') -> Int.equal d d' && Int.equal i i'
+    | None, None -> true
+    | Some _, None | None, Some _ -> false
+  in
+  List.fold_left
+    (fun acc (path, (listed : Vm_args.entry)) ->
+      let* () = acc in
+      let dir = Filename.dirname path in
+      let now = describe ~masked dir listed.name in
+      if
+        Vm_args.equal_entry_kind now.kind listed.kind
+        && same_identity now.identity listed.identity
+        && not now.masked_file
+      then Ok ()
+      else
+        Error
+          (Printf.sprintf
+             "%s, beside a hidden file in %s, changed after it was listed, so \
+              the run stops rather than show what it is now"
+             path dir))
+    (Ok ()) rebound
+
 let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
     ~forwards command =
-  let masked =
-    List.filter_map
-      (fun (p, k) ->
-        match k with `File -> identity p | `Dir | `Absent -> None)
-      layout.deny
-  in
+  let masked = masked_identities layout.deny in
   Result.map_error Vm_args.describe_error
     (Vm_args.argv
        {
@@ -154,6 +201,7 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          workdir = cwd;
          env_file;
          relay = t.relay;
+         heartbeat_dir = heartbeat_dir ~run_dir;
          project_root = layout.project_root;
          bactrian_dir = layout.bactrian_dir;
          runs_dir = Filename.concat layout.bactrian_dir "runs";
@@ -247,13 +295,19 @@ let remove t name =
 (* The command the bridge runs. Docker's [run] is it. For container the
    staging directories are made, the container created, and its image checked
    against the one [prepare] saw, so a reference moved since cannot change what
-   the agent runs in. *)
-let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
+   the agent runs in. The entries bound again beside a hidden file are looked
+   at once more first, as late as this process can: the runtime resolves their
+   paths itself, so a swap after this check is not seen. *)
+let launch t layout ~run_dir ~name (invocation : Vm_args.invocation) =
+  let recheck () = recheck ~deny:layout.deny invocation.rebound in
   match Vm_runtime.kind t.runtime with
-  | `Docker -> Ok invocation.argv
+  | `Docker ->
+      let* () = recheck () in
+      Ok invocation.argv
   | `Container ->
       let process_mgr = t.process_mgr and clock = t.clock in
       let* () = make_stages ~run_dir invocation.stages in
+      let* () = recheck () in
       let* () =
         Vm_runtime.create ~process_mgr ~clock t.runtime invocation.argv
       in
@@ -272,8 +326,10 @@ let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
 (* The container and container's staging directories, once the run is over. *)
 let clean_up t ~run_dir ~name =
   remove t name;
-  try Proc_util.remove_tree (staging_dir ~run_dir)
-  with Unix.Unix_error _ | Sys_error _ -> ()
+  List.iter
+    (fun dir ->
+      try Proc_util.remove_tree dir with Unix.Unix_error _ | Sys_error _ -> ())
+    [ staging_dir ~run_dir; heartbeat_dir ~run_dir ]
 
 let client_env t =
   List.filter_map
@@ -307,6 +363,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
   and temp_dir = Filename.concat dir "tmp" in
   Fun.protect ~finally:(fun () -> clean_up t ~run_dir:dir ~name) @@ fun () ->
   let* env_file = write_env_file ~dir [] in
+  let* () = make_heartbeat ~run_dir:dir in
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let listener =
@@ -321,13 +378,15 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
     invocation t layout ~run_id:id ~run_dir:dir ~env_file ~state_dir ~temp_dir
       ~cwd:state_dir ~forwards:[ port ] (Probe paths)
   in
-  let* argv = launch t ~run_dir:dir ~name invocation in
+  let* argv = launch t layout ~run_dir:dir ~name invocation in
   let out = Buffer.create 256 and err = Buffer.create 256 in
   let* code =
     match
       Eio.Time.with_timeout t.clock probe_timeout (fun () ->
           Ok
-            (Vm_bridge.run ~net ~clock:t.clock ~process_mgr:t.process_mgr
+            (Vm_bridge.run
+               ~beat:(heartbeat_file ~run_dir:dir)
+               ~net ~clock:t.clock ~process_mgr:t.process_mgr
                ~env:(Vm_runtime.client_env t.runtime)
                ~forwards:[ port ]
                ~stdin:(Eio.Flow.string_source "")
@@ -397,11 +456,12 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
   Eio.Switch.on_release sw (fun () ->
       clean_up t ~run_dir ~name;
       remove_file env_file);
+  let* () = make_heartbeat ~run_dir in
   let* invocation =
     invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
       ~forwards:[ port ] (Agent agent)
   in
-  let* runtime_argv = launch t ~run_dir ~name invocation in
+  let* runtime_argv = launch t layout ~run_dir ~name invocation in
   Ok
     {
       argv =
@@ -410,6 +470,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
           "__vm-bridge";
           "forward=" ^ string_of_int port;
           "container=" ^ name;
+          "heartbeat=" ^ heartbeat_file ~run_dir;
         ]
         @ (match Vm_runtime.kind t.runtime with
           | `Docker -> []

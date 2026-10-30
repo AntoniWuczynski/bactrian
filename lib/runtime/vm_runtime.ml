@@ -230,7 +230,10 @@ let relay_cache_dir () =
 
 let relay_name t =
   Printf.sprintf "relay-%s-%s"
-    (String.sub Digest.BLAKE256.(to_hex (string Relay_source.text)) 0 16)
+    (String.sub
+       Digest.BLAKE256.(
+         to_hex (string (Relay_source.text ^ "\000" ^ Relay_source.probe)))
+       0 16)
     (String.map
        (fun c ->
          match c with
@@ -263,8 +266,11 @@ let build ~process_mgr ~clock t ~dir ~target =
       with Unix.Unix_error _ | Sys_error _ -> ())
   @@ fun () ->
   List.iter (fun d -> Unix.mkdir d 0o755) [ work; src; out ];
-  Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
-      output_string oc Relay_source.text);
+  List.iter
+    (fun (name, text) ->
+      Out_channel.with_open_bin (Filename.concat src name) (fun oc ->
+          output_string oc text))
+    [ ("relay.c", Relay_source.text); ("probe.inc", Relay_source.probe) ];
   let script =
     Printf.sprintf
       "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \

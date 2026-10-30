@@ -1,8 +1,16 @@
 ; container's staging directories, made on the host. No runtime is needed.
+; test_vm_volume makes a second volume with hdiutil, on macOS only.
 
-(test
- (name test_vm_staging)
+(tests
+ (names test_vm_staging test_vm_volume test_vm_launch)
  (package bactrian)
- (libraries bactrian.core bactrian.runtime unix alcotest)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  eio
+  eio_main
+  unix
+  alcotest
+  substring)
  (flags
   (:standard -w -70)))

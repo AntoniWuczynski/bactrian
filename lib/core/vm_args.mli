@@ -41,6 +41,9 @@ type entry_kind =
       (** A symbolic link to a regular file, at this resolved path. *)
   | Other_link  (** A symbolic link to anything else, or to nothing. *)
 
+val equal_entry_kind : entry_kind -> entry_kind -> bool
+(** Same constructor, and for a link to a file the same resolved path. *)
+
 type entry = {
   name : string;
   kind : entry_kind;
@@ -69,6 +72,9 @@ type input = {
   env_file : string;  (** The file {!val-env_file} wrote. *)
   relay : string;
       (** The relay binary on the host. container mounts its directory. *)
+  heartbeat_dir : string;
+      (** A directory of the run's own, on the host, holding the file [beat]
+          that the bridge touches ({!heartbeat_file}). Mounted read-only. *)
   project_root : string;
   bactrian_dir : string;
       (** [.bactrian]. A mask over it leaves the run's own [state_dir] and
@@ -129,6 +135,13 @@ val relay_path : string
 val relay_dir : string
 (** [/bactrian], where container mounts the relay's directory. *)
 
+val heartbeat_dir : string
+(** [/bactrian-heartbeat], where both runtimes mount [input.heartbeat_dir]
+    read-only. *)
+
+val heartbeat_file : string
+(** [/bactrian-heartbeat/beat], the file the relay watches ([--heartbeat]). *)
+
 type link = {
   name : string;  (** In the staging directory. *)
   source : string;  (** The host file it is a hard link of. *)
@@ -150,6 +163,12 @@ type stage = {
 type invocation = {
   argv : string list;
   stages : stage list;  (** Empty for Docker. *)
+  rebound : (string * entry) list;
+      (** The entries beside a masked file that the command binds again by their
+          path (Docker's files and directories, container's directories), each
+          with the entry {!input.list_dir} gave. The runtime resolves the path
+          itself when it creates the container, so the caller checks them once
+          more just before ([Sandbox_vm.recheck]). *)
 }
 
 val argv : input -> (invocation, error) result
@@ -179,6 +198,10 @@ val argv : input -> (invocation, error) result
     under any name, other links, sockets, pipes and devices. Each directory
     beside the file is bound again. An [allow_write] file is
     [Error File_allow_write].
+
+    Both runtimes also mount [heartbeat_dir] read-only at {!val-heartbeat_dir}
+    right after the relay, and start the relay with
+    [--heartbeat /bactrian-heartbeat/beat] before its [--forward]s.
 
     Mounts are given in order of depth, as the runtime applies them, then of
     path. A directory mask is [--tmpfs PATH:ro,mode=0755] for Docker. For a file

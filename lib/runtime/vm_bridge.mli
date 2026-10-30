@@ -24,6 +24,7 @@ val describe_error : error -> string
 
 val run :
   ?stderr:_ Eio.Flow.sink ->
+  ?beat:string ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   process_mgr:_ Eio.Process.mgr ->
@@ -40,6 +41,13 @@ val run :
     a heartbeat every {!Bactrian_core.Vm_frame.heartbeat_interval} seconds. The
     result is the agent's exit code from the relay's [exit] frame: its status,
     or 128 plus the signal number. [stderr] defaults to bactrian's own.
+
+    With [beat] (an existing file, the relay's [--heartbeat] file as it is on
+    the host) it also sets that file's modification time to now every
+    {!Bactrian_core.Vm_frame.heartbeat_interval} seconds, from a fiber of its
+    own that no blocked write holds up. The relay takes the file as its sign of
+    life, so an agent that reads nothing cannot hold off the end of a run whose
+    bactrian is dead.
 
     Memory is bounded: a connection whose host side does not take data stops the
     reading of every frame until it does. A host connection that cannot be made
@@ -58,13 +66,18 @@ type config = {
   staging : string option;
       (** The run's staging directory (an absolute path ending in [staging]),
           removed with the container when bactrian has gone. *)
+  heartbeat : string option;
+      (** The run's heartbeat file (an absolute path ending in
+          [heartbeat/beat]), passed to {!run} as [beat]. Its directory is
+          removed with the container when bactrian has gone. *)
   argv : string list;  (** The runtime's [run] command. Non-empty. *)
 }
 
 val parse : string list -> (config, string) result
 (** The arguments of [__vm-bridge]: [forward=PORT]..., [container=NAME],
     [signals=kill] for {!field-kill_signals}, [staging=DIR] for
-    {!field-staging}, then [--] and the runtime's command. *)
+    {!field-staging}, [heartbeat=FILE] for {!field-heartbeat}, then [--] and the
+    runtime's command. *)
 
 val main :
   env:Eio_unix.Stdenv.base ->
@@ -81,4 +94,5 @@ val main :
     with [kill_signals] the bridge sends them to the container), and the bridge
     relays until the agent has gone. When its parent dies (bactrian killed with
     SIGKILL) it stops the container with [rm -f], which the runtime's client
-    alone would leave running, and removes [staging]. *)
+    alone would leave running, and removes [staging] and the directory of the
+    heartbeat file. *)

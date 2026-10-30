@@ -55,7 +55,7 @@ Continuous integration cannot run `container` (GitHub's runners do not have it),
 
 Residual risks, on top of decision 0014's:
 
-- A subdirectory beside a masked file is bound again by its path when `create` runs. A swap of it for a symbolic link to another directory between the listing and `create` would show that directory instead, as with Docker's bind of each entry back. Hard links of files are checked, directories are not.
+- A subdirectory beside a masked file is bound again by its path when `create` runs. A swap of it for a symbolic link to another directory between the listing and `create` would show that directory instead, as with Docker's bind of each entry back. Hard links of files are checked, directories are not. (Decision 0023 adds a second look at each of them just before `create`, which narrows the window and does not close it.)
 - The container's configuration (placeholder keys and the run's token) and its output log sit in the user's Library while it exists. Any process of the user can read them, as it can read the run's own directory.
 - `create` would fetch a missing reference. The preflight checks that the image is present before, and the digest is checked after.
 - `container`'s host-only networks (`--internal`) are not used. `--network none` leaves `lo` alone.

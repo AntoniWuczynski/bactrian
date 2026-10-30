@@ -520,19 +520,18 @@ let teardown ~signal () =
     [ "sh"; "-c"; hung_agent ]
   @@ fun ~dir ~pid ->
   let name = started ~dir in
-  (* bactrian removes container's staging directory itself, or after a
-     SIGKILL the bridge does. *)
-  let staging =
+  (* bactrian removes container's staging directory and the heartbeat
+     directory itself, or after a SIGKILL the bridge does. *)
+  let in_run entry =
     String.concat "/"
       [
-        dir;
-        ".bactrian/runs";
-        String.sub name 9 (String.length name - 9);
-        "staging";
+        dir; ".bactrian/runs"; String.sub name 9 (String.length name - 9); entry;
       ]
   in
+  let staging = in_run "staging" and heartbeat = in_run "heartbeat" in
   Alcotest.(check bool)
     "staged" (vm_runtime = `Container) (Sys.file_exists staging);
+  Alcotest.(check bool) "heartbeat made" true (Sys.file_exists heartbeat);
   Unix.kill pid signal;
   (match wait_exit pid with
   | WEXITED n when signal = Sys.sigint ->
@@ -543,8 +542,8 @@ let teardown ~signal () =
   gone ~within:30. name;
   until
     ~deadline:(Unix.gettimeofday () +. 10.)
-    "the staging directory is gone"
-    (fun () -> not (Sys.file_exists staging))
+    "the staging and heartbeat directories are gone"
+    (fun () -> not (Sys.file_exists staging || Sys.file_exists heartbeat))
 
 (* The process ID of [pid]'s one child whose command holds [word]. *)
 let child_of pid word =
@@ -594,31 +593,22 @@ let all_killed () =
   Printf.printf "the container went %.1f seconds after the kill\n"
     (Unix.gettimeofday () -. killed)
 
-(* The relay alone, with its input open and silent, as when nothing of
-   bactrian is left but the runtime's client: it stops the agent once
-   [liveness_timeout] has passed without a heartbeat. *)
-let relay_liveness () =
-  gate [ node_image ];
-  let relay =
-    Eio_main.run @@ fun env ->
-    let process_mgr = Eio.Stdenv.process_mgr env
-    and clock = Eio.Stdenv.clock env in
-    match
-      Result.bind (Vm_runtime.detect ~process_mgr ~clock (Some vm_runtime))
-        (fun r -> Vm_runtime.relay ~process_mgr ~clock r)
-    with
-    | Ok path -> path
-    | Error m -> Alcotest.failf "no relay: %s" m
-  in
-  let name = Printf.sprintf "bactrian-liveness-%d" (Unix.getpid ()) in
-  Fun.protect ~finally:(fun () ->
-      ignore (Sys.command (remove_command name ^ " > /dev/null 2>&1")))
-  @@ fun () ->
-  let r, w = Unix.pipe ~cloexec:true () in
-  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
-  let started = Unix.gettimeofday () in
-  (* container mounts directories only. *)
-  let relay_args =
+(* The relay for the runtime's architecture, built if need be. *)
+let find_relay () =
+  Eio_main.run @@ fun env ->
+  let process_mgr = Eio.Stdenv.process_mgr env
+  and clock = Eio.Stdenv.clock env in
+  match
+    Result.bind (Vm_runtime.detect ~process_mgr ~clock (Some vm_runtime))
+      (fun r -> Vm_runtime.relay ~process_mgr ~clock r)
+  with
+  | Ok path -> path
+  | Error m -> Alcotest.failf "no relay: %s" m
+
+(* The relay as the entrypoint of a container of its own, with [extra] mounts
+   and arguments, running [sleep 300]. container mounts directories only. *)
+let relay_command ~relay ~name ~mounts ~relay_args =
+  let entry =
     match vm_runtime with
     | `Docker ->
         [
@@ -639,13 +629,28 @@ let relay_liveness () =
             (Filename.dirname relay);
         ]
   in
+  run_prefix
+  @ [ "--rm"; "-i"; "--name"; name; "--network"; "none" ]
+  @ entry
+  @ List.concat_map (fun m -> [ "--mount"; m ]) mounts
+  @ [ "--"; node_image ] @ relay_args @ [ "--"; "sleep"; "300" ]
+
+(* The relay alone, with its input open and silent, as when nothing of
+   bactrian is left but the runtime's client: it stops the agent once
+   [liveness_timeout] has passed without a heartbeat. *)
+let relay_liveness () =
+  gate [ node_image ];
+  let relay = find_relay () in
+  let name = Printf.sprintf "bactrian-liveness-%d" (Unix.getpid ()) in
+  Fun.protect ~finally:(fun () ->
+      ignore (Sys.command (remove_command name ^ " > /dev/null 2>&1")))
+  @@ fun () ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+  let started = Unix.gettimeofday () in
   let pid =
     Unix.create_process runtime
-      (Array.of_list
-         (run_prefix
-         @ [ "--rm"; "-i"; "--name"; name; "--network"; "none" ]
-         @ relay_args
-         @ [ "--"; node_image; "--"; "sleep"; "300" ]))
+      (Array.of_list (relay_command ~relay ~name ~mounts:[] ~relay_args:[]))
       r null null
   in
   Unix.close r;
@@ -659,6 +664,107 @@ let relay_liveness () =
   | WEXITED n -> Alcotest.failf "exit %d" n
   | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
   let timeout = Bactrian_core.Vm_frame.liveness_timeout in
+  Alcotest.(check bool) "not before the timeout" true (took >= timeout -. 0.5);
+  Alcotest.(check bool) "soon after it" true (took < timeout +. 20.);
+  gone ~within:10. name
+
+(* An agent that reads nothing leaves a frame waiting in the relay, which used
+   to hold the timer off for ever. With the heartbeat file (mounted read-only,
+   touched from the host) the relay lives while the file changes, however full
+   its input is, and stops [liveness_timeout] after the changes do. The runtime's
+   client is still there, with its end of the input open. *)
+let relay_full_buffer () =
+  gate [ node_image ];
+  let relay = find_relay () in
+  let name = Printf.sprintf "bactrian-fullbuf-%d" (Unix.getpid ()) in
+  let dir = Filename.concat (Sys.getcwd ()) "tmp-vm-heartbeat" in
+  ignore (Sys.command ("rm -rf " ^ Filename.quote dir));
+  Unix.mkdir dir 0o755;
+  let beat = Filename.concat dir "beat" in
+  Out_channel.with_open_bin beat ignore;
+  Fun.protect ~finally:(fun () ->
+      ignore (Sys.command (remove_command name ^ " > /dev/null 2>&1"));
+      ignore (Sys.command ("rm -rf " ^ Filename.quote dir)))
+  @@ fun () ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+  let pid =
+    Unix.create_process runtime
+      (Array.of_list
+         (relay_command ~relay ~name
+            ~mounts:
+              [
+                Printf.sprintf "type=bind,source=%s,target=%s,readonly" dir
+                  Bactrian_core.Vm_args.heartbeat_dir;
+              ]
+            ~relay_args:[ "--heartbeat"; Bactrian_core.Vm_args.heartbeat_file ]))
+      r null null
+  in
+  Unix.close r;
+  Unix.close null;
+  Fun.protect ~finally:(fun () -> Unix.close w) @@ fun () ->
+  (* Data frames for an agent that never reads, until nothing more is taken
+     for a while, or 4 MiB are (container's client takes far more without
+     passing it on): the relay's queue for it is 256 KiB, so with that much on
+     the way a frame waits. *)
+  Unix.set_nonblock w;
+  let frame =
+    Bactrian_core.Vm_frame.(
+      String.concat ""
+        (List.map encode (data ~channel:0 (String.make 16384 'x'))))
+  in
+  let sent = ref 0 and quiet_since = ref (Unix.gettimeofday ()) in
+  let deadline = Unix.gettimeofday () +. 60. in
+  (* A write that took only part of a frame goes on from there, so the relay
+     never sees half of one followed by another. *)
+  let off = ref 0 and touched = ref 0. in
+  while
+    Unix.gettimeofday () < !quiet_since +. 5.
+    && Unix.gettimeofday () < deadline
+    && !sent < 4 * 1024 * 1024
+  do
+    (* The container may take seconds to start, and the relay is already
+       watching the file. *)
+    if Unix.gettimeofday () -. !touched >= 1. then begin
+      Unix.utimes beat 0. 0.;
+      touched := Unix.gettimeofday ()
+    end;
+    match Unix.write_substring w frame !off (String.length frame - !off) with
+    | n ->
+        sent := !sent + n;
+        off := (!off + n) mod String.length frame;
+        quiet_since := Unix.gettimeofday ()
+    | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK | EINTR), _, _) ->
+        Unix.sleepf 0.05
+    | exception Unix.Unix_error (EPIPE, _, _) ->
+        Alcotest.fail "the relay stopped while its input was being filled"
+  done;
+  Printf.printf "the relay's input took %d bytes before it stopped\n" !sent;
+  Alcotest.(check bool)
+    "more than the relay's queue for the agent" true
+    (!sent > 256 * 1024);
+  (* Alive for longer than the timeout while the file changes. *)
+  let timeout = Bactrian_core.Vm_frame.liveness_timeout in
+  let until = Unix.gettimeofday () +. (2. *. timeout) in
+  let last_change = ref (Unix.gettimeofday ()) in
+  while Unix.gettimeofday () < until do
+    Unix.utimes beat 0. 0.;
+    last_change := Unix.gettimeofday ();
+    Unix.sleepf Bactrian_core.Vm_frame.heartbeat_interval;
+    match Unix.waitpid [ WNOHANG ] pid with
+    | 0, _ -> ()
+    | _, _ -> Alcotest.fail "the relay stopped while the heartbeat file changed"
+  done;
+  Alcotest.(check bool) "still running" true (container_exists name);
+  (* Then the file stops changing, as when bactrian and its bridge are dead.
+     The timeout counts from the last change, which was up to one interval
+     ago. *)
+  (match wait_exit pid with
+  | WEXITED 70 -> ()
+  | WEXITED n -> Alcotest.failf "exit %d" n
+  | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
+  let took = Unix.gettimeofday () -. !last_change in
+  Printf.printf "the relay stopped %.1f seconds after the last change\n" took;
   Alcotest.(check bool) "not before the timeout" true (took >= timeout -. 0.5);
   Alcotest.(check bool) "soon after it" true (took < timeout +. 20.);
   gone ~within:10. name
@@ -768,6 +874,8 @@ let () =
           Alcotest.test_case "bactrian, its bridge and the client killed" `Slow
             all_killed;
           Alcotest.test_case "the relay without heartbeats" `Slow relay_liveness;
+          Alcotest.test_case "the relay with a full buffer" `Slow
+            relay_full_buffer;
           Alcotest.test_case "a stale container" `Slow stale_removed;
         ] );
       ( "relay cache",

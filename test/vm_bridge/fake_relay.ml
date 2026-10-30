@@ -8,6 +8,8 @@
      to close the last, and exits 0;
    - heartbeat: waits for the bridge's heartbeat, says "beat" on channel 0
      and exits 0;
+   - stuck SECONDS: reads nothing at all, as the relay does for an agent that
+     reads nothing, and exits 0 after SECONDS;
    - bad: a frame of an unknown kind;
    - silent: ends without an exit frame. *)
 
@@ -92,6 +94,9 @@ let () =
             {|{"kind":"relay_failed","port":1,"socket":"relay","reason":"r"}|};
           F.exit 0;
         ]
+  | [ "stuck"; seconds ] ->
+      Unix.sleepf (float_of_string seconds);
+      send [ F.exit 0 ]
   | [ "bad" ] -> print_string "\000\000\000\000\009\000\000\000\000"
   | [ "silent" ] -> ()
   | _ -> exit 2

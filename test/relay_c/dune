@@ -1,0 +1,79 @@
+; Tests of vm/relay.c, which is Linux-only (prctl, accept4), so they are built
+; and run on Linux, where a C compiler is all they need; elsewhere the
+; acceptance suite covers the relay inside a container.
+;
+; test_relay_unit includes the relay's source and calls its functions.
+; test_relay_proc starts the relay binary built here and drives it over pipes
+; and loopback. Both use a liveness timeout of 1.5 seconds instead of 10.
+
+(rule
+ (enabled_if
+  (= %{system} linux))
+ (targets test_relay_unit.exe)
+ (deps test_relay_unit.c ../../vm/relay.c ../../vm/probe.inc)
+ (action
+  (run
+   %{cc}
+   -std=gnu11
+   -Wall
+   -Wextra
+   -Werror
+   -O1
+   -DLIVENESS_MS=1500
+   -o
+   %{targets}
+   test_relay_unit.c)))
+
+(rule
+ (enabled_if
+  (= %{system} linux))
+ (targets relay.exe)
+ (deps ../../vm/relay.c ../../vm/probe.inc)
+ (action
+  (run
+   %{cc}
+   -std=gnu11
+   -Wall
+   -Wextra
+   -Werror
+   -O1
+   -DLIVENESS_MS=1500
+   -o
+   %{targets}
+   ../../vm/relay.c)))
+
+(rule
+ (enabled_if
+  (= %{system} linux))
+ (targets test_relay_proc.exe)
+ (deps test_relay_proc.c)
+ (action
+  (run
+   %{cc}
+   -std=gnu11
+   -Wall
+   -Wextra
+   -Werror
+   -O1
+   -DLIVENESS_MS=1500
+   -o
+   %{targets}
+   test_relay_proc.c)))
+
+(rule
+ (enabled_if
+  (= %{system} linux))
+ (alias runtest)
+ (package bactrian)
+ (deps test_relay_unit.exe)
+ (action
+  (run ./test_relay_unit.exe)))
+
+(rule
+ (enabled_if
+  (= %{system} linux))
+ (alias runtest)
+ (package bactrian)
+ (deps test_relay_proc.exe relay.exe)
+ (action
+  (run ./test_relay_proc.exe ./relay.exe)))

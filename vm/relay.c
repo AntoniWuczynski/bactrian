@@ -17,23 +17,32 @@
    the agent's process group, and exits with the agent's status. When nothing
    has come from bactrian for LIVENESS_MS while the relay was reading, it
    takes bactrian for dead (the runtime's client can outlive it and keep the
-   input open), kills the agent's group and exits. It makes
-   itself not dumpable, so the agent (the same user) can neither trace it nor
-   open its descriptors through /proc/1/fd and write frames of its own. It
-   sets no_new_privs, which the agent inherits, so no program the agent runs
-   gains privileges through a set-user-ID or set-group-ID bit. Memory
-   is bounded: a destination that does not drain stops the reading of its
-   source.
+   input open), kills the agent's group and exits. With --heartbeat FILE the
+   sign of life is a change of FILE's modification time instead of a frame:
+   the bridge touches FILE, in a directory mounted read-only, every two
+   seconds. Frames queue behind whatever the agent has not read, so an agent
+   that reads nothing could hold them back for as long as it liked, and a dead
+   bactrian would look like one that waits. The file is not behind anything.
 
-   relay --forward PORT... -- AGENT ARGV...
-   relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT
-         OTHER_RUN
+   The relay makes itself not dumpable, so the agent (the same user) can
+   neither trace it nor open its descriptors through /proc/1/fd and write
+   frames of its own. It sets no_new_privs, which the agent inherits, so no
+   program the agent runs gains privileges through a set-user-ID or
+   set-group-ID bit. Memory is bounded: a destination that does not drain
+   stops the reading of its source.
+
+   relay [--heartbeat FILE] --forward PORT... -- AGENT ARGV...
+   relay [--heartbeat FILE] --forward PORT --probe OUTSIDE INSIDE DENIED
+         MASKED MASKED_CASE ROOT OTHER_RUN
 
    The probe form runs the sandbox checks instead of an agent and writes one
    JSON line on channel 0: the outcome of a connection to a public address and
    to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
-   reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
-   no_new_privs is set. */
+   reading DENIED, MASKED and MASKED_CASE, the network interfaces, whether
+   no_new_privs is set, and, with --heartbeat, whether the modification time of
+   FILE changes within PROBE_BEAT_MS (the bridge touches it, and a runtime
+   whose file sharing does not show that would have the relay stop every long
+   run). */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -50,6 +59,7 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -79,7 +89,11 @@ enum kind {
 #define DRAIN_MS 2000
 #define EXIT_PROTOCOL 70
 /* Five heartbeats (Vm_frame.heartbeat_interval, 2 s) missed. */
+#ifndef LIVENESS_MS
 #define LIVENESS_MS 10000
+#endif
+/* How often the heartbeat file is looked at. */
+#define BEAT_CHECK_MS 500
 
 static const char greeting[] = "bactrian-probe\n";
 
@@ -225,9 +239,9 @@ static void on_signal(int s) {
   if (s == SIGTERM) got_term = 1;
   if (s == SIGINT) got_int = 1;
   char c = (char)s;
-  /* A full pipe already holds a wake-up. */
-  if (write(sig_pipe[1], &c, 1) < 0) {
-  }
+  /* A full pipe already holds a wake-up, so a failed write loses nothing. */
+  ssize_t w = write(sig_pipe[1], &c, 1);
+  (void)w;
   errno = saved;
 }
 
@@ -452,22 +466,72 @@ static void write_conn(struct conn *c) {
 static unsigned char in_frame[HEADER + MAX_PAYLOAD];
 static size_t in_have;     /* bytes of the current frame read so far */
 static int in_pending;     /* a whole frame waits for room at its sink */
-static long last_heard;    /* when a frame last came, or reading resumed */
+static long last_heard;    /* when bactrian last showed a sign of life */
+static const char *heartbeat_path; /* --heartbeat FILE, or NULL */
+static struct timespec beat_seen;  /* its modification time at the last look */
+static long last_beat_check;
 
 static long now_ms(void);
+
+/* A frame, or a pending one delivered, is a sign of life only when no
+   heartbeat file is watched: with one, the frames may have been sent before
+   bactrian died, and only the file is current. */
+static void frame_heard(long now) {
+  if (heartbeat_path == NULL) last_heard = now;
+}
+
+static int same_time(const struct timespec *a, const struct timespec *b) {
+  return a->tv_sec == b->tv_sec && a->tv_nsec == b->tv_nsec;
+}
+
+/* A change of the file's modification time since the last look is a sign of
+   life. A file that cannot be read is not. */
+static void check_heartbeat(long now) {
+  struct stat st;
+  if (heartbeat_path == NULL || now - last_beat_check < BEAT_CHECK_MS) return;
+  last_beat_check = now;
+  if (stat(heartbeat_path, &st) < 0) return;
+  /* beat_seen starts at the epoch, so the first look counts. */
+  if (!same_time(&st.st_mtim, &beat_seen)) {
+    beat_seen = st.st_mtim;
+    last_heard = now;
+  }
+}
+
+/* Writes out what is queued, waiting for the reader but not for ever: bactrian
+   is taken for dead after LIVENESS_MS with no change of the heartbeat file (as
+   in the loop) or, when there is no file, with no byte taken, so a PID 1 whose
+   reader is gone cannot keep its container up. Best effort. */
+static void flush_blocking(void) {
+  long progress = now_ms();
+  while (buf_used(&out) > 0) {
+    ssize_t n = write(1, out.data + out.off, buf_used(&out));
+    if (n > 0) {
+      buf_take(&out, (size_t)n);
+      progress = now_ms();
+      continue;
+    }
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      long now = now_ms();
+      check_heartbeat(now);
+      long since = heartbeat_path != NULL ? last_heard : progress;
+      long left = since + LIVENESS_MS - now;
+      if (left <= 0) break;
+      if (heartbeat_path != NULL && left > BEAT_CHECK_MS) left = BEAT_CHECK_MS;
+      struct pollfd p = {1, POLLOUT, 0};
+      int r = poll(&p, 1, (int)left);
+      if (r >= 0 || errno == EINTR) continue;
+    }
+    break;
+  }
+}
 
 __attribute__((noreturn)) static void protocol_error(const char *why) {
   log_failure(0, "relay", why);
   fprintf(stderr, "bactrian relay: protocol error: %s\n", why);
   signal_agent(SIGKILL);
-  /* Best effort: the log line goes out before the relay stops. */
-  int flags = fcntl(1, F_GETFL);
-  if (flags >= 0) fcntl(1, F_SETFL, flags & ~O_NONBLOCK);
-  while (buf_used(&out) > 0) {
-    ssize_t n = write(1, out.data + out.off, buf_used(&out));
-    if (n <= 0) break;
-    buf_take(&out, (size_t)n);
-  }
+  flush_blocking();
   exit(EXIT_PROTOCOL);
 }
 
@@ -543,7 +607,7 @@ static void read_frames(void) {
     if (get_u32(in_frame + 5) > MAX_PAYLOAD) protocol_error("frame too long");
   }
   if (in_have >= HEADER && in_have == in_needed()) {
-    last_heard = now_ms();
+    frame_heard(now_ms());
     if (deliver())
       in_have = 0;
     else
@@ -552,12 +616,13 @@ static void read_frames(void) {
 }
 
 /* A frame that waits for room is the agent's backpressure, not bactrian's
-   silence, so the wait does not count towards LIVENESS_MS. */
+   silence, so without a heartbeat file the wait does not count towards
+   LIVENESS_MS. */
 static void retry_pending(void) {
   if (in_pending && deliver()) {
     in_pending = 0;
     in_have = 0;
-    last_heard = now_ms();
+    frame_heard(now_ms());
   }
 }
 
@@ -625,15 +690,7 @@ static int run_loop(void) {
         unsigned char st[4];
         put_u32(st, (uint32_t)agent_status);
         frame(0, K_EXIT, st, 4);
-        int flags = fcntl(1, F_GETFL);
-        if (flags < 0 || fcntl(1, F_SETFL, flags & ~O_NONBLOCK) < 0)
-          die("fcntl");
-        while (buf_used(&out) > 0) {
-          ssize_t n = write(1, out.data + out.off, buf_used(&out));
-          if (n < 0 && errno == EINTR) continue;
-          if (n <= 0) break;
-          buf_take(&out, (size_t)n);
-        }
+        flush_blocking();
         return agent_status;
       }
     }
@@ -674,18 +731,30 @@ static int run_loop(void) {
       fds[nf++] = (struct pollfd){c->fd, ev, 0};
     }
     long now = now_ms();
-    if (in_pending) last_heard = now;
+    if (in_pending) frame_heard(now);
+    check_heartbeat(now);
     if (now - last_heard >= LIVENESS_MS) {
-      log_failure(0, "relay", "nothing from bactrian for 10 seconds");
-      fprintf(stderr,
-              "bactrian relay: nothing from bactrian for %d seconds, so the "
-              "agent is stopped\n",
-              LIVENESS_MS / 1000);
+      /* Behind queued output the log frame could only be written in part, and
+         a cut frame is worse than none, so it is queued only when nothing is
+         ahead of it. It is far under PIPE_BUF, so one write takes all of it or
+         none. The line on standard error is there either way. */
+      int clear = buf_used(&out) == 0;
+      char why[64];
+      snprintf(why, sizeof why, "nothing from bactrian for %d seconds",
+               LIVENESS_MS / 1000);
+      fprintf(stderr, "bactrian relay: %s, so the agent is stopped\n", why);
       signal_agent(SIGKILL);
+      if (clear) {
+        log_failure(0, "relay", why);
+        /* One try, never waiting: bactrian may be the reason nothing reads. */
+        ssize_t w = write(1, out.data + out.off, buf_used(&out));
+        (void)w; /* the exit follows whether or not it was read */
+      }
       exit(EXIT_PROTOCOL);
     }
     long left = last_heard + LIVENESS_MS - now;
     if (drain_until >= 0 && drain_until - now < left) left = drain_until - now;
+    if (heartbeat_path != NULL && left > BEAT_CHECK_MS) left = BEAT_CHECK_MS;
     int timeout = left < 0 ? 0 : (int)left;
     int r = poll(fds, (nfds_t)nf, timeout);
     if (r < 0) {
@@ -717,180 +786,7 @@ static int run_loop(void) {
   }
 }
 
-/* The probe */
-
-static const char *errno_name(int e) {
-  switch (e) {
-    case EPERM: return "EPERM";
-    case EACCES: return "EACCES";
-    case EROFS: return "EROFS";
-    case ENOENT: return "ENOENT";
-    case EEXIST: return "EEXIST";
-    case ENETUNREACH: return "ENETUNREACH";
-    case EHOSTUNREACH: return "EHOSTUNREACH";
-    case ENETDOWN: return "ENETDOWN";
-    case ECONNREFUSED: return "ECONNREFUSED";
-    case ETIMEDOUT: return "ETIMEDOUT";
-    case EADDRNOTAVAIL: return "EADDRNOTAVAIL";
-    default: return "error";
-  }
-}
-
-/* Connects without sending anything. NULL on success, else the error. */
-static const char *probe_connect(const char *ip, int port, int *fd_out) {
-  int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-  if (fd < 0) return errno_name(errno);
-  struct sockaddr_in a;
-  memset(&a, 0, sizeof a);
-  a.sin_family = AF_INET;
-  a.sin_port = htons((uint16_t)port);
-  if (inet_pton(AF_INET, ip, &a.sin_addr) != 1) {
-    close(fd);
-    return "error";
-  }
-  const char *res = NULL;
-  if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) {
-    if (errno != EINPROGRESS) {
-      res = errno_name(errno);
-    } else {
-      struct pollfd p = {fd, POLLOUT, 0};
-      int r = poll(&p, 1, 5000);
-      if (r == 0) {
-        res = "timeout";
-      } else if (r < 0) {
-        res = errno_name(errno);
-      } else {
-        int err = 0;
-        socklen_t len = sizeof err;
-        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
-          res = errno_name(errno);
-        else if (err != 0)
-          res = errno_name(err);
-      }
-    }
-  }
-  if (res != NULL || fd_out == NULL)
-    close(fd);
-  else
-    *fd_out = fd;
-  return res;
-}
-
-static const char *probe_listener(int port) {
-  int fd = -1;
-  const char *res = probe_connect("127.0.0.1", port, &fd);
-  if (res != NULL) return res;
-  char got[sizeof greeting];
-  size_t have = 0, want = sizeof greeting - 1;
-  while (have < want) {
-    struct pollfd p = {fd, POLLIN, 0};
-    int r = poll(&p, 1, 5000);
-    if (r == 0) {
-      res = "timeout";
-      break;
-    }
-    if (r < 0) {
-      res = errno_name(errno);
-      break;
-    }
-    ssize_t n = read(fd, got + have, want - have);
-    if (n == 0) {
-      res = "closed before the greeting";
-      break;
-    }
-    if (n < 0) {
-      if (errno == EAGAIN || errno == EINTR) continue;
-      res = errno_name(errno);
-      break;
-    }
-    have += (size_t)n;
-  }
-  close(fd);
-  if (res == NULL && memcmp(got, greeting, want) != 0) res = "unexpected reply";
-  return res;
-}
-
-static const char *probe_create(const char *path) {
-  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (fd < 0) return errno_name(errno);
-  close(fd);
-  return NULL;
-}
-
-/* NULL when /proc/self/status says NoNewPrivs is 1. */
-static const char *probe_no_new_privs(void) {
-  FILE *s = fopen("/proc/self/status", "re");
-  if (s == NULL) return errno_name(errno);
-  char line[256];
-  const char *res = "off";
-  while (fgets(line, sizeof line, s) != NULL) {
-    if (strncmp(line, "NoNewPrivs:", 11) == 0) {
-      if (strtol(line + 11, NULL, 10) == 1) res = NULL;
-      break;
-    }
-  }
-  fclose(s);
-  return res;
-}
-
-static const char *probe_read(const char *path) {
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return errno_name(errno);
-  char c;
-  ssize_t n = read(fd, &c, 1);
-  int e = errno;
-  close(fd);
-  if (n < 0) return errno_name(e);
-  return n == 0 ? "empty" : NULL;
-}
-
-static void put_outcome(FILE *f, const char *name, const char *res, int comma) {
-  fprintf(f, "\"%s\":\"%s\"%s", name, res == NULL ? "ok" : res,
-          comma ? "," : "");
-}
-
-/* paths: OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN */
-static int run_probe(int port, const char **paths) {
-  const char *public_ = probe_connect("1.1.1.1", 443, NULL);
-  const char *listener = probe_listener(port);
-  const char *outside_w = probe_create(paths[0]);
-  const char *inside_w = probe_create(paths[1]);
-  const char *denied_r = probe_read(paths[2]);
-  const char *masked_r = probe_read(paths[3]);
-  const char *masked_case_r = probe_read(paths[4]);
-  const char *root_w = probe_create(paths[5]);
-  const char *other_run_w = probe_create(paths[6]);
-  const char *no_new_privs = probe_no_new_privs();
-  FILE *f = stdout;
-  fputc('{', f);
-  put_outcome(f, "public", public_, 1);
-  put_outcome(f, "listener", listener, 1);
-  put_outcome(f, "outside_write", outside_w, 1);
-  put_outcome(f, "inside_write", inside_w, 1);
-  put_outcome(f, "denied_read", denied_r, 1);
-  put_outcome(f, "masked_read", masked_r, 1);
-  put_outcome(f, "masked_case_read", masked_case_r, 1);
-  put_outcome(f, "root_write", root_w, 1);
-  put_outcome(f, "other_run_write", other_run_w, 1);
-  put_outcome(f, "no_new_privs", no_new_privs, 1);
-  DIR *d = opendir("/sys/class/net");
-  put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
-  fputs("\"interfaces\":[", f);
-  int first = 1;
-  if (d != NULL) {
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-      if (e->d_name[0] == '.') continue;
-      char esc[256];
-      json_string(esc, sizeof esc, e->d_name);
-      fprintf(f, "%s\"%s\"", first ? "" : ",", esc);
-      first = 0;
-    }
-    closedir(d);
-  }
-  fputs("]}\n", f);
-  return fflush(f) == 0 ? 0 : 1;
-}
+#include "probe.inc"
 
 /* Arguments */
 
@@ -904,9 +800,9 @@ static int parse_port(const char *s) {
 
 static void usage(void) {
   fprintf(stderr,
-          "usage: relay --forward PORT... -- AGENT ARGV...\n"
-          "       relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED "
-          "MASKED_CASE ROOT OTHER_RUN\n");
+          "usage: relay [--heartbeat FILE] --forward PORT... -- AGENT ARGV...\n"
+          "       relay [--heartbeat FILE] --forward PORT --probe OUTSIDE "
+          "INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN\n");
   exit(EXIT_PROTOCOL);
 }
 
@@ -920,6 +816,9 @@ int main(int argc, char **argv) {
       int p = parse_port(argv[i + 1]);
       if (p < 0 || nports == MAX_FORWARDS) usage();
       forward_ports[nports++] = p;
+      i += 2;
+    } else if (strcmp(argv[i], "--heartbeat") == 0 && i + 1 < argc) {
+      heartbeat_path = argv[i + 1];
       i += 2;
     } else if (strcmp(argv[i], "--probe") == 0 && i + PROBE_ARGS < argc) {
       probing = 1;
