@@ -4,6 +4,7 @@ repository layout, with a fake key. No provider is reached."""
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parents[1] / "dev" / "live-smoke.py"
@@ -56,6 +58,25 @@ class LiveSmoke(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("unset BACTRIAN_UPSTREAM_OPENAI", done.stderr)
         self.assertFalse((self.root / ".bactrian").exists(), "bactrian ran")
+
+    def logged(self) -> list[dict[str, object]]:
+        entries: list[dict[str, object]] = []
+        for line in self.smoke_ledger.read_text().splitlines():
+            entry: object = json.loads(line)
+            if not isinstance(entry, dict):
+                self.fail(f"not a JSON object: {line}")
+            entries.append(cast(dict[str, object], entry))
+        return entries
+
+    def test_logs_only_its_own_runs_spend(self) -> None:
+        done = self.smoke()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        records = [e for e in self.logged() if e["usd"] == 0.001]
+        self.assertEqual(len(records), 2, self.logged())
+        for entry in records:
+            self.assertEqual(entry["model"], "test-model")
+            self.assertEqual((entry["input_tokens"], entry["output_tokens"]), (100, 10))
+        self.assertNotIn(0.5, [e["usd"] for e in self.logged()])
 
 
 if __name__ == "__main__":

@@ -146,8 +146,10 @@ class Spend:
     usd: float
 
 
-def spends_since(offset: int) -> list[Spend]:
-    """The spend of every ledger line appended after byte `offset`."""
+def spends_since(offset: int, owner: str | None) -> list[Spend]:
+    """The spend of the reservations appended after byte `offset` by `owner`,
+    the run id. Other processes can share the ledger. Without a run id, every
+    reservation counts."""
     if not BACTRIAN_LEDGER.exists():
         return []
     with BACTRIAN_LEDGER.open("rb") as f:
@@ -160,7 +162,7 @@ def spends_since(offset: int) -> list[Spend]:
         kind = str_at(event, "event")
         if ident is None:
             continue
-        if kind == "reserve":
+        if kind == "reserve" and owner in (None, str_at(event, "owner")):
             reserved[ident] = Spend(
                 str_at(event, "model") or "", number_at(event, "reserved_usd") or 0.0
             )
@@ -224,7 +226,7 @@ class Session:
         run_dir = ROOT / dir_field if dir_field else None
         if run_dir is not None:
             self.run_dirs.append(run_dir)
-        spends = spends_since(offset)
+        spends = spends_since(offset, str_at(report, "run_id"))
         self.log(spends, tokens_of(run_dir))
         if report is None:
             self.problems.append(f"{label}: no JSON report, exit {done.returncode}")
