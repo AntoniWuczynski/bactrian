@@ -5,7 +5,10 @@
 set -eu
 
 apk add --no-cache build-base git curl bash opam m4 patch unzip rsync \
-  linux-headers libffi-dev gmp-dev pkgconf
+  linux-headers pkgconf
+# --no-cache keeps no package index, and without one opam reports system
+# packages such as linux-headers (needed by uring) as unavailable.
+apk update
 export OPAMROOT="${OPAMROOT:-/opam-root}"
 export OPAMYES=1 OPAMCONFIRMLEVEL=unsafe-yes
 
@@ -15,5 +18,9 @@ if [ ! -d "$OPAMROOT/bactrian" ]; then
 fi
 eval "$(opam env --switch=bactrian --set-switch)"
 opam install . --deps-only --locked
+# The lock file is made on macOS, so it has no Linux-only Eio backend. Pin it
+# here, and the version of uring that eio_linux 1.6 needs, rather than let the
+# solver pick the newest.
+opam install eio_linux.1.6 uring.2.15.0
 BACTRIAN_STATIC=1 dune build --profile release bin/main.exe
 cp _build/default/bin/main.exe "${1:-bactrian}"
