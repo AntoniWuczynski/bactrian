@@ -410,9 +410,7 @@ def main() -> None:
         sys.exit("live-smoke: set BACTRIAN_LIVE_SMOKE=1 to spend real money")
     upstream = os.environ.get("BACTRIAN_UPSTREAM_OPENAI", "")
     if upstream:
-        sys.exit(
-            f"live-smoke: unset BACTRIAN_UPSTREAM_OPENAI ({upstream}), the smoke must reach OpenAI"
-        )
+        sys.exit("live-smoke: unset BACTRIAN_UPSTREAM_OPENAI, the smoke must reach OpenAI")
     key = require_env("OPENAI_API_KEY")
     cap = cap_from_env()
     model = require_env("BACTRIAN_SMOKE_MODEL")

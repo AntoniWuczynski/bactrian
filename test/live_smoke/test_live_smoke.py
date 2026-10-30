@@ -72,6 +72,7 @@ class LiveSmoke(unittest.TestCase):
     def test_refuses_an_upstream_override(self) -> None:
         done = self.smoke(BACTRIAN_UPSTREAM_OPENAI="http://127.0.0.1:9")
         self.assert_refused(done, "unset BACTRIAN_UPSTREAM_OPENAI")
+        self.assertNotIn("127.0.0.1", done.stderr)
 
     def test_refuses_a_cap_outside_the_range(self) -> None:
         for cap in ("0", "-0.01", "0.11", "nan", "inf", "abc", ""):
