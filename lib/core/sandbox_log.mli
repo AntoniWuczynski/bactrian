@@ -47,14 +47,17 @@ val settle :
   read:(unit -> string list) ->
   wait:(float -> unit) ->
   now:(unit -> float) ->
+  mark:(unit -> unit) ->
   deadline:float ->
   settled
 (** The run's denials from the system log. [read] gives the lines of one
     [log show --style ndjson] call, [wait s] sleeps [s] seconds and [now] is the
     time in seconds. Reads every 0.5 seconds until a read holds the {!end_tag}
-    marker. The marker does not mean that other processes' earlier denials have
-    reached the log, so it then reads again every second until two reads in a
-    row give the same violations. Neither shows denials that the log dropped,
+    marker, which the caller has logged once, and calls [mark] to log it again
+    every 5 seconds that it is missing, because the log can drop it as it drops
+    any denial. The marker does not mean that other processes' earlier denials
+    have reached the log, so it then reads again every second until two reads in
+    a row give the same violations. Neither shows denials that the log dropped,
     which it does under load, so even [Settled] can miss some. *)
 
 val of_relay_line : string -> (violation, string) result

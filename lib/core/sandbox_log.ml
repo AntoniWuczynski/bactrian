@@ -159,6 +159,7 @@ type relay = { kind : string; port : int; socket : string; reason : string }
 
 let poll_interval = 0.5
 let settle_interval = 1.
+let mark_interval = 5.
 
 let equal_violation (a : violation) (b : violation) =
   String.equal a.kind b.kind && String.equal a.detail b.detail
@@ -168,19 +169,25 @@ type settled =
   | Unsettled of violation list
   | No_marker
 
-let settle ~tag ~read ~wait ~now ~deadline =
+let settle ~tag ~read ~wait ~now ~mark ~deadline =
   let marked =
     List.exists (fun l ->
         Option.is_some (of_seatbelt_ndjson ~tag:(end_tag tag) l))
   in
   let parse = List.filter_map (of_seatbelt_ndjson ~tag) in
-  let rec until_marker () =
+  (* The log can drop the marker as it drops any denial, so it is logged
+     again while it is missing. *)
+  let rec until_marker ~marked_at =
     let lines = read () in
     if marked lines then until_stable (parse lines)
     else if now () >= deadline then No_marker
     else begin
       wait poll_interval;
-      until_marker ()
+      if now () -. marked_at >= mark_interval then begin
+        mark ();
+        until_marker ~marked_at:(now ())
+      end
+      else until_marker ~marked_at
     end
   and until_stable previous =
     if now () +. settle_interval > deadline then Unsettled previous
@@ -191,7 +198,7 @@ let settle ~tag ~read ~wait ~now ~deadline =
       else until_stable next
     end
   in
-  until_marker ()
+  until_marker ~marked_at:(now ())
 
 let of_relay_line line =
   match Yojson.Safe.from_string line with

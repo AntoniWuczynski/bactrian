@@ -79,6 +79,7 @@ let settle ?(deadline = 30.) reads =
     line ("Sandbox: touch(5) deny(1) file-write-create /m\n" ^ L.end_tag tag)
   in
   let script = ref reads and clock = ref 0. and calls = ref 0 in
+  let marks = ref [] in
   let read () =
     incr calls;
     match !script with
@@ -91,6 +92,7 @@ let settle ?(deadline = 30.) reads =
     L.settle ~tag ~read
       ~wait:(fun s -> clock := !clock +. s)
       ~now:(fun () -> !clock)
+      ~mark:(fun () -> marks := !clock :: !marks)
       ~deadline
   in
   let details = List.map (fun (v : L.violation) -> v.detail) in
@@ -99,13 +101,15 @@ let settle ?(deadline = 30.) reads =
     | Unsettled vs -> Some ("unsettled", details vs)
     | No_marker -> None),
     !calls,
-    !clock )
+    !clock,
+    List.rev !marks )
 
 let test_settle () =
-  let check name expected (got, calls, clock) =
+  let check ?(marks = []) name expected (got, calls, clock, marked) =
     Alcotest.(
       check (triple (option (pair string (list string))) int (float 0.)))
-      name expected (got, calls, clock)
+      name expected (got, calls, clock);
+    Alcotest.(check (list (float 0.))) (name ^ ": marks") marks marked
   in
   check "stable at once: the marker read and one more"
     (Some ("settled", [ "/a by cat(3)" ]), 2, 1.)
@@ -123,7 +127,15 @@ let test_settle () =
     (settle ~deadline:1. [ ([], false); ([], false); ([], false) ]);
   check "still changing at the deadline: the last read"
     (Some ("unsettled", [ "/a by cat(3)"; "/b by cat(3)" ]), 2, 1.)
-    (settle ~deadline:1.5 [ ([ "/a" ], true); ([ "/a"; "/b" ], true) ])
+    (settle ~deadline:1.5 [ ([ "/a" ], true); ([ "/a"; "/b" ], true) ]);
+  let missing n = List.init n (fun _ -> ([], false)) in
+  check "the marker logged again every 5 seconds while missing"
+    ~marks:[ 5.; 10. ]
+    (Some ("settled", [ "/a by cat(3)" ]), 24, 12.)
+    (settle (missing 22 @ [ ([ "/a" ], true); ([ "/a" ], true) ]));
+  check "bounded by the deadline however often it is logged"
+    ~marks:[ 5.; 10.; 15. ] (None, 37, 18.)
+    (settle ~deadline:18. (missing 37))
 
 let test_relay_log () =
   let good =

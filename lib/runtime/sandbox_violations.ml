@@ -95,8 +95,8 @@ let drain reader fd =
 
 let log_timeout = 30.
 
-(* Denies the one write it makes, with the end tag, so the marker always
-   reaches the log. *)
+(* Denies the one write it makes, with the end tag, so each marker is a
+   tagged denial. *)
 let marker_profile =
   "(version 1)\n\
    (deny default (with message (param \"TAG\")))\n\
@@ -108,22 +108,27 @@ let seatbelt ~env ~tag ~since ~marker =
   let end_tag = Sandbox_log.end_tag tag in
   (* touch reports the denial on its standard error, which is not ours. *)
   let discard = Eio.Flow.buffer_sink (Buffer.create 256) in
-  match
-    Eio.Process.run mgr
-      ~is_success:(fun (_ : int) -> true)
-      ~stdout:discard ~stderr:discard ~env:(Proc_util.tool_env ())
-      [
-        "/usr/bin/sandbox-exec";
-        "-p";
-        marker_profile;
-        "-D";
-        "TAG=" ^ end_tag;
-        "/usr/bin/touch";
-        marker;
-      ]
-  with
-  | exception Eio.Io _ -> Not_collected "the end marker could not be logged"
-  | () -> (
+  let mark () =
+    match
+      Eio.Process.run mgr
+        ~is_success:(fun (_ : int) -> true)
+        ~stdout:discard ~stderr:discard ~env:(Proc_util.tool_env ())
+        [
+          "/usr/bin/sandbox-exec";
+          "-p";
+          marker_profile;
+          "-D";
+          "TAG=" ^ end_tag;
+          "/usr/bin/touch";
+          marker;
+        ]
+    with
+    | () -> true
+    | exception Eio.Io _ -> false
+  in
+  match mark () with
+  | false -> Not_collected "the end marker could not be logged"
+  | true -> (
       let argv =
         [
           "/usr/bin/log";
@@ -151,6 +156,7 @@ let seatbelt ~env ~tag ~since ~marker =
         Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
             Ok
               (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
+                 ~mark:(fun () -> ignore (mark () : bool))
                  ~deadline:(now () +. log_timeout)))
       with
       | Ok (Settled vs) -> collected vs
