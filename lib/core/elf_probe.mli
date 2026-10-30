@@ -30,3 +30,10 @@ val prefix_length : int
 val probe : string -> kind
 (** [probe prefix] classifies a file from its first {!prefix_length} bytes (or
     all of them, if it is shorter). *)
+
+val interpreter : string -> string option
+(** The path the [PT_INTERP] segment names, such as [/lib/ld-musl-aarch64.so.1]
+    or [/lib64/ld-linux-x86-64.so.2], read from the first {!prefix_length} bytes
+    of a file. [None] for a file with no such segment, one that is not a
+    little-endian ELF file, or an interpreter cut off by the end of the prefix.
+*)

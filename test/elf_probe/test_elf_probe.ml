@@ -58,6 +58,24 @@ let test_not_elf () =
   check "interpreter name cut off is still an interpreter" Dynamic
     (String.sub whole 0 130)
 
+let test_interpreter () =
+  let interpreter = Alcotest.(option string) in
+  Alcotest.check interpreter "the path, without its NUL"
+    (Some "/lib/ld-musl-aarch64.so.1")
+    (Elf_probe.interpreter
+       (E.elf
+          [ (E.pt_load, "x"); (E.pt_interp, "/lib/ld-musl-aarch64.so.1\000") ]));
+  Alcotest.check interpreter "32-bit" (Some "/lib/ld-linux.so.2")
+    (Elf_probe.interpreter
+       (E.elf ~class64:false [ (E.pt_interp, "/lib/ld-linux.so.2\000") ]));
+  Alcotest.check interpreter "static" None
+    (Elf_probe.interpreter (E.elf [ (E.pt_load, "code") ]));
+  Alcotest.check interpreter "not ELF" None
+    (Elf_probe.interpreter "#!/bin/sh\n");
+  let whole = E.elf [ (E.pt_interp, "/lib/ld-musl-aarch64.so.1\000") ] in
+  Alcotest.check interpreter "cut off by the prefix" None
+    (Elf_probe.interpreter (String.sub whole 0 130))
+
 let test_hostile_notes () =
   (* Sizes that point past the data must end the walk, not loop or raise. *)
   let huge = E.note ~name:"Go\000\000" ~kind:9 ~desc:"" in
@@ -121,6 +139,7 @@ let () =
           Alcotest.test_case "dynamic and static" `Quick test_linking;
           Alcotest.test_case "go build id" `Quick test_go;
           Alcotest.test_case "not an elf file" `Quick test_not_elf;
+          Alcotest.test_case "the interpreter" `Quick test_interpreter;
           Alcotest.test_case "malformed notes" `Quick test_hostile_notes;
         ] );
       ( "shebang",

@@ -71,7 +71,7 @@ val relay_cache_dir : unit -> string
 (** [$XDG_CACHE_HOME/bactrian/relay], or [~/.cache/bactrian/relay]. *)
 
 val relay_name : t -> string
-(** The cached relay's file name: a hash of {!Relay_source.text} and the
+(** The cached relay's file name: a hash of {!Relay_source.files} and the
     architecture, so a changed relay is built again, and the same for both
     runtimes on one host. *)
 

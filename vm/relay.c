@@ -25,7 +25,7 @@
    is bounded: a destination that does not drain stops the reading of its
    source.
 
-   relay --forward PORT... [--faketime EPOCH DIR] -- AGENT ARGV...
+   relay --forward PORT... [--faketime EPOCH DIR LIBC] -- AGENT ARGV...
    relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT
          OTHER_RUN
    relay --probe-exec NAME
@@ -36,19 +36,9 @@
    reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
    no_new_privs is set.
 
-   --faketime EPOCH DIR starts the agent's clock at EPOCH (Unix seconds): the
-   agent gets LD_PRELOAD=DIR/LIBC/libfaketimeMT.so.1, where LIBC is musl or
-   glibc by the loader the image has, and FAKETIME set to the offset from the
-   container's own clock to EPOCH, read just before it starts. An offset needs
-   no time zone and no strptime format, which musl cannot read as an epoch
-   (%s). The agent's child processes inherit it and so share the clock.
-
-   --probe-exec NAME writes one JSON line on channel 0 in place of an agent:
-   the image's C library (musl, glibc or none), and whether NAME is an
-   executable file found as the system would (a name with a slash as a path
-   from the working directory, else through PATH) and the first 256 KiB of it
-   in hexadecimal, which bactrian classifies as for a host executable
-   (Elf_probe). */
+   --faketime EPOCH DIR LIBC starts the agent's clock at EPOCH (Unix seconds)
+   with the libfaketime of LIBC (musl or glibc) in DIR, and --probe-exec NAME
+   reports on NAME in the image in place of an agent: see relay_image.h. */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -70,6 +60,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "relay_image.h"
 
 enum kind {
   K_DATA = 0,
@@ -330,141 +322,11 @@ static void reset_child_signals(void) {
   sigaction(SIGPIPE, &sa, NULL);
 }
 
-/* The image's C library and libfaketime */
-
-#define EXEC_PREFIX 262144
-
-/* Whether a directory holds a file whose name starts and ends as given. */
-static int dir_has(const char *dir, const char *prefix, const char *suffix) {
-  DIR *d = opendir(dir);
-  if (d == NULL) return 0;
-  int found = 0;
-  struct dirent *e;
-  size_t sl = strlen(suffix);
-  while (!found && (e = readdir(d)) != NULL) {
-    size_t n = strlen(e->d_name);
-    found = strncmp(e->d_name, prefix, strlen(prefix)) == 0 && n >= sl &&
-            strcmp(e->d_name + n - sl, suffix) == 0;
-  }
-  closedir(d);
-  return found;
-}
-
-/* "musl" or "glibc" by the dynamic loader the image carries, NULL for neither
-   (a distroless static image). The names are the loaders': ld-musl-ARCH.so.1,
-   ld-linux-ARCH.so.N. */
-static const char *image_libc(void) {
-  static const char *const dirs[] = {"/lib", "/lib64", "/usr/lib", "/usr/lib64"};
-  for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++)
-    if (dir_has(dirs[i], "ld-musl-", ".so.1")) return "musl";
-  for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++)
-    if (dir_has(dirs[i], "ld-linux", ".so.2") ||
-        dir_has(dirs[i], "ld-linux", ".so.1"))
-      return "glibc";
-  return NULL;
-}
-
 static int faketime_set;
 static long long faketime_epoch;
 static const char *faketime_dir;
+static const char *faketime_libc;
 static const char *exec_probe_name;
-
-/* In the agent's process before it starts: libfaketime for the image's C
-   library in LD_PRELOAD (first, and once), and FAKETIME as the offset that
-   makes the container's clock read EPOCH now. Fails the start rather than run
-   an agent whose clock was promised and is not there. */
-static void apply_faketime(void) {
-  const char *libc = image_libc();
-  if (libc == NULL) {
-    fprintf(stderr, "bactrian relay: libfaketime: no musl or glibc loader\n");
-    _exit(126);
-  }
-  char lib[4096];
-  if (snprintf(lib, sizeof lib, "%s/%s/libfaketimeMT.so.1", faketime_dir,
-               libc) >= (int)sizeof lib ||
-      access(lib, R_OK) < 0) {
-    fprintf(stderr, "bactrian relay: libfaketime: cannot read %s/%s\n",
-            faketime_dir, libc);
-    _exit(126);
-  }
-  const char *old = getenv("LD_PRELOAD");
-  char preload[8192];
-  if (old != NULL && *old != '\0') {
-    if (strstr(old, lib) != NULL)
-      snprintf(preload, sizeof preload, "%s", old);
-    else
-      snprintf(preload, sizeof preload, "%s:%s", lib, old);
-  } else {
-    snprintf(preload, sizeof preload, "%s", lib);
-  }
-  struct timespec now;
-  if (clock_gettime(CLOCK_REALTIME, &now) < 0) _exit(126);
-  long long offset_us =
-      faketime_epoch * 1000000LL -
-      ((long long)now.tv_sec * 1000000LL + now.tv_nsec / 1000);
-  char offset[64];
-  long long mag = offset_us < 0 ? -offset_us : offset_us;
-  snprintf(offset, sizeof offset, "%c%lld.%06lld", offset_us < 0 ? '-' : '+',
-           mag / 1000000LL, mag % 1000000LL);
-  if (setenv("LD_PRELOAD", preload, 1) < 0 || setenv("FAKETIME", offset, 1) < 0)
-    _exit(126);
-  unsetenv("FAKETIME_FMT");
-}
-
-/* NAME as the system would find it: a path with a slash, else a regular
-   executable file in a directory of PATH. */
-static int find_executable(const char *name, char *out, size_t cap) {
-  struct stat st;
-  if (strchr(name, '/') != NULL) {
-    if (snprintf(out, cap, "%s", name) >= (int)cap) return 0;
-    return stat(out, &st) == 0 && S_ISREG(st.st_mode) && access(out, X_OK) == 0;
-  }
-  const char *path = getenv("PATH");
-  if (path == NULL) return 0;
-  while (*path != '\0') {
-    const char *end = strchr(path, ':');
-    size_t n = end != NULL ? (size_t)(end - path) : strlen(path);
-    if (n > 0 &&
-        snprintf(out, cap, "%.*s/%s", (int)n, path, name) < (int)cap &&
-        stat(out, &st) == 0 && S_ISREG(st.st_mode) && access(out, X_OK) == 0)
-      return 1;
-    if (end == NULL) break;
-    path = end + 1;
-  }
-  return 0;
-}
-
-static int run_exec_probe(const char *name) {
-  const char *libc = image_libc();
-  char file[4096];
-  static unsigned char prefix[EXEC_PREFIX];
-  size_t have = 0;
-  int found = find_executable(name, file, sizeof file);
-  if (found) {
-    int fd = open(file, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-      found = 0;
-    } else {
-      ssize_t n;
-      while (have < sizeof prefix &&
-             (n = read(fd, prefix + have, sizeof prefix - have)) != 0) {
-        if (n < 0) {
-          if (errno == EINTR) continue;
-          found = 0;
-          break;
-        }
-        have += (size_t)n;
-      }
-      close(fd);
-    }
-  }
-  printf("{\"libc\":\"%s\",\"found\":%s,\"prefix\":\"", libc ? libc : "none",
-         found ? "true" : "false");
-  if (found)
-    for (size_t i = 0; i < have; i++) printf("%02x", prefix[i]);
-  fputs("\"}\n", stdout);
-  return fflush(stdout) == 0 ? 0 : 1;
-}
 
 #define PROBE_ARGS 7
 
@@ -483,8 +345,9 @@ static void start_agent(char **argv, const char **probe, int probe_port) {
     if (dup2(in_pipe[0], 0) < 0 || dup2(out_pipe[1], 1) < 0) _exit(126);
     close_from(3);
     if (probe != NULL) _exit(run_probe(probe_port, probe));
-    if (exec_probe_name != NULL) _exit(run_exec_probe(exec_probe_name));
-    if (faketime_set) apply_faketime();
+    if (exec_probe_name != NULL) _exit(relay_probe_exec(exec_probe_name));
+    if (faketime_set)
+      relay_apply_faketime(faketime_epoch, faketime_dir, faketime_libc);
     execvp(argv[0], argv);
     fprintf(stderr, "bactrian relay: cannot start %s: %s\n", argv[0],
             strerror(errno));
@@ -1058,7 +921,7 @@ static int parse_port(const char *s) {
 
 static void usage(void) {
   fprintf(stderr,
-          "usage: relay --forward PORT... [--faketime EPOCH DIR] -- AGENT "
+          "usage: relay --forward PORT... [--faketime EPOCH DIR LIBC] -- AGENT "
           "ARGV...\n"
           "       relay --forward PORT --probe OUTSIDE INSIDE DENIED MASKED "
           "MASKED_CASE ROOT OTHER_RUN\n"
@@ -1081,16 +944,19 @@ int main(int argc, char **argv) {
       probing = 1;
       for (int k = 0; k < PROBE_ARGS; k++) probe[k] = argv[i + 1 + k];
       i += 1 + PROBE_ARGS;
-    } else if (strcmp(argv[i], "--faketime") == 0 && i + 2 < argc) {
+    } else if (strcmp(argv[i], "--faketime") == 0 && i + 3 < argc) {
       char *end;
       errno = 0;
       faketime_epoch = strtoll(argv[i + 1], &end, 10);
       if (errno != 0 || *end != '\0' || end == argv[i + 1] ||
-          faketime_epoch < 0 || argv[i + 2][0] != '/')
+          faketime_epoch < 0 || argv[i + 2][0] != '/' ||
+          (strcmp(argv[i + 3], "musl") != 0 &&
+           strcmp(argv[i + 3], "glibc") != 0))
         usage();
       faketime_set = 1;
       faketime_dir = argv[i + 2];
-      i += 3;
+      faketime_libc = argv[i + 3];
+      i += 4;
     } else if (strcmp(argv[i], "--probe-exec") == 0 && i + 1 < argc) {
       exec_probe_name = argv[i + 1];
       i += 2;

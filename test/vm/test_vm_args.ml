@@ -864,7 +864,7 @@ let test_readable_errors () =
 
 let test_faketime () =
   let f : Vm_args.faketime =
-    { epoch = 1773577800; dir = "/c/faketime-1a2b-arm64" }
+    { epoch = 1773577800; dir = "/c/faketime-1a2b-arm64"; libc = Glibc }
   in
   let tail n a = List.filteri (fun i _ -> i >= List.length a - n) a in
   Alcotest.check strings "Docker mounts the libraries and tells the relay"
@@ -874,11 +874,12 @@ let test_faketime () =
       "--faketime";
       "1773577800";
       "/bactrian/faketime";
+      "glibc";
       "--";
       "node";
       "agent.js";
     ]
-    (tail 8 (argv (input ~faketime:f ())));
+    (tail 9 (argv (input ~faketime:f ())));
   Alcotest.(check bool)
     "read-only" true
     (List.mem
@@ -891,11 +892,12 @@ let test_faketime () =
       "--faketime";
       "1773577800";
       "/bactrian/faketime-1a2b-arm64";
+      "glibc";
       "--";
       "node";
       "agent.js";
     ]
-    (tail 8 (argv (input ~kind:`Container ~faketime:f ())));
+    (tail 9 (argv (input ~kind:`Container ~faketime:f ())));
   Alcotest.(check bool)
     "container mounts nothing more" false
     (List.exists

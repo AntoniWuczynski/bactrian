@@ -95,3 +95,15 @@ let probe s =
       if List.exists (go_note s) segs then Go
       else if List.exists (fun seg -> seg.kind = pt_interp) segs then Dynamic
       else Static
+
+let interpreter s =
+  let* segs = segments s in
+  let* seg = List.find_opt (fun seg -> seg.kind = pt_interp) segs in
+  if seg.offset >= 0 && seg.size > 0 && seg.offset + seg.size <= String.length s
+  then
+    let raw = String.sub s seg.offset seg.size in
+    Some
+      (match String.index_opt raw '\000' with
+      | Some n -> String.sub raw 0 n
+      | None -> raw)
+  else None

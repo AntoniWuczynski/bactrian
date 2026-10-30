@@ -41,6 +41,9 @@ type faketime = {
   dir : string;
       (** The host directory that holds [musl/libfaketimeMT.so.1] and
           [glibc/libfaketimeMT.so.1], beside the relay. *)
+  libc : Vm_exec_probe.libc;
+      (** The C library the agent's executable is linked against, which picks
+          the library to preload. *)
 }
 
 type entry_kind =
@@ -193,7 +196,7 @@ val argv : input -> (invocation, error) result
      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
      --memory-swap 4g --log-driver none --pull never --workdir DIR --env-file
      FILE --entrypoint /bactrian/relay --mount|--tmpfs... -- IMAGE --forward
-     PORT... [--faketime EPOCH DIR] -- AGENT...] (or
+     PORT... [--faketime EPOCH DIR LIBC] -- AGENT...] (or
     [--probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN] in place
     of [-- AGENT...]).
 

@@ -9,7 +9,7 @@ type probe = {
 }
 
 type command = Agent of string list | Probe of probe | Probe_exec of string
-type faketime = { epoch : int; dir : string }
+type faketime = { epoch : int; dir : string; libc : Vm_exec_probe.libc }
 type entry_kind = File | Dir | Special | Link_to_file of string | Other_link
 
 type entry = {
@@ -589,13 +589,19 @@ let argv i =
             "--mount";
             bind_value ~source:f.dir ~target:faketime_dir ~writable:false;
           ],
-          [ "--faketime"; string_of_int f.epoch; faketime_dir ] )
+          [
+            "--faketime";
+            string_of_int f.epoch;
+            faketime_dir;
+            Vm_exec_probe.libc_name f.libc;
+          ] )
     | `Container, Some f ->
         ( [],
           [
             "--faketime";
             string_of_int f.epoch;
             Filename.concat relay_dir (Filename.basename f.dir);
+            Vm_exec_probe.libc_name f.libc;
           ] )
   in
   let start, flags, entrypoint, relay_mount =

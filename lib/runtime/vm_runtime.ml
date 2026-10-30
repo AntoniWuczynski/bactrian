@@ -230,7 +230,13 @@ let relay_cache_dir () =
 
 let relay_name t =
   Printf.sprintf "relay-%s-%s"
-    (String.sub Digest.BLAKE256.(to_hex (string Relay_source.text)) 0 16)
+    (String.sub
+       Digest.BLAKE256.(
+         to_hex
+           (string
+              (String.concat "\000"
+                 (List.concat_map (fun (n, t) -> [ n; t ]) Relay_source.files))))
+       0 16)
     (String.map
        (fun c ->
          match c with
@@ -263,12 +269,15 @@ let build ~process_mgr ~clock t ~dir ~target =
       with Unix.Unix_error _ | Sys_error _ -> ())
   @@ fun () ->
   List.iter (fun d -> Unix.mkdir d 0o755) [ work; src; out ];
-  Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
-      output_string oc Relay_source.text);
+  List.iter
+    (fun (name, text) ->
+      Out_channel.with_open_bin (Filename.concat src name) (fun oc ->
+          output_string oc text))
+    Relay_source.files;
   let script =
     Printf.sprintf
       "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
-       /out/relay /src/relay.c && chown %d:%d /out/relay"
+       /out/relay /src/relay.c /src/relay_image.c && chown %d:%d /out/relay"
       (String.concat " " build_packages)
       (Unix.getuid ()) (Unix.getgid ())
   in
@@ -364,9 +373,9 @@ let faketime_sha256 =
 
 let faketime_archive = "libfaketime-0.9.13.tar.gz"
 
-(* Debian bookworm of 2026-10-05, pushed 2026-10-06 (glibc 2.36, so the library
-   loads in any image with a glibc of 2.36 or later), the multi-architecture
-   index. *)
+(* Debian bookworm of 2026-10-05, pushed 2026-10-06 (glibc 2.36). The library
+   needs only GLIBC_2.34 ({!Vm_exec_probe.glibc_floor}), which the relay checks
+   in the image before it is preloaded. The multi-architecture index. *)
 let glibc_build_image =
   "debian:bookworm-20261005-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
 
@@ -381,28 +390,38 @@ let faketime_fetch_script =
     (Unix.getuid ()) (Unix.getgid ()) faketime_archive
 
 (* The same steps in each builder: check the archive, build only the
-   multi-thread library (the other targets do not build with musl), and hand
-   it to the user. *)
-let faketime_build_script ~install =
+   multi-thread library (the other targets do not build with musl), run
+   [check] on it, and hand it to the user. *)
+let faketime_build_script ~install ~check =
   Printf.sprintf
     "set -eu; %s; echo '%s  /src/%s' | sha256sum -c >&2 && mkdir /tmp/lf && \
      tar xzf /src/%s -C /tmp/lf --strip-components=1 && make -C /tmp/lf/src \
-     libfaketimeMT.so.1 >&2 && cp /tmp/lf/src/libfaketimeMT.so.1 /out/ && \
-     chown %d:%d /out/libfaketimeMT.so.1"
-    install faketime_sha256 faketime_archive faketime_archive (Unix.getuid ())
-    (Unix.getgid ())
+     libfaketimeMT.so.1 >&2 && %s && cp /tmp/lf/src/libfaketimeMT.so.1 /out/ \
+     && chown %d:%d /out/libfaketimeMT.so.1"
+    install faketime_sha256 faketime_archive faketime_archive check
+    (Unix.getuid ()) (Unix.getgid ())
+
+(* The glibc library asks for no version of glibc newer than
+   {!Vm_exec_probe.glibc_floor}, which is what the relay checks the image for.
+   A build that needs more fails here, not in an agent that will not start. *)
+let glibc_floor_check =
+  "newest=$(objdump -T /tmp/lf/src/libfaketimeMT.so.1 | grep -o \
+   'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1) && [ \
+   \"$(printf '%s\\n' \"$newest\" " ^ Vm_exec_probe.glibc_floor
+  ^ " | sort -V | tail -1)\" = " ^ Vm_exec_probe.glibc_floor ^ " ]"
 
 let faketime_builder : Vm_exec_probe.libc -> string * string = function
   | Musl ->
       ( build_image,
         faketime_build_script
-          ~install:"apk add --no-cache make gcc musl-dev >&2" )
+          ~install:"apk add --no-cache make gcc musl-dev >&2" ~check:"true" )
   | Glibc ->
       ( glibc_build_image,
         faketime_build_script
           ~install:
             "apt-get update -qq >&2 && apt-get install -y -qq \
-             --no-install-recommends gcc make libc6-dev >&2" )
+             --no-install-recommends gcc make libc6-dev binutils >&2"
+          ~check:glibc_floor_check )
 
 (* A directory beside the relay, named for everything the build depends on, so
    a changed version or script is built again. *)

@@ -1,10 +1,11 @@
 type libc = Musl | Glibc
 
 let libc_name = function Musl -> "musl" | Glibc -> "glibc"
+let glibc_floor = "2.34"
 
-type report = { libc : libc option; executable : string option }
+type report = { glibc_2_34 : bool; executable : string option }
 
-type wire = { libc : string; found : bool; prefix : string }
+type wire = { glibc_2_34 : bool; found : bool; prefix : string }
 [@@deriving of_yojson]
 
 let digit c =
@@ -33,18 +34,19 @@ let of_line line =
   | json -> (
       match wire_of_yojson json with
       | Error m -> Error m
-      | Ok w -> (
-          let libc =
-            match w.libc with
-            | "musl" -> Ok (Some Musl)
-            | "glibc" -> Ok (Some Glibc)
-            | "none" -> Ok None
-            | other -> Error (Printf.sprintf "unknown C library %S" other)
-          in
-          match (libc, w.found) with
-          | Error m, _ -> Error m
-          | Ok libc, false -> Ok { libc; executable = None }
-          | Ok libc, true -> (
-              match unhex w.prefix with
-              | Some bytes -> Ok { libc; executable = Some bytes }
-              | None -> Error "the executable's prefix is not hexadecimal")))
+      | Ok { glibc_2_34; found = false; prefix = _ } ->
+          Ok { glibc_2_34; executable = None }
+      | Ok { glibc_2_34; found = true; prefix } -> (
+          match unhex prefix with
+          | Some bytes -> Ok { glibc_2_34; executable = Some bytes }
+          | None -> Error "the executable's prefix is not hexadecimal"))
+
+let libc { glibc_2_34; executable } =
+  let loader prefix =
+    Option.map Filename.basename (Elf_probe.interpreter prefix)
+  in
+  match Option.bind executable loader with
+  | Some name when String.starts_with ~prefix:"ld-musl-" name -> Some Musl
+  | Some name when String.starts_with ~prefix:"ld-linux" name ->
+      if glibc_2_34 then Some Glibc else None
+  | Some _ | None -> None

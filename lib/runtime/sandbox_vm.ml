@@ -17,6 +17,7 @@ type t = {
 }
 
 and executable = { libc : Vm_exec_probe.libc option; kind : Elf_probe.kind }
+(** [libc]: the library to preload ({!Vm_exec_probe.libc}). *)
 
 let runtime_name t = Vm_runtime.name t.runtime
 let kind t = Vm_runtime.kind t.runtime
@@ -435,29 +436,28 @@ let exec_report ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd name =
       Printf.sprintf "the executable probe's report is unreadable (%s)" m)
     (Vm_exec_probe.of_line line)
 
-(* The kind of the executable that [argv0] leads to in the image, following a
-   [#!] line one level as {!Agent_clock.probe_executable} does on the host. *)
+(* The kind and the C library of the executable that [argv0] leads to in the
+   image, following a [#!] line one level as {!Agent_clock.probe_executable}
+   does on the host. *)
 let executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd argv0
     =
   let report =
     exec_report ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
   in
   let* first = report argv0 in
-  let kind_of (r : Vm_exec_probe.report) =
-    match r.executable with
-    | Some prefix -> Elf_probe.probe prefix
-    | None -> Elf_probe.Not_elf
+  let* last =
+    match Option.map Shebang.parse first.executable with
+    | Some (Some (Interpreter program | Env_program program)) -> report program
+    | Some None | None -> Ok first
   in
-  let* kind =
-    match first.executable with
-    | None -> Ok Elf_probe.Not_elf
-    | Some prefix -> (
-        match Shebang.parse prefix with
-        | None -> Ok (Elf_probe.probe prefix)
-        | Some (Interpreter program | Env_program program) ->
-            Result.map kind_of (report program))
-  in
-  Ok { libc = first.libc; kind }
+  Ok
+    {
+      libc = Vm_exec_probe.libc last;
+      kind =
+        (match last.executable with
+        | Some prefix -> Elf_probe.probe prefix
+        | None -> Elf_probe.Not_elf);
+    }
 
 let library_ready t libc =
   match Hashtbl.find_opt t.libraries libc with
@@ -501,9 +501,7 @@ let clock ~env ~wanted t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent
               if library_ready t libc then
                 Agent_clock.Vm_image { library = true; executable = kind }
               else Agent_clock.Vm_unavailable
-          | Dynamic, None ->
-              Agent_clock.Vm_image { library = false; executable = kind }
-          | (Static | Go | Not_elf), _ ->
+          | Dynamic, None | (Static | Go | Not_elf), _ ->
               Agent_clock.Vm_image { library = false; executable = kind }))
 
 (* One run *)
@@ -515,6 +513,18 @@ let faketime_dir t =
     (Vm_runtime.relay_cache_dir ())
     (Vm_runtime.faketime_name t.runtime)
 
+(* The library the clock chose for this agent, kept by {!clock}. *)
+let faketime_libc t ~cwd agent =
+  match agent with
+  | argv0 :: _ -> (
+      match Hashtbl.find_opt t.executables (t.image_id, cwd, argv0) with
+      | Some (Ok { libc = Some libc; _ }) -> Ok libc
+      | Some (Ok { libc = None; _ } | Error _) | None ->
+          Error
+            "the agent's C library was not found, so its clock cannot be \
+             started")
+  | [] -> Error "no agent command"
+
 let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
     ~port ~agent_env ~faketime agent =
   let name = "bactrian-" ^ run_id in
@@ -525,14 +535,16 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
   Eio.Switch.on_release sw (fun () ->
       clean_up t ~run_dir ~name;
       remove_file env_file);
+  let* faketime =
+    match faketime with
+    | None -> Ok None
+    | Some epoch ->
+        let* libc = faketime_libc t ~cwd agent in
+        Ok (Some ({ epoch; dir = faketime_dir t; libc } : Vm_args.faketime))
+  in
   let* invocation =
     invocation t layout ~run_id ~name ~run_dir ~env_file ~state_dir ~temp_dir
-      ~cwd ~forwards:[ port ]
-      ?faketime:
-        (Option.map
-           (fun epoch : Vm_args.faketime -> { epoch; dir = faketime_dir t })
-           faketime)
-      (Agent agent)
+      ~cwd ~forwards:[ port ] ?faketime (Agent agent)
   in
   let* runtime_argv = launch t ~run_dir ~name invocation in
   Ok
