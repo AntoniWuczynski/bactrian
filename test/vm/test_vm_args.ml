@@ -122,7 +122,8 @@ let mounts i =
   let rec go = function
     | "--tmpfs"
       :: ( "/tmp:rw,noexec,nosuid,nodev,size=1g"
-         | "/tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777" )
+         | "/tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777"
+         | "/dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=64m" )
       :: rest ->
         go rest
     | ("--mount" | "--tmpfs") :: m :: rest -> m :: go rest
@@ -211,8 +212,8 @@ let test_command_line () =
     (argv (input ()))
 
 (* Podman: Docker's command line, plus a user namespace that maps the agent to
-   itself when rootless, no writable tmpfs but /tmp, and neither the service's
-   proxy variables nor its environment. *)
+   itself when rootless, no writable tmpfs but /tmp and a /dev/shm like
+   Docker's, and neither the service's proxy variables nor its environment. *)
 let test_podman_command_line () =
   let docker = argv (input ()) in
   let expected ~userns =
@@ -223,6 +224,8 @@ let test_podman_command_line () =
             userns
             @ [
                 "--read-only-tmpfs=false";
+                "--tmpfs";
+                "/dev/shm:rw,noexec,nosuid,nodev,mode=1777,size=64m";
                 "--http-proxy=false";
                 "--env-host=false";
                 "--user";

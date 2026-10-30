@@ -393,6 +393,16 @@ for line in sys.stdin:
         break
 |}
 
+(* The one reply of an agent whose content is an object of strings. *)
+let reply_fields r =
+  match entries "reply" r with
+  | [ j ] ->
+      Yojson.Safe.Util.(
+        List.map
+          (fun (k, v) -> (k, to_string v))
+          (to_assoc (Yojson.Safe.from_string (to_string (member "content" j)))))
+  | _ -> Alcotest.fail "expected exactly one reply"
+
 let neighbours () =
   gate [ python_image ];
   with_world ~vm:python_image "vm-neighbours" @@ fun w ->
@@ -414,16 +424,6 @@ let neighbours () =
   in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
   check_sandboxed w r;
-  let seen =
-    match entries "reply" r with
-    | [ j ] ->
-        Yojson.Safe.Util.(
-          List.map
-            (fun (k, v) -> (k, to_string v))
-            (to_assoc
-               (Yojson.Safe.from_string (to_string (member "content" j)))))
-    | _ -> Alcotest.fail "expected exactly one reply"
-  in
   Alcotest.(check (list (pair string string)))
     "what the agent saw"
     [
@@ -438,10 +438,56 @@ let neighbours () =
       ("sub/inner.txt", "inner");
       ("new.txt", "EROFS");
     ]
-    seen;
+    (reply_fields r);
   Alcotest.(check bool)
     "nothing written beside it" false
     (Sys.file_exists (Filename.concat w.dir "new.txt"));
+  no_container r
+
+(* Shared memory. /dev/shm is writable under every runtime, as it is under
+   Docker, so POSIX shared memory and named semaphores (Python's
+   multiprocessing, Chromium) work. A read-only root under Podman makes it
+   read-only unless bactrian mounts one (decision 0016). *)
+
+let shm_agent =
+  {|import errno, json, multiprocessing, os, sys
+
+def attempt(f):
+    try:
+        f()
+        return "ok"
+    except OSError as e:
+        return errno.errorcode.get(e.errno, str(e.errno))
+
+def write():
+    path = "/dev/shm/bactrian-%d" % os.getpid()
+    with open(path, "w"):
+        pass
+    os.remove(path)
+
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        reply = {"file": attempt(write), "semaphore": attempt(multiprocessing.Lock)}
+        sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
+                                     "content": json.dumps(reply)}) + "\n")
+        sys.stdout.flush()
+    elif m["type"] == "end":
+        break
+|}
+
+let shared_memory () =
+  gate [ python_image ];
+  with_world ~vm:python_image "vm-shm" @@ fun w ->
+  let script = Filename.concat w.dir "shm.py" in
+  Out_channel.with_open_bin script (fun oc -> output_string oc shm_agent);
+  let r = w.execute ~agent:(Command [ "python3"; "-I"; script ]) () in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  check_sandboxed w r;
+  Alcotest.(check (list (pair string string)))
+    "in /dev/shm"
+    [ ("file", "ok"); ("semaphore", "ok") ]
+    (reply_fields r);
   no_container r
 
 (* Teardown from outside: bactrian record, through the command line, with an
@@ -784,6 +830,8 @@ let () =
           [ typescript; python ] );
       ( "masks",
         [ Alcotest.test_case "a hidden file's neighbours" `Slow neighbours ] );
+      ( "shared memory",
+        [ Alcotest.test_case "/dev/shm writable" `Slow shared_memory ] );
       ( "host processes",
         [
           Alcotest.test_case "none visible in the virtual machine" `Slow
