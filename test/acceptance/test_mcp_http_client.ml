@@ -261,7 +261,11 @@ type client = {
   poll : string -> Canon.t;
   call : string -> (string * Canon.t) list -> C.outcome;
   without_tasks : string -> string -> (Canon.t, C.error) result;
+  update : string -> (Canon.t, C.error) result;
 }
+
+let update_params id =
+  obj [ ("taskId", Canon.string id); ("inputResponses", Canon.empty_object) ]
 
 let with_client transport ?(env = key_env) ~dir f =
   match transport with
@@ -278,6 +282,9 @@ let with_client transport ?(env = key_env) ~dir f =
           poll = C.poll_task c;
           call = (fun name args -> C.call_tool c name (obj args));
           without_tasks = task_request ~tasks:false;
+          update =
+            (fun id ->
+              C.request ~tasks:true c "tasks/update" (update_params id));
         };
       check_exit "the stdio server exits at end of input" 0 (C.close c)
   | Http ->
@@ -292,6 +299,9 @@ let with_client transport ?(env = key_env) ~dir f =
           without_tasks =
             (fun method_ id ->
               H.outcome (H.rpc s method_ (obj [ ("taskId", Canon.string id) ])));
+          update =
+            (fun id ->
+              H.outcome (H.rpc ~tasks:true s "tasks/update" (update_params id)));
         };
       check_exit "SIGTERM ends the HTTP server" 130 (H.stop s)
 
@@ -330,6 +340,13 @@ let task_cancel transport () =
   (match cl.task "tasks/get" "job-0" with
   | Error e -> Alcotest.(check int) "an unknown task" (-32602) e.code
   | Ok _ -> Alcotest.fail "an unknown task was found");
+  (match cl.update id with
+  | Ok ack ->
+      Alcotest.(check (option string))
+        "tasks/update is acknowledged" (Some "complete") (str "resultType" ack);
+      Alcotest.(check (option string))
+        "and changes nothing" None (str "status" ack)
+  | Error e -> Alcotest.failf "tasks/update: %s" e.message);
   (match cl.task "tasks/cancel" id with
   | Ok ack ->
       Alcotest.(check (option string))
@@ -388,6 +405,19 @@ let task_complete transport () =
     (summary_normalised printed)
     (summary_normalised !served)
 
+(* SIGTERM over HTTP stops a running job and its agents before the server
+   exits, as the end of input does over stdio. *)
+let sigterm_with_a_job () =
+  with_recording "http-sigterm" @@ fun w run ->
+  let s = H.start ~env:key_env ~args:trusting ~exe:(exe ()) ~dir:w.dir () in
+  Fun.protect ~finally:(fun () -> H.dispose s) @@ fun () ->
+  (match H.call_tool s "replay_start" (obj (hung_arguments run)) with
+  | Structured _ -> ()
+  | Tool_error e -> Alcotest.failf "replay_start: %s" (Canon.to_string e));
+  let agent = await_hung w.dir in
+  check_exit "SIGTERM ends the server as an interrupt" 130 (H.stop s);
+  gone agent
+
 let per_transport test =
   List.map
     (fun t -> Alcotest.test_case (transport_name t) `Slow (test t))
@@ -402,6 +432,8 @@ let () =
           Alcotest.test_case "a printed token" `Quick printed_token;
           Alcotest.test_case "headers and eras" `Quick headers;
           Alcotest.test_case "the same as stdio" `Quick same_as_stdio;
+          Alcotest.test_case "SIGTERM with a job running" `Slow
+            sigterm_with_a_job;
         ] );
       ("a task cancelled", per_transport task_cancel);
       ("a task completed", per_transport task_complete);

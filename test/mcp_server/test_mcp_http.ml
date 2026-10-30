@@ -247,6 +247,7 @@ let with_listener ?head_timeout f =
   Eio.Switch.run @@ fun sw ->
   let started, set_started = Eio.Promise.create () in
   let cancelled, set_cancelled = Eio.Promise.create () in
+  let released, set_released = Eio.Promise.create () in
   let handlers : Mcp_dispatch.handlers =
     {
       call =
@@ -256,8 +257,10 @@ let with_listener ?head_timeout f =
               Eio.Promise.resolve set_started ();
               Fun.protect
                 ~finally:(fun () ->
-                  ignore (Eio.Promise.try_resolve set_cancelled () : bool))
-                Eio.Fiber.await_cancel
+                  if not (Eio.Promise.is_resolved released) then
+                    ignore (Eio.Promise.try_resolve set_cancelled () : bool))
+                (fun () -> Eio.Promise.await released);
+              Complete (canon {|{"isError":false}|})
           | _ -> Complete (canon {|{"isError":false}|}));
       task = (fun _ _ -> None);
     }
@@ -283,7 +286,8 @@ let with_listener ?head_timeout f =
               Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 10. (fun () ->
                   Eio.Promise.await p)
             in
-            f ~port ~started:(within started) ~cancelled:(within cancelled);
+            f ~port ~started:(within started) ~cancelled:(within cancelled)
+              ~release:(Eio.Promise.resolve set_released);
             Interrupt.fire stop Sys.sigterm)
         |> fst
       in
@@ -301,7 +305,7 @@ let call_headers ?accept name =
   H.rpc_headers ?accept ~token "tools/call" (call_params name)
 
 let test_listener () =
-  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let sse =
     client ~port (fun ~port ->
         H.send ~port (call_headers "echo")
@@ -379,7 +383,7 @@ let test_listener () =
 
 (* Hanging up cancels the call, and the server goes on. *)
 let test_hang_up () =
-  with_listener @@ fun ~port ~started ~cancelled ->
+  with_listener @@ fun ~port ~started ~cancelled ~release:_ ->
   client ~port (fun ~port ->
       H.hang_up ~port (call_headers "slow")
         (H.body ~id:1 "tools/call" (call_params "slow")));
@@ -406,7 +410,8 @@ let status_list = List.map (fun (r : H.response) -> r.status)
 (* A connection gets bounded time until its request is admitted, and
    an admitted one gets what it needs. *)
 let test_bounds () =
-  with_listener ~head_timeout:0.3 @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener ~head_timeout:0.3
+  @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   Alcotest.(check string)
     "an idle connection is closed" "" (until_closed ~port "");
   Alcotest.(check string)
@@ -443,7 +448,7 @@ let answer_id (r : H.response) =
 (* The body of a refused request is dropped, never parsed as the next request,
    which no check of the refused head saw. *)
 let test_refused_body () =
-  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let echo id =
     H.request ~close:false ~port (call_headers "echo")
       (H.body ~id "tools/call" (call_params "echo"))
@@ -481,7 +486,7 @@ let test_refused_body () =
     (List.map (fun r -> H.header r "connection") got)
 
 let test_too_long () =
-  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let got =
     H.answers
       (until_closed ~port
@@ -499,7 +504,7 @@ let test_too_long () =
 (* A page from an allowed origin gets through its preflight and can read the
    answers. *)
 let test_cors () =
-  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let page = ("Origin", "http://localhost:5173") in
   let preflight =
     client ~port (fun ~port ->
@@ -548,8 +553,30 @@ let test_cors () =
     (post (("Origin", "http://evil.example") :: call_headers "echo"))
     "access-control-allow-origin"
 
+(* The next request on the connection, sent while a call runs, is no hang-up:
+   the call goes on, and the request is answered after it. *)
+let test_pipelined () =
+  with_listener @@ fun ~port ~started ~cancelled:_ ~release ->
+  let calls =
+    H.request ~close:false ~port (call_headers "slow")
+      (H.body ~id:1 "tools/call" (call_params "slow"))
+    ^ H.request ~port (call_headers "echo")
+        (H.body ~id:2 "tools/call" (call_params "echo"))
+  in
+  let got, () =
+    Eio.Fiber.pair
+      (fun () -> H.answers (until_closed ~port calls))
+      (fun () ->
+        started ();
+        Eio_unix.sleep 0.3;
+        release ())
+  in
+  Alcotest.(check (list int)) "both answered" [ 200; 200 ] (status_list got);
+  Alcotest.(check (list (option int)))
+    "in order" [ Some 1; Some 2 ] (List.map answer_id got)
+
 let test_endless_head () =
-  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let pad =
     String.concat "" (List.init 3000 (Printf.sprintf "X-Pad-%d: %064d\r\n" 0))
   in
@@ -578,5 +605,6 @@ let () =
           Alcotest.test_case "a refused body" `Quick test_refused_body;
           Alcotest.test_case "a body too long" `Quick test_too_long;
           Alcotest.test_case "CORS" `Quick test_cors;
+          Alcotest.test_case "a request during a call" `Quick test_pipelined;
         ] );
     ]
