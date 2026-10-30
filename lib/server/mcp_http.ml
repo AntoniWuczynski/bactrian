@@ -243,21 +243,15 @@ let era_of_request headers (msg : Mcp_msg.message) :
   | Response _ | Error_response _ | Notification _ -> Ok Mcp_dispatch.Undecided
   | Request { id; method_; params } -> (
       let str key = Option.bind params (Canon.str_member key) in
-      match Mcp_msg.era_of_request msg with
-      | Some Legacy -> Ok Mcp_dispatch.Undecided
-      | Some Modern ->
-          (* A version that is not a string is the dispatcher's -32602. *)
-          let body_version =
-            Option.bind
-              (Option.bind params (Canon.member "_meta"))
-              (fun m ->
-                Option.bind (Canon.member version_key m) Canon.to_string_opt)
-          in
-          let* () =
-            match body_version with
-            | Some v -> matching headers id "MCP-Protocol-Version" ~body:v
-            | None -> Ok ()
-          in
+      let body_version =
+        Option.bind
+          (Option.bind params (Canon.member "_meta"))
+          (Canon.str_member version_key)
+      in
+      match (method_, body_version) with
+      | "initialize", _ -> Ok Mcp_dispatch.Undecided
+      | _, Some v ->
+          let* () = matching headers id "MCP-Protocol-Version" ~body:v in
           let* () = matching headers id "Mcp-Method" ~body:method_ in
           let* () =
             match Option.bind (named_member method_) str with
@@ -266,7 +260,7 @@ let era_of_request headers (msg : Mcp_msg.message) :
             | None -> Ok ()
           in
           Ok Mcp_dispatch.Modern
-      | None -> (
+      | _, None -> (
           match Http.Header.get headers "mcp-protocol-version" with
           | None -> Ok (Mcp_dispatch.Legacy "2025-03-26")
           | Some v when String.equal v Mcp_dispatch.modern_version ->
