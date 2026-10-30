@@ -174,7 +174,8 @@ let sandbox_mode =
             "The container runtime of the $(b,vm) backend: $(b,docker) (Docker \
              Engine, Docker Desktop or OrbStack), $(b,podman) or \
              $(b,container) (Apple's). Default: the first of docker, podman \
-             and container that answers.")
+             and container that answers, on macOS of docker, container and \
+             podman.")
   in
   Term.(
     const (fun mode backend image runtime : Single_run.sandbox ->

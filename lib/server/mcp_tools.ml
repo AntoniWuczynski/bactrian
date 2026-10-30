@@ -280,7 +280,8 @@ let common_properties =
       (Enum (names Bactrian_core.Experiment.sandbox_runtimes))
       "The container runtime of the vm backend: docker (Docker Engine, Docker \
        Desktop or OrbStack), podman or container (Apple's). Default: the first \
-       of docker, podman and container that answers.";
+       of docker, podman and container that answers, on macOS of docker, \
+       container and podman.";
   ]
 
 let sandbox_backend = enum ~field:"sandbox_backend" Sandbox.backends
