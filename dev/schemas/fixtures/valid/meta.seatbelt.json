@@ -1,0 +1,12 @@
+{
+  "run_id": "r", "scenario": "s", "variant": "v", "bactrian_version": "0.1.0-dev",
+  "sim_now": "2026-10-14T09:00:00Z",
+  "clock": { "mode": "contract_only", "reason": "static-binary" },
+  "upstreams": {},
+  "sandbox": { "mode": "auto", "applied": true, "backend": "seatbelt" },
+  "sandbox_violations": { "collected": true, "coverage": "seatbelt-log", "complete": true, "items": [] },
+  "outcome": "not_run", "reason": "cap reached for openai",
+  "findings": { "exchanges": 0, "transport_errors": 0, "usage_gaps": 0, "refused_keys": 0, "normalise_masks": 0, "cap_refusals": 1, "divergences": 0, "errors": 0 },
+  "cost_usd": 0.5, "latency_ms": 12.5, "tokens": 40,
+  "normalise": [], "redact": [], "mcp": [], "unenforced": []
+}

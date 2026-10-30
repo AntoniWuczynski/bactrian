@@ -1,0 +1,5 @@
+version: 1
+name: x
+scenarios: [s.yaml]
+variants: { a: {} }
+agent: { protocol: command, command: [x], url: "http://h" }

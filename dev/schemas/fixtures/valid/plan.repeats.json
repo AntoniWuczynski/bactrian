@@ -1,0 +1,1 @@
+{"schema_version":1,"assumptions":{"baseline_rates":[{"scenario":"a","rate":0.8},{"scenario":"b","rate":0.5}],"effect":0.2,"threshold":0.1,"between_sd":0.3,"population":"scenarios","confidence":0.95,"gate_metrics":2,"power":0.8,"max_repeats":200,"seed":0,"simulations":500},"target":"regression","answer":{"result":"repeats","repeats":24,"achieved_power":0.81,"mc_se":0.02}}

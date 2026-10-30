@@ -1,0 +1,5 @@
+version: 1
+id: s
+turns: [{ user: hi }]
+assertions:
+  - tool_args: { tool: t, mode: schema, schema: { type: object }, match: { a: 1 } }

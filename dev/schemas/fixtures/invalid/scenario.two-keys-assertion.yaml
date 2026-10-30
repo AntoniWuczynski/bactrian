@@ -1,0 +1,6 @@
+version: 1
+id: s
+turns: [{ user: hi }]
+assertions:
+  - max_steps: 1
+    max_tokens: 2

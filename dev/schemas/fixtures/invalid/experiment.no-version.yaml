@@ -1,0 +1,4 @@
+name: x
+agent: { protocol: command, command: [x] }
+scenarios: [s.yaml]
+variants: { a: {} }

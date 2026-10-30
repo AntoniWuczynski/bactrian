@@ -1,0 +1,9 @@
+{
+  "version": 1, "experiment_id": "e", "experiment": "x", "experiment_file": "exp.yaml", "seed": 0,
+  "fingerprint": { "experiment": "0000000000000000000000000000000000000000000000000000000000000000", "agent": "0000000000000000000000000000000000000000000000000000000000000000", "scenarios": [] },
+  "runs": [
+    { "index": 0, "scenario": "s", "variant": "a", "repeat": 1, "status": "pending" },
+    { "index": 1, "scenario": "s", "variant": "a", "repeat": 2, "status": "interrupted", "run_id": "r1" },
+    { "index": 2, "scenario": "s", "variant": "b", "repeat": 1, "status": "done", "outcome": "failed", "reason": "why", "run_id": "r2", "previous_run_ids": ["r0"] }
+  ]
+}
