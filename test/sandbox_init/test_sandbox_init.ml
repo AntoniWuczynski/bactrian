@@ -96,6 +96,27 @@ let rejects () =
   check "dns only first" (S.Bad_port "--dns")
     [ "80=/a"; "--dns=1:1"; "--"; "x" ]
 
+let parses_user () =
+  let t =
+    Alcotest.(
+      result
+        (pair
+           (of_pp (fun ppf (id : S.identity) ->
+                Format.fprintf ppf "%d:%d" id.uid id.gid))
+           (list string))
+        string)
+  in
+  let ok = Alcotest.check t in
+  ok "the IDs and the agent"
+    (Ok ({ uid = 1001; gid = 118 }, [ "x"; "--"; "y" ]))
+    (S.parse_user [ "1001:118"; "--"; "x"; "--"; "y" ]);
+  List.iter
+    (fun args ->
+      match S.parse_user args with
+      | Ok _ -> Alcotest.failf "accepted %s" (String.concat " " args)
+      | Error (_ : string) -> ())
+    [ []; [ "1:1" ]; [ "1:1"; "--" ]; [ "1:1"; "x" ]; [ "a:b"; "--"; "x" ] ]
+
 (* Harness *)
 
 type ctx = { env : Eio_unix.Stdenv.base; sw : Eio.Switch.t; dir : string }
@@ -628,13 +649,16 @@ let signal_reaches_whole_group () =
 let environment_loses_log_variable () =
   with_ctx @@ fun ctx ->
   Unix.putenv S.log_variable "3";
+  Unix.putenv S.signal_variable "4";
   Unix.putenv "BACTRIAN_SANDBOX_KEPT" "yes";
   let f, result =
     run_to_end ctx
-      (sh "echo ${BACTRIAN_SANDBOX_LOG_FD-unset} $BACTRIAN_SANDBOX_KEPT")
+      (sh
+         "echo ${BACTRIAN_SANDBOX_LOG_FD-unset} \
+          ${BACTRIAN_SANDBOX_SIGNAL_FD-unset} $BACTRIAN_SANDBOX_KEPT")
   in
   Alcotest.(check string) "status" "exit 0" (describe result);
-  Alcotest.(check string) "variables" "unset yes" (Buf_read.line f.out)
+  Alcotest.(check string) "variables" "unset unset yes" (Buf_read.line f.out)
 
 let own_process_group () =
   with_ctx @@ fun ctx ->
@@ -714,8 +738,9 @@ let missing_agent () =
 
 (* The subcommand *)
 
-(* [log] becomes the subcommand's descriptor 3, named by the variable. *)
-let subcommand ?log args =
+(* [log] becomes the subcommand's descriptor 3 and [signals] its descriptor 4,
+   each named by its variable. *)
+let run_bactrian ?log ?signals ~name args =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let out_r, out_w = Eio_unix.pipe sw in
@@ -730,11 +755,20 @@ let subcommand ?log args =
                   0o600),
              `Blocking ))
          log)
+    @ Option.to_list
+        (Option.map
+           (fun fd ->
+             (4, Eio_unix.Fd.of_unix ~sw ~close_unix:false fd, `Blocking))
+           signals)
   in
   let out = Eio_unix.Resource.fd out_w in
   let env_vars =
     Eio.Process.Env.override
-      [ (S.log_variable, Option.map (fun (_ : string) -> "3") log) ]
+      [
+        (S.log_variable, Option.map (fun (_ : string) -> "3") log);
+        ( S.signal_variable,
+          Option.map (fun (_ : Unix.file_descr) -> "4") signals );
+      ]
       (Eio.Process.environment (Eio.Stdenv.process_mgr env))
   in
   let proc =
@@ -748,11 +782,14 @@ let subcommand ?log args =
            (2, out, `Blocking);
          ]
         @ inherited)
-      (bactrian :: "__sandbox-init" :: args)
+      (bactrian :: name :: args)
   in
   Eio.Resource.close out_w;
   let output = Buf_read.parse_exn Buf_read.take_all ~max_size:max_int out_r in
   (Eio.Process.await proc, output)
+
+let subcommand ?log ?signals args =
+  run_bactrian ?log ?signals ~name:"__sandbox-init" args
 
 let status_t =
   Alcotest.of_pp (fun ppf -> function
@@ -766,18 +803,64 @@ let subcommand_runs_the_agent () =
   Alcotest.check status_t "status" (`Exited 7) status;
   Alcotest.(check string) "argv after the first separator" "a b --\n" output
 
+let contains ~needle text =
+  let n = String.length needle in
+  let rec find i =
+    i + n <= String.length text
+    && (String.equal (String.sub text i n) needle || find (i + 1))
+  in
+  find 0
+
 let subcommand_rejects_bad_arguments () =
   let status, output = subcommand [ "8080=/s"; "/bin/true" ] in
   Alcotest.check status_t "status" (`Exited 64) status;
+  Alcotest.(check bool) "says why" true (contains ~needle:"missing --" output)
+
+(* The agent gets /dev/null, open for writing, in place of the signal pipe's
+   read end, and no variable naming it. *)
+let subcommand_hides_the_signal_pipe () =
+  let r, w = Unix.pipe ~cloexec:true () in
+  Fun.protect ~finally:(fun () ->
+      Unix.close r;
+      Unix.close w)
+  @@ fun () ->
+  let status, output =
+    subcommand ~signals:r
+      [
+        "--";
+        "/bin/sh";
+        "-c";
+        "echo x >&4 && echo writable; echo ${BACTRIAN_SANDBOX_SIGNAL_FD-unset}";
+      ]
+  in
+  Alcotest.check status_t "status" (`Exited 0) status;
+  Alcotest.(check string) "descriptor 4" "writable\nunset\n" output
+
+let sandbox_user args = run_bactrian ~name:"__sandbox-user" args
+
+let sandbox_user_rejects_bad_arguments () =
+  List.iter
+    (fun args ->
+      let status, output = sandbox_user args in
+      Alcotest.check status_t (String.concat " " args) (`Exited 64) status;
+      Alcotest.(check bool)
+        "says why" true
+        (contains ~needle:"bactrian __sandbox-user: " output))
+    [ [ "1:1"; "/bin/true" ]; [ "x:1"; "--"; "/bin/true" ] ]
+
+(* Outside a sandbox's user namespace no user may map root of the one it
+   leaves, and macOS has no user namespaces, so the agent never starts. *)
+let sandbox_user_needs_a_namespace () =
+  if Unix.geteuid () = 0 then Alcotest.skip ();
+  let dir = Filename.temp_dir "bactrian-sbx" "" in
+  Fun.protect ~finally:(fun () -> remove_tree dir) @@ fun () ->
+  let ran = Filename.concat dir "ran" in
+  let status, output = sandbox_user [ "1:1"; "--"; "/usr/bin/touch"; ran ] in
+  Alcotest.check status_t "status" (`Exited 69) status;
   Alcotest.(check bool)
     "says why" true
-    (let needle = "missing --" in
-     let rec find i =
-       i + String.length needle <= String.length output
-       && (String.equal (String.sub output i (String.length needle)) needle
-          || find (i + 1))
-     in
-     find 0)
+    (contains ~needle:"bactrian __sandbox-user: " output);
+  Alcotest.(check bool) "the agent did not start" false (Sys.file_exists ran)
 
 (* The agent cannot add lines to the violation log: its descriptor 3 is
    /dev/null, while a relay failure still reaches the log. *)
@@ -816,6 +899,7 @@ let () =
         [
           Alcotest.test_case "accepts" `Quick parses;
           Alcotest.test_case "rejects" `Quick rejects;
+          Alcotest.test_case "__sandbox-user" `Quick parses_user;
         ] );
       ( "relay",
         [
@@ -871,5 +955,11 @@ let () =
           Alcotest.test_case "runs the agent" `Quick subcommand_runs_the_agent;
           Alcotest.test_case "rejects bad arguments" `Quick
             subcommand_rejects_bad_arguments;
+          Alcotest.test_case "the agent cannot read the signal pipe" `Quick
+            subcommand_hides_the_signal_pipe;
+          Alcotest.test_case "__sandbox-user rejects bad arguments" `Quick
+            sandbox_user_rejects_bad_arguments;
+          Alcotest.test_case "__sandbox-user needs a user namespace" `Quick
+            sandbox_user_needs_a_namespace;
         ] );
     ]
