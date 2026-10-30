@@ -614,6 +614,15 @@ let unenforced t =
              so its own HTTPS traffic is not intercepted";
           ]
       | Http _ | Command _ -> []);
+      (match (t.egress_hosts, t.egress_default) with
+      | (_ :: _, _ | [], (Record | Replay | Passthrough))
+        when not (List.mem `Egress t.intercept) ->
+          [
+            "egress: hosts or a default are declared but intercept leaves out \
+             egress, so the agent's HTTPS goes direct and unrecorded wherever \
+             the sandbox lets it";
+          ]
+      | _ :: _, _ | [], (Record | Replay | Passthrough | Block) -> []);
       (match t.mcp with
       | _ :: _ when not (List.mem `Mcp t.intercept) ->
           [

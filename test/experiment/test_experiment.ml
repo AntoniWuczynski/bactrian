@@ -242,6 +242,20 @@ let test_unenforced () =
        (decoded
           (doc
              {|, "intercept": ["model", "fixtures"], "mcp": {"calendar": {"command": ["c"]}}|})));
+  Alcotest.check strings "egress that is not intercepted" [ "egress" ]
+    (names
+       (decoded
+          (doc
+             {|, "intercept": ["model"], "egress": {"hosts": {"api.example.com": "record"}}|})));
+  Alcotest.check strings "a default egress policy that is not intercepted"
+    [ "egress" ]
+    (names
+       (decoded
+          (doc
+             {|, "intercept": ["model"], "egress": {"default": "passthrough"}|})));
+  Alcotest.check strings "intercepted egress is enforced" []
+    (names
+       (decoded (doc {|, "egress": {"hosts": {"api.example.com": "record"}}|})));
   Alcotest.check strings "everything off" []
     (names
        (decoded

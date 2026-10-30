@@ -12,7 +12,7 @@ It is a general tool. It has no special support for any particular agent. An age
 
 ### Guarantee scope
 
-Three guardrails apply to every run, sandboxed or not. Agents receive placeholder API keys and never the real ones, egress is blocked unless a host is listed, and the agent's environment is built from an allowlist (section 5.3).
+Three guardrails apply to every run, sandboxed or not. Agents receive placeholder API keys and never the real ones, egress is blocked unless a host is listed (while `intercept` includes `egress`, as it does by default, and an experiment that leaves it out but lists hosts or a default gets an `unenforced` warning), and the agent's environment is built from an allowlist (section 5.3).
 
 On top of that, every agent runs inside an operating-system sandbox when the host supports one (`sandbox: auto`, the default). Inside it the agent can reach the network only through bactrian's proxies and can write only inside its run's state and temporary directories, so traffic that bypasses the proxies fails at the operating-system level. When the sandbox cannot be set up (for example Ubuntu's AppArmor restriction without the one-time administrator fix), `auto` runs the agent unsandboxed, prints a warning with the fix, and labels the run `unsandboxed` in `meta.json` and in every report. `sandbox: strict` fails closed instead, for continuous integration and anyone who needs the hard guarantee. `sandbox: off` skips the sandbox deliberately.
 
