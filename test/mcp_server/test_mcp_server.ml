@@ -6,11 +6,7 @@ open Bactrian_app
 open Bactrian_server
 module Interrupt = Bactrian_runtime.Interrupt
 module Divergences = Bactrian_runtime.Divergences
-
-let canon text =
-  match Canon.of_string text with
-  | Ok c -> c
-  | Error _ -> Alcotest.fail ("malformed JSON: " ^ text)
+open Mcp_support
 
 let canon_t =
   Alcotest.testable
@@ -21,9 +17,6 @@ let of_yojson json =
   match Canon.of_yojson json with
   | Ok c -> c
   | Error _ -> Alcotest.fail "not canonical JSON"
-
-let path keys c =
-  List.fold_left (fun acc k -> Option.bind acc (Canon.member k)) (Some c) keys
 
 let meta =
   {|"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}|}
@@ -346,11 +339,6 @@ let test_jobs_cancel_all () =
 
 (* Root confinement *)
 
-let root () =
-  match Confine.create (Sys.getcwd ()) with
-  | Ok r -> r
-  | Error m -> Alcotest.fail m
-
 let accepted r p = Result.is_ok (Confine.path r ~field:"f" p)
 
 let test_confine () =
@@ -407,44 +395,6 @@ let test_confine () =
         (String.starts_with ~prefix:"output: " m)
 
 (* Tools, called as the server calls them *)
-
-let with_context ?(policy = Policy.default) f =
-  Eio_main.run @@ fun env ->
-  Mirage_crypto_rng_unix.use_default ();
-  Eio.Switch.run @@ fun sw ->
-  let context : Mcp_tools.context =
-    {
-      env;
-      root = root ();
-      policy;
-      jobs = Jobs.create ~sw ();
-      bactrian_exe = Sys.executable_name;
-      on_progress = ignore;
-    }
-  in
-  f context (fun name args ->
-      Mcp_tools.call context name (Option.map canon args))
-
-let with_tools ?policy f =
-  with_context ?policy (fun context call -> f context.Mcp_tools.env call)
-
-let mentions needle haystack =
-  let n = String.length needle and h = String.length haystack in
-  let rec at i =
-    i + n <= h && (String.equal (String.sub haystack i n) needle || at (i + 1))
-  in
-  at 0
-
-let is_error result =
-  Option.value ~default:false
-    (Option.bind (Canon.member "isError" result) Canon.to_bool_opt)
-
-let error_text result =
-  Option.bind (path [ "structuredContent"; "error" ] result) Canon.to_string_opt
-
-let check_refused what expected result =
-  Alcotest.(check bool) (what ^ " is a tool error") true (is_error result);
-  Alcotest.(check (option string)) what (Some expected) (error_text result)
 
 let test_definitions () =
   Alcotest.(check (list string))
@@ -662,38 +612,6 @@ let test_plan_off_loop () =
     [ `Result 2; `Result 4 ]
     (List.sort compare (replies (Buffer.contents out)))
 
-let write file text =
-  let rec mkdirs d =
-    if not (Sys.file_exists d) then (
-      mkdirs (Filename.dirname d);
-      Sys.mkdir d 0o755)
-  in
-  mkdirs (Filename.dirname file);
-  Out_channel.with_open_text file (fun oc -> output_string oc text)
-
-let structured result =
-  Option.value ~default:Canon.null (Canon.member "structuredContent" result)
-
-(* Polls a job until it has finished. *)
-let finished env call result =
-  match
-    Option.bind (path [ "job_id" ] (structured result)) Canon.to_string_opt
-  with
-  | None -> Alcotest.fail ("no job: " ^ Canon.to_string result)
-  | Some id ->
-      let rec poll () =
-        let status =
-          structured
-            (call "job_status" (Some (Printf.sprintf {|{"job_id":%S}|} id)))
-        in
-        match Option.bind (path [ "state" ] status) Canon.to_string_opt with
-        | Some "running" ->
-            Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
-            poll ()
-        | Some _ | None -> status
-      in
-      poll ()
-
 (* What experiment and scenario files name stays inside the root too, and an
    error never quotes a file it could not use. *)
 let test_named_paths () =
@@ -766,163 +684,6 @@ let test_named_paths () =
     (call "report"
        (Some {|{"experiment_id":"x","output":".bactrian/ledger.jsonl"}|}))
 
-(* Without the flags the server refuses whatever runs outside the sandbox,
-   and each refusal names the flag that allows it. Checkers run inside it in
-   strict mode, so only a mode that can leave them outside needs a flag. *)
-let test_policy () =
-  let names flag result = mentions flag (Canon.to_string result) in
-  let refused_for flag what result =
-    Alcotest.(check bool) (what ^ " refused") true (is_error result);
-    Alcotest.(check bool) (what ^ " names " ^ flag) true (names flag result)
-  in
-  ( with_context @@ fun context call ->
-    write "pol/s.json"
-      {|{"version": 1, "id": "s", "turns": [{"user": "hi"}],
-        "checkers": [{"command": ["true"]}], "golden": {"pass": []}}|};
-    List.iter
-      (fun (tool, args, flag) ->
-        refused_for flag (tool ^ " " ^ args) (call tool (Some args)))
-      [
-        ( "run_start",
-          {|{"experiment":"pol/s.json","sandbox":"off"}|},
-          "--allow-unsandboxed" );
-        ( "run_start",
-          {|{"experiment":"pol/s.json","sandbox":"auto"}|},
-          "--allow-unsandboxed" );
-        ( "record_start",
-          {|{"agent":["true"],"turns":["hi"],"sandbox":"off"}|},
-          "--allow-unsandboxed" );
-        ( "record_start",
-          {|{"agent":["true"],"turns":["hi"],"sandbox_backend":"seatbelt"}|},
-          "--allow-unsandboxed" );
-        ( "replay_start",
-          {|{"agent":["true"],"run":"r1","sandbox_backend":"seatbelt"}|},
-          "--allow-unsandboxed" );
-        ( "record_start",
-          {|{"agent":["true"],"turns":["hi"],"env":["HOME"]}|},
-          "--trust-project" );
-        ( "record_start",
-          {|{"agent":["true"],"turns":["hi"],"mcp_stdio":["x=[\"true\"]"]}|},
-          "--trust-project" );
-        ( "record_start",
-          {|{"agent":["true"],"turns":["hi"],"mcp_http":["x=http://127.0.0.1:9/"]}|},
-          "--trust-project" );
-        ( "replay_start",
-          {|{"agent":["true"],"run":"r1","env":["HOME"]}|},
-          "--trust-project" );
-        ( "check",
-          {|{"scenarios":["pol/s.json"],"sandbox":"off"}|},
-          "--allow-unsandboxed" );
-      ];
-    (match
-       Bactrian_runtime.Golden.load
-         ~files:(Eio.Stdenv.fs context.env)
-         ~scenario_file:"pol/s.json" ()
-     with
-    | Ok s ->
-        Alcotest.(check (result unit string))
-          "checkers in strict pass" (Ok ())
-          (Policy.scenario context.policy ~sandbox:`Strict s)
-    | Error _ -> Alcotest.fail "pol/s.json does not load");
-    write "pol2/s.json" {|{"version": 1, "id": "s", "turns": [{"user": "hi"}]}|};
-    let experiment (scenarios, agent) =
-      Printf.sprintf
-        {|{"version": 1, "name": "x",
-          "agent": {"protocol": "command", "command": ["true"]%s},
-          "scenarios": [%S], "variants": {"a": {}}, "repeats": 1,
-          "caps_usd": {"openai": 1}}|}
-        agent scenarios
-    in
-    List.iter
-      (fun (name, extra, flag) ->
-        write (Printf.sprintf "polx/%s.json" name) (experiment extra);
-        let status =
-          finished context.env call
-            (call "run_start"
-               (Some (Printf.sprintf {|{"experiment":"polx/%s.json"}|} name)))
-        in
-        Alcotest.(check bool)
-          (name ^ " names " ^ flag)
-          true
-          (mentions flag (Canon.to_string status)))
-      [
-        ( "passthrough",
-          ("../pol2/*.json", {|, "env_passthrough": ["HOME"]|}),
-          "--trust-project" );
-      ];
-    write "polx/seatbelt.json"
-      {|{"version": 1, "name": "x",
-        "agent": {"protocol": "command", "command": ["true"]},
-        "scenarios": ["../pol2/*.json"], "variants": {"a": {}}, "repeats": 1,
-        "caps_usd": {"openai": 1},
-        "sandbox": {"mode": "strict", "backend": "seatbelt"}}|};
-    let status =
-      finished context.env call
-        (call "run_start" (Some {|{"experiment":"polx/seatbelt.json"}|}))
-    in
-    Alcotest.(check bool)
-      "an experiment's backend seatbelt names --allow-unsandboxed" true
-      (mentions "--allow-unsandboxed" (Canon.to_string status));
-    let instructions = (Mcp_server.server context.policy).instructions in
-    Alcotest.(check bool)
-      "the instructions state the policy" true
-      (mentions "--allow-unsandboxed" instructions
-      && mentions "--trust-project" instructions) );
-  (* Allowed outside the sandbox, checkers in auto or off still need the
-     project to be trusted. *)
-  ( with_context ~policy:{ Policy.default with allow_unsandboxed = true }
-  @@ fun context call ->
-    List.iter
-      (fun mode ->
-        refused_for "--trust-project" ("check in " ^ mode)
-          (call "check"
-             (Some
-                (Printf.sprintf {|{"scenarios":["pol/s.json"],"sandbox":%S}|}
-                   mode))))
-      [ "auto"; "off" ];
-    write "polx/checkers.json"
-      {|{"version": 1, "name": "x",
-        "agent": {"protocol": "command", "command": ["true"]},
-        "scenarios": ["../pol/*.json"], "variants": {"a": {}}, "repeats": 1,
-        "caps_usd": {"openai": 1}}|};
-    let status =
-      finished context.env call
-        (call "run_start"
-           (Some {|{"experiment":"polx/checkers.json","sandbox":"off"}|}))
-    in
-    Alcotest.(check bool)
-      "checkers in an experiment with sandbox off name --trust-project" true
-      (mentions "--trust-project" (Canon.to_string status));
-    write "pol2/s.json" {|{"version": 1, "id": "s", "turns": [{"user": "hi"}]}|};
-    write "polx/real-keys.json"
-      {|{"version": 1, "name": "x",
-        "agent": {"protocol": "command", "command": ["true"], "real_keys": true},
-        "scenarios": ["../pol2/*.json"], "variants": {"a": {}}, "repeats": 1,
-        "caps_usd": {"openai": 1}}|};
-    let status =
-      finished context.env call
-        (call "run_start" (Some {|{"experiment":"polx/real-keys.json"}|}))
-    in
-    Alcotest.(check bool)
-      "real keys in an experiment name --trust-project" true
-      (mentions "agent.real_keys" (Canon.to_string status)
-      && mentions "--trust-project" (Canon.to_string status)) );
-  with_context
-    ~policy:
-      { Policy.default with allow_unsandboxed = true; trust_project = true }
-  @@ fun context _ ->
-  Alcotest.(check (result (option string) string))
-    "the flag leaves the mode to the caller" (Ok (Some "off"))
-    (Result.map
-       (Option.map Bactrian_runtime.Sandbox.mode_name)
-       (Policy.sandbox context.policy (Some `Off)));
-  Alcotest.(check (result unit string))
-    "trusted, env passes" (Ok ())
-    (Policy.env context.policy [ "HOME" ]);
-  Alcotest.(check (result unit string))
-    "allowed outside the sandbox, seatbelt passes" (Ok ())
-    (Policy.backend context.policy ~field:"argument sandbox_backend" `Seatbelt)
-
 (* A job beyond the limit is refused, and names the flag that raises it. *)
 let test_job_limit () =
   with_context ~policy:{ Policy.default with max_jobs = 1 }
@@ -967,7 +728,6 @@ let () =
           Alcotest.test_case "the commands' JSON" `Quick test_same_as_commands;
           Alcotest.test_case "the job limit" `Quick test_job_limit;
           Alcotest.test_case "paths that files name" `Quick test_named_paths;
-          Alcotest.test_case "the policy and its flags" `Quick test_policy;
           Alcotest.test_case "a long plan off the event loop" `Quick
             test_plan_off_loop;
         ] );
