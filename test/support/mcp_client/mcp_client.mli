@@ -24,6 +24,9 @@ type era =
 type error = { code : int; message : string; data : Canon.t option }
 (** A JSON-RPC error response. *)
 
+val tasks_extension : string
+(** ["io.modelcontextprotocol/tasks"]. *)
+
 type t
 
 val spawn :
@@ -159,15 +162,16 @@ module Http : sig
   val start :
     ?env:(string * string) list ->
     ?args:string list ->
-    ?token:string ->
+    ?token:string option ->
     ?timeout:float ->
     exe:string ->
     dir:string ->
     unit ->
     server
   (** Starts [exe serve-mcp --http 0 args] in [dir] with [BACTRIAN_MCP_TOKEN]
-      set to [token] (default {!test_token}) and the test's environment plus
-      [env], and waits until it prints the port it listens on. Its standard
+      set to [token] (default {!test_token}), or unset for [None], and the
+      test's environment plus [env]. Waits until it prints the port it listens
+      on and, without a token of the test's, the token it made. Its standard
       error goes to a file, {!log}. *)
 
   val port : server -> int
@@ -215,6 +219,10 @@ module Http : sig
     response
   (** A 2026-07-28 request: the [_meta] of {!request} added to [params], with
       {!rpc_headers} passed through [headers] (default unchanged). *)
+
+  val must_ok : string -> response -> Canon.t
+  (** The result of an answer with status 200. Anything else raises
+      {!Protocol_violation}, naming the method. *)
 
   val call_tool : ?accept:string -> server -> string -> Canon.t -> outcome
   (** {!Mcp_client.call_tool} over HTTP, which must answer with status 200. *)

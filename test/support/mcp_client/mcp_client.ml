@@ -55,13 +55,14 @@ let timed_out t what =
   dispose t;
   raise (Timeout what)
 
-let environment overrides =
+let environment ?(unset = []) overrides =
   let key s =
     match String.index_opt s '=' with Some i -> String.sub s 0 i | None -> s
   in
   let kept =
     List.filter
-      (fun s -> not (List.mem_assoc (key s) overrides))
+      (fun s ->
+        not (List.mem_assoc (key s) overrides || List.mem (key s) unset))
       (Array.to_list (Unix.environment ()))
   in
   Array.of_list (kept @ List.map (fun (k, v) -> k ^ "=" ^ v) overrides)
@@ -565,8 +566,16 @@ module Http = struct
         Option.bind (String.index_opt rest '/') (fun j ->
             int_of_string_opt (String.sub rest 0 j)))
 
-  let start ?(env = []) ?(args = []) ?(token = test_token) ?(timeout = 60.) ~exe
-      ~dir () =
+  let printed_token text =
+    let prefix = "bearer token: " in
+    Option.bind (find text prefix) (fun i ->
+        let start = i + String.length prefix in
+        Option.map
+          (fun j -> String.sub text start (j - start))
+          (String.index_from_opt text start ' '))
+
+  let start ?(env = []) ?(args = []) ?(token = Some test_token) ?(timeout = 60.)
+      ~exe ~dir () =
     let log = Filename.temp_file "serve-mcp-http" ".log" in
     let err = Unix.openfile log [ O_WRONLY; O_TRUNC; O_CLOEXEC ] 0o600 in
     let null = Unix.openfile "/dev/null" [ O_RDONLY; O_CLOEXEC ] 0 in
@@ -583,18 +592,27 @@ module Http = struct
               exe;
             ]
            @ args))
-        (environment (("BACTRIAN_MCP_TOKEN", token) :: env))
+        (match token with
+        | Some t -> environment (("BACTRIAN_MCP_TOKEN", t) :: env)
+        | None -> environment ~unset:[ "BACTRIAN_MCP_TOKEN" ] env)
         null err err
     in
     Unix.close err;
     Unix.close null;
-    let s = { pid; port = 0; token; log; running = true } in
+    let s = { pid; port = 0; token = ""; log; running = true } in
     match
       poll_until ~timeout ~interval:0.05 ~what:"the server did not listen"
         (fun () ->
-          listening (In_channel.with_open_bin log In_channel.input_all))
+          let text = In_channel.with_open_bin log In_channel.input_all in
+          match (listening text, token) with
+          | Some port, Some token -> Some { s with port; token }
+          | Some port, None ->
+              Option.map
+                (fun token -> { s with port; token })
+                (printed_token text)
+          | None, (Some _ | None) -> None)
     with
-    | port -> { s with port }
+    | s -> s
     | exception e ->
         dispose s;
         raise e
@@ -656,7 +674,7 @@ module Http = struct
       (headers (rpc_headers ?accept ~token:s.token method_ params))
       (body method_ params)
 
-  let must method_ r =
+  let must_ok method_ r =
     match outcome r with
     | Ok result when r.status = 200 -> result
     | Ok _ -> violation "%s: a result with status %d" method_ r.status
@@ -664,7 +682,7 @@ module Http = struct
 
   let call_tool ?accept s name arguments =
     let result =
-      must "tools/call"
+      must_ok "tools/call"
         (rpc ?accept s "tools/call" (tool_params name arguments))
     in
     if
@@ -677,7 +695,7 @@ module Http = struct
 
   let call_task s name arguments =
     check_task ~what:name
-      (must "tools/call"
+      (must_ok "tools/call"
          (rpc ~tasks:true s "tools/call" (tool_params name arguments)))
 
   let task s method_ task_id =
