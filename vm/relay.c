@@ -949,7 +949,8 @@ int main(int argc, char **argv) {
       errno = 0;
       faketime_epoch = strtoll(argv[i + 1], &end, 10);
       if (errno != 0 || *end != '\0' || end == argv[i + 1] ||
-          faketime_epoch < 0 || argv[i + 2][0] != '/' ||
+          faketime_epoch < 0 || faketime_epoch > 253402300799LL ||
+          argv[i + 2][0] != '/' ||
           (strcmp(argv[i + 3], "musl") != 0 &&
            strcmp(argv[i + 3], "glibc") != 0))
         usage();
