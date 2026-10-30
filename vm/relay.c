@@ -236,9 +236,9 @@ static void on_signal(int s) {
   if (s == SIGTERM) got_term = 1;
   if (s == SIGINT) got_int = 1;
   char c = (char)s;
-  /* A full pipe already holds a wake-up. */
-  if (write(sig_pipe[1], &c, 1) < 0) {
-  }
+  /* A full pipe already holds a wake-up, so a failed write loses nothing. */
+  ssize_t w = write(sig_pipe[1], &c, 1);
+  (void)w;
   errno = saved;
 }
 
@@ -492,15 +492,23 @@ static void check_heartbeat(long now) {
   }
 }
 
-/* Writes out what is queued, waiting for the reader. Best effort. */
+/* Writes out what is queued, waiting for the reader but not for ever: when it
+   takes no byte for LIVENESS_MS, bactrian is taken for dead, as in the loop, so
+   a PID 1 whose reader is gone cannot keep its container up. Best effort. */
 static void flush_blocking(void) {
-  int flags = fcntl(1, F_GETFL);
-  if (flags >= 0) fcntl(1, F_SETFL, flags & ~O_NONBLOCK);
   while (buf_used(&out) > 0) {
     ssize_t n = write(1, out.data + out.off, buf_used(&out));
+    if (n > 0) {
+      buf_take(&out, (size_t)n);
+      continue;
+    }
     if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) break;
-    buf_take(&out, (size_t)n);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      struct pollfd p = {1, POLLOUT, 0};
+      int r = poll(&p, 1, LIVENESS_MS);
+      if (r > 0 || (r < 0 && errno == EINTR)) continue;
+    }
+    break;
   }
 }
 
@@ -711,15 +719,21 @@ static int run_loop(void) {
     if (in_pending) frame_heard(now);
     check_heartbeat(now);
     if (now - last_heard >= LIVENESS_MS) {
-      log_failure(0, "relay", "nothing from bactrian for 10 seconds");
-      fprintf(stderr,
-              "bactrian relay: nothing from bactrian for %d seconds, so the "
-              "agent is stopped\n",
-              LIVENESS_MS / 1000);
+      /* Behind queued output the log frame could only be written in part, and
+         a cut frame is worse than none, so it is queued only when nothing is
+         ahead of it. It is far under PIPE_BUF, so one write takes all of it or
+         none. The line on standard error is there either way. */
+      int clear = buf_used(&out) == 0;
+      char why[64];
+      snprintf(why, sizeof why, "nothing from bactrian for %d seconds",
+               LIVENESS_MS / 1000);
+      fprintf(stderr, "bactrian relay: %s, so the agent is stopped\n", why);
       signal_agent(SIGKILL);
-      /* One try, never waiting: bactrian may be the reason nothing reads. */
-      if (buf_used(&out) > 0 &&
-          write(1, out.data + out.off, buf_used(&out)) < 0) {
+      if (clear) {
+        log_failure(0, "relay", why);
+        /* One try, never waiting: bactrian may be the reason nothing reads. */
+        ssize_t w = write(1, out.data + out.off, buf_used(&out));
+        (void)w; /* the exit follows whether or not it was read */
       }
       exit(EXIT_PROTOCOL);
     }

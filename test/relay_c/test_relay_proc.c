@@ -719,6 +719,42 @@ static void t_file_removed(void) {
   rmdir(dir);
 }
 
+/* When the silence comes with agent output still queued, the log frame is not
+   written behind it: it could be cut. What reaches the reader is data frames
+   only, the last of them perhaps cut by the exit. */
+static void t_liveness_with_output_queued(void) {
+  struct relay r;
+  char *argv[] = {"relay", "--", "sh", "-c",
+                  "head -c 3000000 /dev/zero | tr '\\0' 'y'; exec sleep 20",
+                  NULL};
+  start_relay(&r, argv);
+  /* Not read: the pipe and the relay's queue fill up. */
+  CHECK(relay_exit(&r, LIVENESS_MS + 3000) == EXIT_PROTOCOL);
+  struct fr f;
+  int frames = 0, others = 0, got;
+  while ((got = next_frame(&r, &f, 500)) == 1) {
+    frames++;
+    if (f.kind != K_DATA) others++;
+  }
+  CHECK(got == -1);
+  CHECK(frames > 0);
+  CHECK(others == 0);
+}
+
+/* The agent is gone and nobody reads what it wrote: the relay gives up after
+   LIVENESS_MS without a byte taken, and not before, instead of holding its
+   container for ever. */
+static void t_exit_flush_bounded(void) {
+  struct relay r;
+  char *argv[] = {"relay", "--", "sh", "-c",
+                  "head -c 300000 /dev/zero | tr '\\0' 'y'; exit 5", NULL};
+  start_relay(&r, argv);
+  long start = ms();
+  CHECK(relay_exit(&r, LIVENESS_MS + 3000) == 5);
+  long took = ms() - start;
+  CHECK(took >= LIVENESS_MS - 100 && took < LIVENESS_MS + 2500);
+}
+
 /* The agent writes more than the relay holds, and bactrian reads late: all of
    it arrives, in order, once it does. */
 static void t_output_backpressure(void) {
@@ -822,6 +858,8 @@ static const struct test tests[] = {
     {"stuck frame, heartbeat file", t_backpressure_with_file},
     {"frames do not count with a file", t_frames_do_not_count_with_file},
     {"heartbeat file removed", t_file_removed},
+    {"silence with output queued", t_liveness_with_output_queued},
+    {"exit flush is bounded", t_exit_flush_bounded},
     {"output backpressure", t_output_backpressure},
     {"exit frame is last", t_exit_is_last},
     {"arguments refused", t_usage},
