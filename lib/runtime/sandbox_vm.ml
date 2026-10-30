@@ -330,7 +330,11 @@ let last_line text =
    the environment file are removed after. *)
 let relay_line ~env t layout ~run_id ~name ~dir ~state_dir ~temp_dir ~cwd
     ~listener command =
-  Fun.protect ~finally:(fun () -> clean_up t ~run_dir:dir ~name) @@ fun () ->
+  (* Protected, as a switch's release is: after a cancel, the container would
+     not be removed, and the exception would escape as [Fun.Finally_raised]. *)
+  Fun.protect ~finally:(fun () ->
+      Eio.Cancel.protect (fun () -> clean_up t ~run_dir:dir ~name))
+  @@ fun () ->
   let* env_file = write_env_file ~dir [] in
   Fun.protect ~finally:(fun () -> remove_file env_file) @@ fun () ->
   Eio.Switch.run @@ fun sw ->
@@ -481,14 +485,16 @@ let probed t key probe =
 
 (* Not protected from cancellation: the probe and the build take minutes, and
    an interrupt must not wait for them. The tables stay consistent, because
-   an answer is only recorded when it is complete. *)
+   an answer is only recorded when it is complete, so an exception (a cancel
+   included) unlocks the mutex ([use_ro]) instead of poisoning it for every
+   later run ([use_rw]). *)
 let clock ~env ~wanted t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent
     : Agent_clock.vm =
   match (wanted, agent) with
   | false, _ -> Agent_clock.Vm_unprobed
   | true, [] -> Agent_clock.Vm_image { library = false; executable = Not_elf }
   | true, argv0 :: _ -> (
-      Eio.Mutex.use_rw ~protect:false t.lock @@ fun () ->
+      Eio.Mutex.use_ro t.lock @@ fun () ->
       match
         probed t (t.image_id, cwd, argv0) (fun () ->
             executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir

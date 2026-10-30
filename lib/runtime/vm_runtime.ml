@@ -257,6 +257,46 @@ let rec mkdirs path =
     try Unix.mkdir path 0o700 with Unix.Unix_error (EEXIST, _, _) -> ()
   end
 
+let label_run = "bactrian.run"
+let label_pid = "bactrian.pid"
+let label_host = "bactrian.host"
+
+let labels ~run_id =
+  [
+    (label_run, run_id);
+    (label_pid, string_of_int (Unix.getpid ()));
+    (label_host, Unix.gethostname ());
+  ]
+
+let remove ~process_mgr ~clock t name =
+  ignore
+    (run_client ~process_mgr ~clock t
+       (match t.kind with
+       | `Docker -> [ "rm"; "-f"; name ]
+       | `Container -> [ "delete"; "--force"; name ])
+      : (string, string) result)
+
+(* Runs [args], an image and its command, in a build container with a name and
+   the labels of a run's, so {!remove_stale} finds one that a killed bactrian
+   left behind. A timeout or a cancel kills the client and leaves the container
+   running, so it is removed by name after, whatever happened. *)
+let run_builder ~process_mgr ~clock t args =
+  let name = "bactrian-build-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6) in
+  let run =
+    match t.kind with
+    | `Docker -> [ "run"; "--rm" ]
+    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
+  in
+  Fun.protect ~finally:(fun () ->
+      Eio.Cancel.protect (fun () -> remove ~process_mgr ~clock t name))
+  @@ fun () ->
+  run_client ~process_mgr ~clock ~timeout:build_timeout t
+    (run @ [ "--name"; name ]
+    @ List.concat_map
+        (fun (k, v) -> [ "--label"; k ^ "=" ^ v ])
+        (labels ~run_id:name)
+    @ args)
+
 (* Built into a directory of its own and renamed into place, so two bactrian
    processes building at once never see half a file. *)
 let build ~process_mgr ~clock t ~dir ~target =
@@ -281,11 +321,6 @@ let build ~process_mgr ~clock t ~dir ~target =
       (String.concat " " build_packages)
       (Unix.getuid ()) (Unix.getgid ())
   in
-  let run =
-    match t.kind with
-    | `Docker -> [ "run"; "--rm" ]
-    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
-  in
   let* _ =
     Result.map_error
       (fun why ->
@@ -293,18 +328,17 @@ let build ~process_mgr ~clock t ~dir ~target =
           "the relay could not be built in %s (%s). It needs the network once, \
            for Alpine's packages"
           build_image why)
-      (run_client ~process_mgr ~clock ~timeout:build_timeout t
-         (run
-         @ [
-             "--mount";
-             Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
-             "--mount";
-             Printf.sprintf "type=bind,source=%s,target=/out" out;
-             build_image;
-             "sh";
-             "-c";
-             script;
-           ]))
+      (run_builder ~process_mgr ~clock t
+         [
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/out" out;
+           build_image;
+           "sh";
+           "-c";
+           script;
+         ])
   in
   Unix.rename (Filename.concat out "relay") target;
   Ok target
@@ -456,27 +490,21 @@ let library_path ~parent libc =
 (* A run command in the build image of a container, with [src] read-only and
    [out] writable. *)
 let build_in ~process_mgr ~clock t ~what ~image ~src ~out script =
-  let run =
-    match t.kind with
-    | `Docker -> [ "run"; "--rm" ]
-    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
-  in
   Result.map_error
     (fun why ->
       Printf.sprintf "%s could not be built in %s (%s). It needs the network"
         what image why)
-    (run_client ~process_mgr ~clock ~timeout:build_timeout t
-       (run
-       @ [
-           "--mount";
-           Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
-           "--mount";
-           Printf.sprintf "type=bind,source=%s,target=/out" out;
-           image;
-           "sh";
-           "-c";
-           script;
-         ]))
+    (run_builder ~process_mgr ~clock t
+       [
+         "--mount";
+         Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+         "--mount";
+         Printf.sprintf "type=bind,source=%s,target=/out" out;
+         image;
+         "sh";
+         "-c";
+         script;
+       ])
 
 (* The archive, downloaded once into the cache. *)
 let faketime_source ~process_mgr ~clock t ~dir ~work =
@@ -570,17 +598,6 @@ let faketime ~process_mgr ~clock t libc =
         (Printf.sprintf "libfaketime could not be built in %s: %s" dir
            (Printexc.to_string e))
 
-let label_run = "bactrian.run"
-let label_pid = "bactrian.pid"
-let label_host = "bactrian.host"
-
-let labels ~run_id =
-  [
-    (label_run, run_id);
-    (label_pid, string_of_int (Unix.getpid ()));
-    (label_host, Unix.gethostname ());
-  ]
-
 (* By its process ID only, never by a port: a process that cannot be signalled
    for want of permission is alive. *)
 let alive pid =
@@ -636,14 +653,6 @@ let labelled ~process_mgr ~clock t =
              | Some pid, Some host -> Some (c.id, pid, host)
              | Some _, None | None, (Some _ | None) -> None)
            listed)
-
-let remove ~process_mgr ~clock t name =
-  ignore
-    (run_client ~process_mgr ~clock t
-       (match t.kind with
-       | `Docker -> [ "rm"; "-f"; name ]
-       | `Container -> [ "delete"; "--force"; name ])
-      : (string, string) result)
 
 let remove_stale ~process_mgr ~clock t =
   match labelled ~process_mgr ~clock t with

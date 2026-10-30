@@ -139,9 +139,10 @@ let foreign_architecture () =
 
 (* A library cache that others could write to is refused, and the run goes on
    contract-only (vm) instead of failing. *)
-let untrusted_cache () =
-  gate [ node_image ];
-  let relay, name =
+(* Runs [f] with the runtime and an empty cache under [name] that holds only
+   the relay, copied from the real cache, so no library is built yet. *)
+let with_bare_cache name f =
+  let relay, rt =
     Eio_main.run @@ fun env ->
     let process_mgr = Eio.Stdenv.process_mgr env
     and clock = Eio.Stdenv.clock env in
@@ -152,7 +153,7 @@ let untrusted_cache () =
         | Ok relay -> (relay, rt)
         | Error m -> Alcotest.failf "no relay: %s" m)
   in
-  let base = Filename.concat (Sys.getcwd ()) "tmp-vm-faketime-cache" in
+  let base = Filename.concat (Sys.getcwd ()) name in
   let remove () = ignore (Sys.command ("rm -rf " ^ Filename.quote base)) in
   remove ();
   Fun.protect ~finally:remove @@ fun () ->
@@ -162,6 +163,11 @@ let untrusted_cache () =
   Unix.chmod dir 0o700;
   run_or_fail
     (Printf.sprintf "cp %s %s" (Filename.quote relay) (Filename.quote dir));
+  f ~dir rt
+
+let untrusted_cache () =
+  gate [ node_image ];
+  with_bare_cache "tmp-vm-faketime-cache" @@ fun ~dir name ->
   let parent = Filename.concat dir (Vm_runtime.faketime_name name) in
   let refused what needle =
     match Vm_runtime.faketime_cached name Bactrian_core.Vm_exec_probe.Musl with
@@ -195,6 +201,70 @@ let untrusted_cache () =
   Alcotest.(check string)
     "contract-only, not a failed start" contract_vm (clock_label r);
   no_container r
+
+(* A run cancelled while the library is built: the build's container goes with
+   it (killing the client leaves a container running), and the next run of the
+   same sandbox builds the library and is enforced, not failed by a lock that
+   the cancel poisoned. Docker only, for [docker ps]. The build's container is
+   told by this process's label, as other bactrian processes may share the
+   daemon. *)
+let cancelled_build () =
+  docker_only "a cancel during the build";
+  gate [ node_image ];
+  with_bare_cache "tmp-vm-faketime-cancel" @@ fun ~dir:_ _ ->
+  with_world ~vm:node_image "vm-clock-cancelled" @@ fun w ->
+  let script = Filename.concat w.dir "agent.sh" in
+  write script shell_agent;
+  let run () =
+    w.execute
+      ~agent:(Command [ "/bin/sh"; script ])
+      ~variant_env:[ ("PROBE", "echo ok") ]
+      ~sim_now:sim_now_text ()
+  in
+  let process_mgr = Eio.Stdenv.process_mgr w.env
+  and clock = Eio.Stdenv.clock w.env in
+  let rec build_container tries =
+    let names =
+      Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+        [
+          "docker";
+          "ps";
+          "--filter";
+          "label=bactrian.pid=" ^ string_of_int (Unix.getpid ());
+          "--format";
+          "{{.Names}}";
+        ]
+    in
+    match
+      List.filter
+        (String.starts_with ~prefix:"bactrian-build-")
+        (String.split_on_char '\n' names)
+    with
+    | name :: _ -> Some name
+    | [] when tries = 0 -> None
+    | [] ->
+        Eio.Time.sleep clock 0.2;
+        build_container (tries - 1)
+  in
+  let seen =
+    Eio.Fiber.first
+      (fun () -> build_container 600)
+      (fun () ->
+        ignore (run () : Run.result);
+        None)
+  in
+  match seen with
+  | None -> Alcotest.fail "the run ended before its build's container was seen"
+  | Some name ->
+      Alcotest.(check bool)
+        ("the build's container " ^ name ^ " is gone")
+        false (container_exists name);
+      let r = run () in
+      Alcotest.(check string) "the next run" "passed" (outcome_name r);
+      Alcotest.(check string) "the agent answered" "ok" (reply_text r);
+      Alcotest.(check string)
+        "the library was built" {|{"mode":"enforced"}|} (clock_label r);
+      no_container r
 
 (* Both libraries build one after the other from a cold cache. The archive is
    downloaded once, as root in a rootful Docker, and the second build refuses
@@ -303,6 +373,7 @@ let () =
           Alcotest.test_case "a static agent" `Slow static_agent;
           Alcotest.test_case "an image of another architecture" `Slow
             foreign_architecture;
+          Alcotest.test_case "a cancel during the build" `Slow cancelled_build;
           Alcotest.test_case "a library cache that is not trusted" `Slow
             untrusted_cache;
           Alcotest.test_case "both libraries, one after the other" `Slow
