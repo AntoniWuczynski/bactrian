@@ -41,11 +41,7 @@ exception Corrupt of { line : int; reason : string }
 
 let get_charged m provider = Option.value ~default:0. (Smap.find_opt provider m)
 let add m provider usd = Smap.add provider (get_charged m provider +. usd) m
-
-let now () =
-  let tm = Unix.gmtime (Unix.gettimeofday ()) in
-  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
-    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
+let now () = Proc_util.rfc3339 (Unix.gettimeofday ())
 
 let number key v =
   match Canon.member key v with

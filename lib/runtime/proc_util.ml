@@ -3,6 +3,11 @@ let hex s =
     (List.init (String.length s) (fun i ->
          Printf.sprintf "%02x" (Char.code s.[i])))
 
+let rfc3339 t =
+  let tm = Unix.gmtime t in
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
+    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
+
 let absolute ?cwd path =
   if Filename.is_relative path then
     Filename.concat (match cwd with Some d -> d | None -> Sys.getcwd ()) path

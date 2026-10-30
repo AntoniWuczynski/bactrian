@@ -3,6 +3,9 @@
 val hex : string -> string
 (** Two lowercase hex digits per byte. *)
 
+val rfc3339 : float -> string
+(** A Unix time as [YYYY-MM-DDThh:mm:ssZ], in UTC to the whole second. *)
+
 val absolute : ?cwd:string -> string -> string
 (** A relative path joined to [cwd] (default: the current directory); an
     absolute one unchanged. Symbolic links are not resolved. *)
