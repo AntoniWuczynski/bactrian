@@ -755,6 +755,35 @@ static void t_exit_flush_bounded(void) {
   CHECK(took >= LIVENESS_MS - 100 && took < LIVENESS_MS + 2500);
 }
 
+/* With a heartbeat file the last flush waits while the file changes: the
+   agent is gone, bactrian reads nothing for twice LIVENESS_MS but touches the
+   file, and then it gets all the output and the exit frame. */
+static void t_exit_flush_heartbeat(void) {
+  char dir[] = "/tmp/relay-hb-XXXXXX";
+  CHECK(mkdtemp(dir) != NULL);
+  char file[64];
+  snprintf(file, sizeof file, "%s/beat", dir);
+  close(open(file, O_CREAT | O_WRONLY, 0600));
+  struct relay r;
+  char *argv[] = {"relay", "--heartbeat", file, "--", "sh", "-c",
+                  "head -c 300000 /dev/zero | tr '\\0' 'y'; exit 5", NULL};
+  start_relay(&r, argv);
+  long start = ms();
+  while (ms() - start < 2 * LIVENESS_MS) {
+    touch_now(file);
+    usleep(300000);
+  }
+  CHECK(waitpid(r.pid, NULL, WNOHANG) == 0);
+  size_t n;
+  int eof;
+  CHECK(collect(&r, NULL, &n, &eof, 10000) == 5);
+  CHECK(n == 300000);
+  CHECK(eof);
+  CHECK(relay_exit(&r, 5000) == 5);
+  unlink(file);
+  rmdir(dir);
+}
+
 /* The agent writes more than the relay holds, and bactrian reads late: all of
    it arrives, in order, once it does. */
 static void t_output_backpressure(void) {
@@ -860,6 +889,7 @@ static const struct test tests[] = {
     {"heartbeat file removed", t_file_removed},
     {"silence with output queued", t_liveness_with_output_queued},
     {"exit flush is bounded", t_exit_flush_bounded},
+    {"exit flush waits while the file changes", t_exit_flush_heartbeat},
     {"output backpressure", t_output_backpressure},
     {"exit frame is last", t_exit_is_last},
     {"arguments refused", t_usage},

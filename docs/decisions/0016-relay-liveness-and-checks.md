@@ -32,7 +32,7 @@ Checked on OrbStack 2.2.1 (Docker 29.4.0) and `container` 1.5.0 on macOS 26.6.1:
 
 ## Consequences
 
-An agent can no longer outlive a killed bactrian by leaving data unread: the relay ends it 10 seconds after the last change of the file, and the container goes with it. The same holds for an agent that exits while nobody drains the relay's standard output: the relay's last flush gives up when no byte is taken for 10 seconds, where it used to wait for ever as process 1.
+An agent can no longer outlive a killed bactrian by leaving data unread: the relay ends it 10 seconds after the last change of the file, and the container goes with it. The same holds for an agent that exits while nobody drains the relay's standard output: the relay's last flush gives up 10 seconds after the last change of the file (without a file, when no byte is taken for 10 seconds), where it used to wait for ever as process 1. While the file changes the flush waits, so a live bactrian that reads late still gets the agent's last output and its exit status.
 
 When the relay ends a run for silence it writes the log frame ("nothing from bactrian") only if nothing is queued ahead of it, so one write of less than `PIPE_BUF` bytes takes all of it or none, and a reader never gets a cut frame. Behind queued output the line on the relay's standard error is the record. A bridge that is alive but whose touching fails (the run directory removed under it) lets the relay stop the agent, which is the safe side.
 

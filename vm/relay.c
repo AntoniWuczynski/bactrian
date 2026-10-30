@@ -498,21 +498,30 @@ static void check_heartbeat(long now) {
   }
 }
 
-/* Writes out what is queued, waiting for the reader but not for ever: when it
-   takes no byte for LIVENESS_MS, bactrian is taken for dead, as in the loop, so
-   a PID 1 whose reader is gone cannot keep its container up. Best effort. */
+/* Writes out what is queued, waiting for the reader but not for ever: bactrian
+   is taken for dead after LIVENESS_MS with no change of the heartbeat file (as
+   in the loop) or, when there is no file, with no byte taken, so a PID 1 whose
+   reader is gone cannot keep its container up. Best effort. */
 static void flush_blocking(void) {
+  long progress = now_ms();
   while (buf_used(&out) > 0) {
     ssize_t n = write(1, out.data + out.off, buf_used(&out));
     if (n > 0) {
       buf_take(&out, (size_t)n);
+      progress = now_ms();
       continue;
     }
     if (n < 0 && errno == EINTR) continue;
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      long now = now_ms();
+      check_heartbeat(now);
+      long since = heartbeat_path != NULL ? last_heard : progress;
+      long left = since + LIVENESS_MS - now;
+      if (left <= 0) break;
+      if (heartbeat_path != NULL && left > BEAT_CHECK_MS) left = BEAT_CHECK_MS;
       struct pollfd p = {1, POLLOUT, 0};
-      int r = poll(&p, 1, LIVENESS_MS);
-      if (r > 0 || (r < 0 && errno == EINTR)) continue;
+      int r = poll(&p, 1, (int)left);
+      if (r >= 0 || errno == EINTR) continue;
     }
     break;
   }
