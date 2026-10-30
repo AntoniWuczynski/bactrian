@@ -162,6 +162,32 @@ let test_relay () =
           {|{"kind":"relay_failed","port":1,"socket":"/s","reason":"r","x":1}|}));
   Alcotest.(check bool) "not JSON" true (Result.is_error (L.of_relay_line "x"))
 
+let test_dns () =
+  let read line =
+    match L.of_relay_line line with
+    | Ok v -> (v.kind, v.detail)
+    | Error m -> Alcotest.failf "%s: %s" line m
+  in
+  Alcotest.(check (pair string string))
+    "a lookup"
+    ("dns", "example.com AAAA over udp")
+    (read
+       {|{"kind":"dns","transport":"udp","name":"example.com","type":"AAAA"}|});
+  Alcotest.(check (pair string string))
+    "an unreadable query"
+    ("dns", "an unreadable query over tcp: 2 questions, not one")
+    (read {|{"kind":"dns","transport":"tcp","error":"2 questions, not one"}|});
+  List.iter
+    (fun line ->
+      Alcotest.(check bool) line true (Result.is_error (L.of_relay_line line)))
+    [
+      {|{"kind":"dns","transport":"udp","name":"a"}|};
+      {|{"kind":"dns","transport":"udp","name":"a","type":"A","error":"e"}|};
+      {|{"kind":"dns","transport":"udp","name":"a","type":"A","x":1}|};
+      {|{"kind":"other","transport":"udp"}|};
+      {|["dns"]|};
+    ]
+
 let () =
   Alcotest.run "sandbox_log"
     [
@@ -173,5 +199,9 @@ let () =
           Alcotest.test_case "settle" `Quick test_settle;
           Alcotest.test_case "a whole relay log" `Quick test_relay_log;
         ] );
-      ("linux", [ Alcotest.test_case "relay failures" `Quick test_relay ]);
+      ( "linux",
+        [
+          Alcotest.test_case "relay failures" `Quick test_relay;
+          Alcotest.test_case "dns lookups" `Quick test_dns;
+        ] );
     ]

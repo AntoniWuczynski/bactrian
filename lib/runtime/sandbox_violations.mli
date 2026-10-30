@@ -3,7 +3,7 @@
     the Linux forwarder or the virtual machine's bridge wrote to [sandbox.log].
     {!Sandbox} re-exports the types and documents them. *)
 
-type coverage = Seatbelt_log | Relay_failures_only
+type coverage = Seatbelt_log | Relay_failures_only | Relay_failures_and_dns
 
 val coverage_name : coverage -> string
 val coverage_of_name : string -> coverage option
@@ -43,6 +43,8 @@ val relay :
   path:string ->
   writer:Eio_unix.sink_ty Eio.Resource.t ->
   drained:bool Eio.Promise.or_exn ->
+  coverage:coverage ->
   violations
 (** Closes bactrian's [writer] of the log's pipe, waits up to 5 seconds for the
-    [drained] copy to end and reads the relay failures in [path]. *)
+    [drained] copy to end and reads the relay failures and DNS lookups in
+    [path], labelled with [coverage]. *)

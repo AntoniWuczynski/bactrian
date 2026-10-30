@@ -25,16 +25,32 @@ let parses () =
            [
              { port = 8080; socket = "/a/b.sock" }; { port = 1; socket = "/c" };
            ];
+         dns = None;
          agent = [ "node"; "agent.js" ];
        })
     [ "8080=/a/b.sock"; "1=/c"; "--"; "node"; "agent.js" ];
-  check "no pairs" (Ok { forwards = []; agent = [ "x" ] }) [ "--"; "x" ];
+  check "no pairs"
+    (Ok { forwards = []; dns = None; agent = [ "x" ] })
+    [ "--"; "x" ];
   check "socket keeps later equals signs"
-    (Ok { forwards = [ { port = 9; socket = "/a=b" } ]; agent = [ "x" ] })
+    (Ok
+       {
+         forwards = [ { port = 9; socket = "/a=b" } ];
+         dns = None;
+         agent = [ "x" ];
+       })
     [ "9=/a=b"; "--"; "x" ];
   check "later separators belong to the agent"
-    (Ok { forwards = []; agent = [ "x"; "--"; "9=/y" ] })
-    [ "--"; "x"; "--"; "9=/y" ]
+    (Ok { forwards = []; dns = None; agent = [ "x"; "--"; "9=/y" ] })
+    [ "--"; "x"; "--"; "9=/y" ];
+  check "dns as a user"
+    (Ok
+       {
+         forwards = [ { port = 9; socket = "/s" } ];
+         dns = Some { uid = 1001; gid = 118 };
+         agent = [ "x" ];
+       })
+    [ "--dns=1001:118"; "9=/s"; "--"; "x" ]
 
 let rejects () =
   let check name expected args =
@@ -52,7 +68,13 @@ let rejects () =
     [ "80=/a"; "81=/b"; "80=/c"; "--"; "x" ];
   check "missing separator" S.Missing_separator [ "80=/a"; "x" ];
   check "nothing at all" S.Missing_separator [];
-  check "empty agent" S.Empty_agent [ "80=/a"; "--" ]
+  check "empty agent" S.Empty_agent [ "80=/a"; "--" ];
+  List.iter
+    (fun id ->
+      check ("identity " ^ id) (S.Bad_identity id) [ "--dns=" ^ id; "--"; "x" ])
+    [ ""; "1"; "1:"; ":1"; "a:b"; "1:2:3"; "-1:2"; "1:+2"; "1234567890:1" ];
+  check "dns only first" (S.Bad_port "--dns")
+    [ "80=/a"; "--dns=1:1"; "--"; "x" ]
 
 (* Harness *)
 
@@ -104,7 +126,7 @@ let describe = function
 
 (* Runs the forwarder in a daemon fibre of [ctx.sw], so ending the switch ends
    the run, and returns once every listener is bound. *)
-let start ctx ?log ~forwards agent =
+let start ctx ?log ?signals ~forwards agent =
   let n = List.length forwards in
   let bound = ref [] in
   let all_bound, set_bound = Eio.Promise.create () in
@@ -131,12 +153,13 @@ let start ctx ?log ~forwards agent =
   if n = 0 then Eio.Promise.resolve set_bound [];
   Eio.Fiber.fork_daemon ~sw:ctx.sw (fun () ->
       Eio.Promise.resolve set_result
-        (S.run ~on_listening ?log
+        (S.run ~on_listening ?log ?signals
            ~stdout:(Eio_unix.Resource.fd out_w)
            ~net:(Eio.Stdenv.net ctx.env)
            ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
            {
              forwards = List.map (fun socket -> { S.port = 0; socket }) forwards;
+             dns = None;
              agent;
            });
       `Stop_daemon);
@@ -389,6 +412,149 @@ let signal_reaches_agent signal name expected_code () =
 let sigterm_reaches_agent = signal_reaches_agent Sys.sigterm "TERM" 9
 let sigint_reaches_agent = signal_reaches_agent Sys.sigint "INT" 8
 
+(* bactrian's way to send SIGTERM through bubblewrap: a byte on the pipe. Its
+   end asks for nothing. *)
+let signal_pipe_terminates_agent () =
+  with_ctx @@ fun ctx ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let signals = Eio_unix.Fd.of_unix ~sw:ctx.sw ~close_unix:true r in
+  let f =
+    start ctx ~signals ~forwards:[]
+      (waiting ~traps:"trap 'echo got-TERM; exit 9' TERM; " ())
+  in
+  let pid = pid_line f in
+  ignore (Unix.write_substring w "t" 0 1 : int);
+  Alcotest.(check string) "agent saw SIGTERM" "got-TERM" (Buf_read.line f.out);
+  Alcotest.(check string)
+    "exit code" "exit 9"
+    (describe (Eio.Promise.await f.result));
+  Unix.close w;
+  Alcotest.(check bool)
+    "group gone" true
+    (Pg.wait_gone ~clock:(Eio.Stdenv.clock ctx.env) ~timeout:5. pid)
+
+let closed_signal_pipe_asks_nothing () =
+  with_ctx @@ fun ctx ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let signals = Eio_unix.Fd.of_unix ~sw:ctx.sw ~close_unix:true r in
+  let f = start ctx ~signals ~forwards:[] (waiting ()) in
+  let pid = pid_line f in
+  Unix.close w;
+  Eio.Time.sleep (Eio.Stdenv.clock ctx.env) 0.3;
+  Alcotest.(check bool) "agent still runs" true (Pg.signal pid 0);
+  Unix.kill (Unix.getpid ()) Sys.sigterm;
+  Alcotest.(check string)
+    "ended by the real signal" "exit 143"
+    (describe (Eio.Promise.await f.result))
+
+(* DNS *)
+
+module Dns_server = Bactrian_runtime.Sandbox_dns
+
+let dns_query ?(flags = "\001\000") labels =
+  "\012\034" ^ flags ^ "\000\001\000\000\000\000\000\000"
+  ^ String.concat ""
+      (List.map
+         (fun l -> String.make 1 (Char.chr (String.length l)) ^ l)
+         labels)
+  ^ "\000\000\028\000\001"
+
+let with_dns f =
+  with_ctx @@ fun ctx ->
+  let lines = ref [] and ports = ref [] in
+  let net = Eio.Stdenv.net ctx.env in
+  (match
+     Dns_server.serve ~sw:ctx.sw ~net
+       ~on_bound:(fun t p -> ports := (t, p) :: !ports)
+       ~record:(fun l -> lines := l :: !lines)
+       [ (loopback, 0) ]
+   with
+  | Ok () -> ()
+  | Error e -> Alcotest.fail (Dns_server.describe_error e));
+  let port t =
+    match List.assoc_opt t !ports with
+    | Some p -> p
+    | None -> Alcotest.fail "not bound"
+  in
+  f ctx ~port ~lines:(fun () -> List.rev !lines)
+
+let refused_reply query reply =
+  Alcotest.(check string)
+    "same id" (String.sub query 0 2) (String.sub reply 0 2);
+  Alcotest.(check int) "REFUSED" 5 (Char.code reply.[3] land 0x0f);
+  Alcotest.(check int) "a response" 0x80 (Char.code reply.[2] land 0x80)
+
+let dns_over_udp () =
+  with_dns @@ fun ctx ~port ~lines ->
+  let sock =
+    Eio.Net.datagram_socket ~sw:ctx.sw (Eio.Stdenv.net ctx.env)
+      (`Udp (loopback, 0))
+  in
+  let ask q =
+    Eio.Net.send sock ~dst:(`Udp (loopback, port `Udp)) [ Cstruct.of_string q ]
+  in
+  let q = dns_query [ "example"; "com" ] in
+  ask q;
+  let buf = Cstruct.create 512 in
+  let _, n = Eio.Net.recv sock buf in
+  refused_reply q (Cstruct.to_string ~len:n buf);
+  (* Nothing comes back for a response, and the next query is still served. *)
+  ask (dns_query ~flags:"\129\000" [ "x" ]);
+  ask "\001\002";
+  ask q;
+  let _, n = Eio.Net.recv sock buf in
+  refused_reply q (Cstruct.to_string ~len:n buf);
+  Alcotest.(check (list string))
+    "one line per message"
+    [
+      {|{"kind":"dns","transport":"udp","name":"example.com","type":"AAAA"}|};
+      {|{"kind":"dns","transport":"udp","error":"the message is a response, not a query"}|};
+      {|{"kind":"dns","transport":"udp","error":"the message ends inside its header or question"}|};
+      {|{"kind":"dns","transport":"udp","name":"example.com","type":"AAAA"}|};
+    ]
+    (lines ())
+
+let dns_over_tcp () =
+  with_dns @@ fun ctx ~port ~lines ->
+  let flow = connect ctx (port `Tcp) in
+  let prefixed q =
+    let n = String.length q in
+    String.make 1 (Char.chr (n lsr 8))
+    ^ String.make 1 (Char.chr (n land 0xff))
+    ^ q
+  in
+  let q1 = dns_query [ "a"; "test" ] and q2 = dns_query [ "b" ] in
+  Eio.Flow.copy_string (prefixed q1 ^ prefixed q2) flow;
+  let r = reader flow in
+  let answer () =
+    let len = Buf_read.take 2 r in
+    Buf_read.take ((Char.code len.[0] lsl 8) lor Char.code len.[1]) r
+  in
+  refused_reply q1 (answer ());
+  refused_reply q2 (answer ());
+  half_close flow;
+  Alcotest.(check bool)
+    "closed after the last query" true
+    (Buf_read.at_end_of_input r);
+  Alcotest.(check (list string))
+    "both recorded"
+    [
+      {|{"kind":"dns","transport":"tcp","name":"a.test","type":"AAAA"}|};
+      {|{"kind":"dns","transport":"tcp","name":"b","type":"AAAA"}|};
+    ]
+    (lines ())
+
+let dns_lines_are_read_back () =
+  List.iter
+    (fun (transport, query) ->
+      let line =
+        Dns_server.line ~transport (Bactrian_core.Dns_message.parse query)
+      in
+      match Bactrian_core.Sandbox_log.of_relay_line line with
+      | Ok v -> Alcotest.(check string) line "dns" v.kind
+      | Error m -> Alcotest.failf "%s: %s" line m)
+    [ (`Udp, dns_query [ "a\"b"; "c" ]); (`Tcp, "\000") ]
+
 let signal_reaches_whole_group () =
   with_ctx @@ fun ctx ->
   (* The helper dies from the forwarded SIGTERM, not from the cleanup. *)
@@ -470,13 +636,15 @@ let port_in_use () =
       ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
       {
         forwards = [ { port; socket = path ctx "x.sock" } ];
+        dns = None;
         agent = sh "exit 0";
       }
   in
   match result with
   | Error (S.Listen_failed { port = p; _ }) ->
       Alcotest.(check int) "port" port p
-  | Error (S.Spawn_failed m) -> Alcotest.failf "spawn failed: %s" m
+  | Error ((S.Spawn_failed _ | S.Dns_failed _) as e) ->
+      Alcotest.failf "failed: %s" (S.describe_error e)
   | Ok code -> Alcotest.failf "ran and exited %d" code
 
 let missing_agent () =
@@ -484,11 +652,12 @@ let missing_agent () =
   let result =
     S.run ~net:(Eio.Stdenv.net ctx.env)
       ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
-      { forwards = []; agent = [ "/nonexistent/bactrian-agent" ] }
+      { forwards = []; dns = None; agent = [ "/nonexistent/bactrian-agent" ] }
   in
   match result with
   | Error (S.Spawn_failed _) -> ()
-  | Error (S.Listen_failed _) | Ok _ -> Alcotest.fail "expected Spawn_failed"
+  | Error (S.Listen_failed _ | S.Dns_failed _) | Ok _ ->
+      Alcotest.fail "expected Spawn_failed"
 
 (* The subcommand *)
 
@@ -622,6 +791,10 @@ let () =
           Alcotest.test_case "signal death" `Quick signal_death_is_128_plus;
           Alcotest.test_case "SIGTERM is forwarded" `Quick sigterm_reaches_agent;
           Alcotest.test_case "SIGINT is forwarded" `Quick sigint_reaches_agent;
+          Alcotest.test_case "SIGTERM through the signal pipe" `Quick
+            signal_pipe_terminates_agent;
+          Alcotest.test_case "the signal pipe's end asks nothing" `Quick
+            closed_signal_pipe_asks_nothing;
           Alcotest.test_case "signal reaches the group" `Quick
             signal_reaches_whole_group;
           Alcotest.test_case "environment" `Quick environment_loses_log_variable;
@@ -631,6 +804,12 @@ let () =
             listeners_close_with_the_agent;
           Alcotest.test_case "ending the run kills the group" `Quick
             ending_the_run_kills_the_group;
+        ] );
+      ( "dns",
+        [
+          Alcotest.test_case "over UDP" `Quick dns_over_udp;
+          Alcotest.test_case "over TCP" `Quick dns_over_tcp;
+          Alcotest.test_case "lines read back" `Quick dns_lines_are_read_back;
         ] );
       ( "subcommand",
         [

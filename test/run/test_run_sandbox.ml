@@ -77,6 +77,78 @@ let test_record_and_replay =
     (List.length replayed.findings.divergences);
   Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests ctx.up))
 
+(* A run stopped by its turn timeout gives the agent SIGTERM and a grace period,
+   as an unsandboxed run does. On Linux it goes through the forwarder, because
+   a signal to bubblewrap's group would not reach it. *)
+let test_sigterm_reaches_agent =
+  sandboxed "sandbox-sigterm" @@ fun ctx ->
+  let sandbox = strict ctx in
+  let agent =
+    [
+      "sh";
+      "-c";
+      {|trap 'echo term > "$BACTRIAN_STATE_DIR/got-term"; exit 0' TERM; while :; do sleep 0.2; done|};
+    ]
+  in
+  let r =
+    ok (execute ctx { (config ~agent ()) with sandbox; turn_timeout = 1. })
+  in
+  Alcotest.(check string) "outcome" "failed: timeout: turn" (outcome_name r);
+  Alcotest.(check bool)
+    "the agent saw SIGTERM" true
+    (Sys.file_exists (Filename.concat (file r "state") "got-term"))
+
+(* Whether the agent's resolver is the forwarder's: a [nameserver] on loopback,
+   or a resolv.conf under /run, which the sandbox hides, so the resolver falls
+   back to 127.0.0.1. Elsewhere a lookup fails with ENETUNREACH, unrecorded. *)
+let resolver_on_loopback () =
+  match Unix.realpath "/etc/resolv.conf" with
+  | exception Unix.Unix_error _ -> true
+  | real when String.starts_with ~prefix:"/run/" real -> true
+  | real ->
+      In_channel.with_open_bin real In_channel.input_all
+      |> String.split_on_char '\n'
+      |> List.exists (String.starts_with ~prefix:"nameserver 127.")
+
+(* On Linux the forwarder answers DNS, so a lookup is a violation. *)
+let test_dns_is_recorded =
+  sandboxed "sandbox-dns" @@ fun ctx ->
+  if not (resolver_on_loopback ()) then begin
+    print_endline "the resolver is not on loopback: skipped";
+    Alcotest.skip ()
+  end;
+  let sandbox = strict ctx in
+  let lookup =
+    "import socket\n\
+     try:\n\
+    \    socket.getaddrinfo('example.com', 443)\n\
+     except OSError:\n\
+    \    pass\n"
+  in
+  let r =
+    ok
+      (execute ctx
+         {
+           (config ~agent:[ "python3"; "-I"; "-c"; lookup ^ python_agent ] ()) with
+           sandbox;
+         })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  match r.violations with
+  | Collected { items; coverage = Relay_failures_and_dns; gaps = [] } ->
+      Alcotest.(check bool)
+        "the lookup is there" true
+        (List.exists
+           (fun (v : Sandbox_log.violation) ->
+             String.equal v.kind "dns"
+             && String.starts_with ~prefix:"example.com " v.detail)
+           items)
+  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ } ->
+      print_endline "this sandbox does not record DNS lookups as such: skipped"
+  | Collected { coverage = Relay_failures_and_dns; gaps = _ :: _; _ } ->
+      Alcotest.fail "the DNS lookups are incomplete"
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+
 (* An agent that tries to leave: each attempt's result is its reply. *)
 let escape_agent =
   {|
@@ -217,8 +289,14 @@ let test_escapes_fail =
       Alcotest.(check bool)
         "in the trace" true
         (List.mem "sandbox_violation" (trace_types r))
-  | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
-      (* Linux reports only relay failures, and these attempts make none. *)
+  | Collected
+      {
+        items = vs;
+        coverage = Relay_failures_only | Relay_failures_and_dns;
+        gaps = _;
+      } ->
+      (* Linux reports only relay failures and DNS lookups, and these attempts
+         make neither. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
 (* ~/.aws and the project's .env as symbolic links (a dotfile manager, a .env
@@ -652,7 +730,8 @@ let test_unsandboxed_probe_is_rejected () =
             "the read is named" true
             (List.mem "a read of a denied file succeeded" wrong))
 
-let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
+let report ?(public = Error "EPERM") ?netns ?(capabilities = Some "") () :
+    Sandbox_probe.report =
   {
     public;
     listener = Ok ();
@@ -660,6 +739,7 @@ let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
     inside_write = Ok ();
     denied_read = Error "EPERM";
     netns;
+    capabilities;
   }
 
 let test_judge () =
@@ -684,6 +764,16 @@ let test_judge () =
   Alcotest.(check bool)
     "Linux without a namespace reading" false
     (judged Linux (report ~public:(Error "ENETUNREACH") ()));
+  Alcotest.(check bool)
+    "Linux with a capability held" false
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]"
+          ~capabilities:(Some "CapEff=0000000000000400") ()));
+  Alcotest.(check bool)
+    "Linux with no capability reading" false
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]" ~capabilities:None
+          ()));
   Alcotest.(check bool)
     "a listener that cannot be reached" false
     (judged Macos { (report ()) with listener = Error "EPERM" });
@@ -722,6 +812,10 @@ let () =
             test_record_and_replay;
           Alcotest.test_case "escapes fail and are reported" `Slow
             test_escapes_fail;
+          Alcotest.test_case "a stopped agent gets SIGTERM" `Slow
+            test_sigterm_reaches_agent;
+          Alcotest.test_case "a DNS lookup is recorded" `Slow
+            test_dns_is_recorded;
           Alcotest.test_case "linked credential paths are denied" `Slow
             test_linked_credentials;
           Alcotest.test_case "MCP servers readable by the agent" `Slow

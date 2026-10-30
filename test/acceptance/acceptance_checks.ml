@@ -207,12 +207,37 @@ let escapes ?vm ~name argv_of =
            (List.map
               (fun j -> Yojson.Safe.Util.(to_string (member "type" j)))
               (trace r)))
-  | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
-      (* Linux reports only relay failures, and the model call makes none. The
-         other denials show only as the agent's own errors, checked above. The
-         forwarder is not dumpable, so its descriptors are refused, not
-         missing. *)
-      Alcotest.(check int) "no relay failures" 0 (List.length vs);
+  | Collected
+      {
+        items = vs;
+        coverage = (Relay_failures_only | Relay_failures_and_dns) as coverage;
+        gaps = _;
+      } ->
+      (* Linux reports relay failures, and the model call makes none, and its
+         forwarder's DNS lookups (the virtual machine and a set-user-ID
+         bubblewrap do not). The other denials show only as the agent's own
+         errors, checked above. The forwarder is not dumpable, so its
+         descriptors are refused, not missing. *)
+      List.iter
+        (fun (v : Sandbox_log.violation) ->
+          Printf.printf "violation: %s %s\n" v.kind v.detail)
+        vs;
+      (match coverage with
+      | Relay_failures_and_dns ->
+          Alcotest.(check (list string))
+            "only DNS lookups" []
+            (List.filter_map
+               (fun (v : Sandbox_log.violation) ->
+                 if String.equal v.kind "dns" then None else Some v.kind)
+               vs);
+          Alcotest.(check bool)
+            "the lookup of example.com is recorded" true
+            (List.exists
+               (fun (v : Sandbox_log.violation) ->
+                 String.starts_with ~prefix:"example.com " v.detail)
+               vs)
+      | Relay_failures_only | Seatbelt_log ->
+          Alcotest.(check int) "no relay failures" 0 (List.length vs));
       Alcotest.(check bool)
         "the forwarder's descriptors are refused" true
         (contains

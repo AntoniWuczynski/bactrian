@@ -3,8 +3,8 @@
 
 type violation = { kind : string; detail : string }
 (** [kind] is the denied operation ([network-outbound], [file-write-create],
-    [file-read-data], ...), [relay_failed], or [unparsed] for a tagged message
-    in which no known Seatbelt operation follows ["(PID) deny(N) "] (its
+    [file-read-data], ...), [relay_failed], [dns], or [unparsed] for a tagged
+    message in which no known Seatbelt operation follows ["(PID) deny(N) "] (its
     [detail] is then the whole message). [detail] names the target and, on
     macOS, the process. The process name and the target are the agent's to
     choose, so the split is a best reading of text that can be ambiguous. *)
@@ -61,8 +61,11 @@ val settle :
     which it does under load, so even [Settled] can miss some. *)
 
 val of_relay_line : string -> (violation, string) result
-(** One line of the Linux forwarder's log:
-    [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}]. *)
+(** One line of the Linux forwarder's log: a relay failure,
+    [{"kind":"relay_failed","port":P,"socket":"S","reason":"R"}], or a DNS
+    lookup, [{"kind":"dns","transport":"udp","name":"N","type":"T"}] with the
+    name as {!Dns_message.parse} renders it, or with ["error"] in place of
+    ["name"] and ["type"] for a query it could not read. *)
 
 val of_relay_log : string -> violation list * int
 (** The violations of a whole forwarder log, one per line that {!of_relay_line}

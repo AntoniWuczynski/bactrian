@@ -21,6 +21,7 @@ let base : P.input =
     agent = [ "node"; "agent.js"; "--flag" ];
     bactrian_exe = "/opt/bin/bactrian";
     preload = None;
+    dns_as = None;
     tag = "bactrian-sandbox:r1";
   }
 
@@ -188,6 +189,51 @@ let test_bwrap_snapshot () =
          [ "--"; "node"; "agent.js"; "--flag" ];
        ])
     (bwrap ~exists:fixture_exists linux)
+
+(* The forwarder runs as root of the user namespace, with the two
+   capabilities, and is told whom to start the agent as. *)
+let test_bwrap_dns () =
+  let argv =
+    bwrap ~exists:fixture_exists { linux with dns_as = Some (1001, 118) }
+  in
+  let plain = bwrap ~exists:fixture_exists linux in
+  let rec take n = function
+    | x :: rest when n > 0 -> x :: take (n - 1) rest
+    | [] | _ :: _ -> []
+  in
+  Alcotest.(check (list string))
+    "namespaces, then the forwarder's identity"
+    [
+      "bwrap";
+      "--die-with-parent";
+      "--new-session";
+      "--unshare-net";
+      "--unshare-pid";
+      "--unshare-ipc";
+      "--uid";
+      "0";
+      "--gid";
+      "0";
+      "--cap-add";
+      "CAP_NET_BIND_SERVICE";
+      "--cap-add";
+      "CAP_SETFCAP";
+      "--ro-bind";
+      "/";
+      "/";
+    ]
+    (take 17 argv);
+  let after_init l =
+    List.drop_while (fun a -> not (String.equal a "__sandbox-init")) l
+  in
+  Alcotest.(check (list string))
+    "the forwarder's arguments"
+    ("__sandbox-init" :: "--dns=1001:118" :: List.tl (after_init plain))
+    (after_init argv);
+  Alcotest.(check int)
+    "nothing else changes"
+    (List.length plain + 9)
+    (List.length argv)
 
 (* ---- unit cases ---- *)
 
@@ -496,6 +542,7 @@ let gen_input platform : P.input QCheck.Gen.t =
       agent = [ "agent"; "--x" ];
       bactrian_exe = "/opt/bin/bactrian";
       preload = None;
+      dns_as = None;
       tag = "bactrian-sandbox:t";
     }
 
@@ -678,6 +725,7 @@ let () =
         [
           Alcotest.test_case "seatbelt" `Quick test_seatbelt_snapshot;
           Alcotest.test_case "bwrap" `Quick test_bwrap_snapshot;
+          Alcotest.test_case "bwrap with dns" `Quick test_bwrap_dns;
         ] );
       ( "cases",
         [

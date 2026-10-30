@@ -1,14 +1,16 @@
 open Bactrian_core
 
-type coverage = Seatbelt_log | Relay_failures_only
+type coverage = Seatbelt_log | Relay_failures_only | Relay_failures_and_dns
 
 let coverage_name = function
   | Seatbelt_log -> "seatbelt-log"
   | Relay_failures_only -> "relay-failures-only"
+  | Relay_failures_and_dns -> "relay-failures-and-dns"
 
 let coverage_of_name = function
   | "seatbelt-log" -> Some Seatbelt_log
   | "relay-failures-only" -> Some Relay_failures_only
+  | "relay-failures-and-dns" -> Some Relay_failures_and_dns
   | _ -> None
 
 type violations =
@@ -65,6 +67,10 @@ let describe_violations = function
               [] )
         | Relay_failures_only ->
             ( plural n "relay failure",
+              [ "Linux records no other kind of denial" ] )
+        | Relay_failures_and_dns ->
+            ( (if n = 1 then "1 DNS lookup or relay failure"
+               else Printf.sprintf "%d DNS lookups or relay failures" n),
               [ "Linux records no other kind of denial" ] )
       in
       Printf.sprintf "%s (%s)" count (String.concat "; " (scope @ gaps))
@@ -181,7 +187,7 @@ let seatbelt ~env ~tag ~since ~marker =
       | exception (Eio.Io _ as e) ->
           Not_collected ("log show failed: " ^ Printexc.to_string e))
 
-let relay_violations ~gaps path =
+let relay_violations ~coverage ~gaps path =
   match In_channel.with_open_bin path In_channel.input_all with
   | exception Sys_error m -> Not_collected m
   | text ->
@@ -189,7 +195,7 @@ let relay_violations ~gaps path =
       Collected
         {
           items;
-          coverage = Relay_failures_only;
+          coverage;
           gaps =
             (gaps
             @
@@ -206,14 +212,14 @@ let relay_violations ~gaps path =
    forwarder that did not, never a wait in a normal run. *)
 let drain_timeout = 5.
 
-let relay ~env ~path ~writer ~drained =
+let relay ~env ~path ~writer ~drained ~coverage =
   Eio.Resource.close writer;
   match
     Eio.Time.with_timeout (Eio.Stdenv.clock env) drain_timeout (fun () ->
         Ok (Eio.Promise.await_exn drained))
   with
   | Ok dropped ->
-      relay_violations path
+      relay_violations ~coverage path
         ~gaps:
           (if dropped then
              [
@@ -222,7 +228,7 @@ let relay ~env ~path ~writer ~drained =
              ]
            else [])
   | Error `Timeout ->
-      relay_violations path
+      relay_violations ~coverage path
         ~gaps:[ "a process still held the log open at the end of the run" ]
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Not_collected ("sandbox.log: " ^ Printexc.to_string e)

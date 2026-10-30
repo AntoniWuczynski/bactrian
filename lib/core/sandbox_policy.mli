@@ -46,6 +46,15 @@ type input = {
           [LD_PRELOAD] names. Linux binds it read-only like the executable, so
           it is there even under a path the fresh tmpfs mounts hide. Unused on
           macOS. *)
+  dns_as : (int * int) option;
+      (** On Linux, [Some (uid, gid)] makes the forwarder answer and record
+          Domain Name System (DNS) lookups on port 53, which only root of the
+          sandbox's user namespace may bind: bubblewrap then runs it as that
+          root with [CAP_NET_BIND_SERVICE] and [CAP_SETFCAP], and it starts the
+          agent as [uid:gid] in a user namespace of its own, with no capability
+          ([--dns=UID:GID], see [Sandbox_init]). [None] for a checker, which has
+          no network, and for a set-user-ID bubblewrap, which grants no
+          capability. Unused on macOS. *)
   tag : string;
       (** Text that Seatbelt appends to the system log line of every denial, so
           the caller can find the run's violations. Non-empty. Unused on Linux.

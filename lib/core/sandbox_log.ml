@@ -157,6 +157,15 @@ let of_seatbelt_ndjson ~tag line =
 type relay = { kind : string; port : int; socket : string; reason : string }
 [@@deriving of_yojson]
 
+type dns = {
+  kind : string;
+  transport : string;
+  name : string option; [@default None]
+  type_ : string option; [@key "type"] [@default None]
+  error : string option; [@default None]
+}
+[@@deriving of_yojson]
+
 let poll_interval = 0.5
 let settle_interval = 1.
 let mark_interval = 5.
@@ -200,19 +209,44 @@ let settle ~tag ~read ~wait ~now ~mark ~deadline =
   in
   until_marker ~marked_at:(now ())
 
+let relay_violation json =
+  Result.map
+    (fun ({ kind; port; socket; reason } : relay) ->
+      {
+        kind;
+        detail = Printf.sprintf "127.0.0.1:%d to %s: %s" port socket reason;
+      })
+    (relay_of_yojson json)
+
+let dns_violation json =
+  match dns_of_yojson json with
+  | Error m -> Error m
+  | Ok { kind; transport; name = Some name; type_ = Some t; error = None } ->
+      Ok { kind; detail = Printf.sprintf "%s %s over %s" name t transport }
+  | Ok { kind; transport; name = None; type_ = None; error = Some e } ->
+      Ok
+        {
+          kind;
+          detail = Printf.sprintf "an unreadable query over %s: %s" transport e;
+        }
+  | Ok { name = Some _ | None; type_ = Some _ | None; error = Some _ | None; _ }
+    ->
+      Error "a dns line has a name and a type, or an error"
+
 let of_relay_line line =
   match Yojson.Safe.from_string line with
   | exception Yojson.Json_error m -> Error m
-  | json -> (
-      match relay_of_yojson json with
-      | Error m -> Error m
-      | Ok { kind; port; socket; reason } ->
-          Ok
-            {
-              kind;
-              detail =
-                Printf.sprintf "127.0.0.1:%d to %s: %s" port socket reason;
-            })
+  | `Assoc fields as json -> (
+      match List.assoc_opt "kind" fields with
+      | Some (`String "relay_failed") -> relay_violation json
+      | Some (`String "dns") -> dns_violation json
+      | Some
+          ( `String _ | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _
+          | `List _ | `Assoc _ )
+      | None ->
+          Error "not a relay failure or a dns lookup")
+  | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _ ->
+      Error "not an object"
 
 let of_relay_log text =
   let lines =

@@ -15,7 +15,7 @@
   mirage-crypto-rng.unix)
  (foreign_stubs
   (language c)
-  (names undumpable))
+  (names undumpable userns))
  (preprocess
   (pps ppx_deriving_yojson)))
 

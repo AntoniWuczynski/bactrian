@@ -174,6 +174,11 @@ type session = {
           gets the runtime client's environment, and the agent's own reaches the
           container through [agent.env]. *)
   fds : (int * Eio_unix.Fd.t) list;  (** Descriptors the command inherits. *)
+  terminate : (unit -> unit) option;
+      (** On Linux, how to send the agent SIGTERM: bubblewrap's process group
+          does not hold the forwarder, so the driver asks it through a pipe
+          ({!Sandbox_init.signal_variable}) instead of signalling the group, and
+          SIGKILL to the group stays the last resort. *)
 }
 
 (** What kinds of denial a run's violations can include. *)
@@ -182,11 +187,16 @@ type coverage = Sandbox_violations.coverage =
       (** macOS: every kind Seatbelt logs, read from the system log, which can
           drop denials under load. *)
   | Relay_failures_only
-      (** Linux: only the connections the forwarder could not relay. Denied
+      (** The virtual machine, and Linux with a set-user-ID bubblewrap: only the
+          connections the forwarder or the relay could not pass on. Denied
           connections, writes and reads fail inside the agent, unrecorded. *)
+  | Relay_failures_and_dns
+      (** Linux: those and every DNS query the agent sent to the forwarder's
+          resolver ({!Sandbox_dns}). A lookup through a resolver at another
+          address fails unrecorded, with [ENETUNREACH]. *)
 
 val coverage_name : coverage -> string
-(** ["seatbelt-log"] or ["relay-failures-only"]. *)
+(** ["seatbelt-log"], ["relay-failures-only"] or ["relay-failures-and-dns"]. *)
 
 val coverage_of_name : string -> coverage option
 
@@ -213,7 +223,9 @@ val violations_json : violations -> Yojson.Safe.t
 val describe_violations : violations -> string
 (** One line for people, such as
     ["at least 2 (the system log can drop denials, so this is a lower bound)"]
-    or ["0 relay failures (Linux records no other kind of denial)"]. *)
+    or
+    ["2 DNS lookups or relay failures (Linux records no other kind of denial)"].
+*)
 
 type started
 
@@ -252,5 +264,6 @@ val collect : env:Eio_unix.Stdenv.base -> started -> violations
     two reads a second apart agree (at most about 30 seconds, see
     {!Bactrian_core.Sandbox_log.settle}), always with the gap that the log can
     drop denials, and a second one when the reads had not settled by then; on
-    Linux and in the virtual machine, the relay failures from [sandbox.log]. An
-    unsandboxed run gives {!unsandboxed_violations}. *)
+    Linux, the relay failures and DNS lookups from [sandbox.log], and in the
+    virtual machine the relay failures. An unsandboxed run gives
+    {!unsandboxed_violations}. *)
