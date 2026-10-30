@@ -16,7 +16,6 @@
   mcp_client
   bactrian.app
   bactrian.runtime
-  egress_stub
   fake_upstream
   denials
   eio_main
