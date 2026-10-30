@@ -236,8 +236,7 @@ let detect ~process_mgr ~clock = function
                   (Printf.sprintf "%s: %s" (runtime_name kind) why :: failed)
                   rest)
       in
-      first []
-        (detection_order ~macos:(Sys.file_exists "/usr/bin/sandbox-exec"))
+      first [] (detection_order ~macos:Proc_util.macos)
 
 let image_id ~process_mgr ~clock t image =
   let missing () =

@@ -259,7 +259,7 @@ let test_stderr_captured () =
 
 (* Inside the real sandbox (design §5.3), skipped on a host without one. *)
 
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+let macos = Bactrian_runtime.Proc_util.macos
 
 let available =
   macos

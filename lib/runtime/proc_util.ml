@@ -1,3 +1,5 @@
+let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+
 let hex s =
   String.concat ""
     (List.init (String.length s) (fun i ->

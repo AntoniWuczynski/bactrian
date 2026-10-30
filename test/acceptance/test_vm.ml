@@ -23,7 +23,6 @@ let python_image =
   "ghcr.io/astral-sh/uv:0.12.21-python3.12-trixie-slim@sha256:5ae92e4d35b8d586d50ddf4aba6ecdd9f744237284d31c86bf45077e4e17e4bd"
 
 let quiet cmd = Sys.command (cmd ^ " > /dev/null 2>&1") = 0
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
 let runtime = vm_runtime_name
 
 let runtime_works =
@@ -292,7 +291,7 @@ let with_sentinel_process f =
       ignore (wait_exit pid : Unix.process_status))
   @@ fun () ->
   (* Until the child has run exec, its arguments are this test's. *)
-  if macos then
+  if Proc_util.macos then
     until
       ~deadline:(Unix.gettimeofday () +. 10.)
       "the sentinel process runs"
@@ -340,7 +339,7 @@ let host_processes () =
 (* The known hole, kept as a test: under Seatbelt the same agent reads the
    sentinel through the sysctl. *)
 let seatbelt_control () =
-  if not macos then begin
+  if not Proc_util.macos then begin
     print_endline "not macOS: no Seatbelt to compare with, skipped";
     Alcotest.skip ()
   end;

@@ -21,7 +21,7 @@ let backends =
   ]
 
 let host_backend () : [ `Seatbelt | `Bubblewrap ] =
-  if Sys.file_exists "/usr/bin/sandbox-exec" then `Seatbelt else `Bubblewrap
+  if Proc_util.macos then `Seatbelt else `Bubblewrap
 
 type applied_backend =
   | Seatbelt_backend
@@ -410,7 +410,7 @@ let probe ~env (host : host) =
 let host_engine ~env : [ `Seatbelt | `Bubblewrap ] -> (engine, string) result =
   function
   | `Seatbelt ->
-      if Sys.file_exists "/usr/bin/sandbox-exec" then Ok Seatbelt
+      if Proc_util.macos then Ok Seatbelt
       else Error "backend seatbelt needs macOS (/usr/bin/sandbox-exec)"
   | `Bubblewrap ->
       if Sys.file_exists "/proc/self/ns/net" then bubblewrap ~env

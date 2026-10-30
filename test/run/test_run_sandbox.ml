@@ -14,7 +14,7 @@ let on_path name =
     (String.split_on_char ':'
        (Option.value (Sys.getenv_opt "PATH") ~default:""))
 
-let macos = Sys.file_exists "/usr/bin/sandbox-exec"
+let macos = Proc_util.macos
 let available = macos || on_path "bwrap"
 
 let sandboxed name f () =
