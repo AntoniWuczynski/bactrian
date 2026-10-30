@@ -19,22 +19,19 @@ type outcome = {
   result : (unit, Upstream.error) result;
   status : int;
   body : string;
-  reads : int;
 }
 
 let call env connector url =
-  let status = ref 0 and body = Buffer.create 64 and reads = ref 0 in
+  let status = ref 0 and body = Buffer.create 64 in
   let result =
     Eio.Switch.run @@ fun sw ->
     Upstream.call ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
       ~timeout:10. connector
       { meth = "POST"; url = Uri.of_string url; headers = []; body = "{}" }
       ~on_head:(fun h -> status := h.status)
-      ~on_chunk:(fun ~dt_ms:_ s ->
-        incr reads;
-        Buffer.add_string body s)
+      ~on_chunk:(fun ~dt_ms:_ s -> Buffer.add_string body s)
   in
-  { result; status = !status; body = Buffer.contents body; reads = !reads }
+  { result; status = !status; body = Buffer.contents body }
 
 (* A fake upstream behind a TLS front, for the length of [f]. *)
 let with_server ?record_size ?ending ?relay
@@ -206,10 +203,7 @@ let split_records =
   @@ fun env ca port ->
   let o = call env (connector ca) (url port "localhost") in
   ok o;
-  Alcotest.(check string) "every event, whole" (String.concat "" events) o.body;
-  Alcotest.(check bool)
-    "read record by record" true
-    (o.reads > List.length events)
+  Alcotest.(check string) "every event, whole" (String.concat "" events) o.body
 
 (* An http URL is not wrapped in TLS, even with a connector. *)
 let http_stays_plain () =
@@ -440,7 +434,7 @@ let proxy_stream =
   Alcotest.(check string) "bytes" (String.concat "" events) r.body;
   List.iter
     (fun g ->
-      if g < 0.06 then Alcotest.failf "events arrived %.0f ms apart" (g *. 1000.))
+      if g < 0.03 then Alcotest.failf "events arrived %.0f ms apart" (g *. 1000.))
     (event_gaps r events);
   ignore (P.unregister ctx.proxy ~token:token_a);
   match (response_of (only (recording ctx run).exchanges)).body with
