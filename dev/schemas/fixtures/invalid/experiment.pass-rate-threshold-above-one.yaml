@@ -1,0 +1,6 @@
+version: 1
+name: x
+scenarios: [s.yaml]
+variants: { a: {} }
+agent: { protocol: command, command: [x] }
+compare: { baseline: a, thresholds: { pass_rate: 1.5 } }

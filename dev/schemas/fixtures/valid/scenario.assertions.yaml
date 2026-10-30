@@ -1,0 +1,36 @@
+version: 1
+id: every-assertion
+fixtures: ./fixtures/basic
+turns:
+  - user: "first"
+  - user: "second"
+assertions:
+  - tool_sequence: { mode: in_order, tools: [a, b] }
+  - tool_sequence: { mode: contains, tools: [] }
+  - tool_args:
+      tool: calendar_create
+      mode: exact
+      match: { attendees: ["amy@example.com"], when: { day: 3 } }
+  - tool_args:
+      tool: calendar_create
+      match: { title: "x" }
+  - tool_args:
+      tool: calendar_create
+      mode: schema
+      schema: { type: object, required: [attendees], properties: { attendees: { type: array } } }
+  - output: { turn: 1, regex: "(?i)wednesday" }
+  - output: { jsonpath: "$.city", equals: "Paris" }
+  - output: { turn: last, jsonpath: "$.temperature" }
+  - output: { equals: "exactly this" }
+  - max_steps: 0
+  - max_tokens: 100
+  - max_cost_usd: 0.05
+  - max_latency: 1500
+  - max_latency: 2.5s
+  - no_egress: [www.googleapis.com]
+checkers:
+  - command: ["python3", "checks/no_double_booking.py"]
+  - command: ["./check"]
+golden:
+  pass: [golden/ok.trace.jsonl]
+  fail: [golden/double-booked.trace.jsonl]

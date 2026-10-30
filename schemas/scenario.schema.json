@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/scenario.schema.json",
+  "title": "Scenario",
+  "description": "A scenario file (YAML or JSON): the conversation to run and what to check. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["version", "id", "turns"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+    "now": {
+      "description": "The simulated current time, RFC 3339.",
+      "type": "string"
+    },
+    "timezone": { "type": "string" },
+    "fixtures": {
+      "description": "A directory, relative to the scenario file.",
+      "type": "string"
+    },
+    "turns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["user"],
+        "additionalProperties": false,
+        "properties": { "user": { "type": "string" } }
+      }
+    },
+    "assertions": { "type": "array", "items": { "$ref": "#/$defs/assertion" } },
+    "checkers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command"],
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "description": "The checker's argv.",
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "golden": {
+      "description": "Traces, relative to the scenario file, that must pass or must fail every assertion and checker.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pass": { "$ref": "defs.schema.json#/$defs/string_list" },
+        "fail": { "$ref": "defs.schema.json#/$defs/string_list" }
+      }
+    }
+  },
+  "$defs": {
+    "json_schema_subset": {
+      "description": "The subset of JSON Schema that tool_args mode schema accepts (Json_schema.check): nothing but these keywords.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "oneOf": [
+            { "$ref": "#/$defs/json_type" },
+            { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/json_type" } }
+          ]
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/json_schema_subset" }
+        },
+        "required": { "$ref": "defs.schema.json#/$defs/string_list" },
+        "enum": { "type": "array" },
+        "items": { "$ref": "#/$defs/json_schema_subset" },
+        "additionalProperties": { "type": "boolean" },
+        "title": true,
+        "description": true
+      }
+    },
+    "json_type": { "enum": ["object", "array", "string", "number", "integer", "boolean", "null"] },
+    "assertion": {
+      "description": "An object with exactly one key, the kind of assertion.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        {
+          "required": ["tool_sequence"],
+          "properties": { "tool_sequence": { "$ref": "#/$defs/tool_sequence" } }
+        },
+        {
+          "required": ["tool_args"],
+          "properties": { "tool_args": { "$ref": "#/$defs/tool_args" } }
+        },
+        {
+          "required": ["output"],
+          "properties": { "output": { "$ref": "#/$defs/output" } }
+        },
+        {
+          "required": ["max_steps"],
+          "properties": { "max_steps": { "type": "integer", "minimum": 0 } }
+        },
+        {
+          "required": ["max_tokens"],
+          "properties": { "max_tokens": { "type": "integer", "minimum": 0 } }
+        },
+        {
+          "required": ["max_cost_usd"],
+          "properties": { "max_cost_usd": { "type": "number", "minimum": 0 } }
+        },
+        {
+          "required": ["max_latency"],
+          "properties": {
+            "max_latency": {
+              "description": "A bare number is milliseconds, unlike a duration elsewhere. A string takes a unit.",
+              "oneOf": [
+                { "type": "number", "minimum": 0 },
+                {
+                  "type": "string",
+                  "pattern": "^(?=[0.]*[1-9])([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ms|s|m)$"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "required": ["no_egress"],
+          "properties": {
+            "no_egress": { "$ref": "defs.schema.json#/$defs/string_list" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "tool_sequence": {
+      "type": "object",
+      "required": ["mode", "tools"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["exact", "in_order", "contains"] },
+        "tools": { "$ref": "defs.schema.json#/$defs/string_list" }
+      }
+    },
+    "tool_args": {
+      "description": "match gives the expected arguments for exact and partial, schema (a subset of JSON Schema) for schema mode. The other one is an error.",
+      "type": "object",
+      "required": ["tool"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+        "mode": { "enum": ["exact", "partial", "schema"] },
+        "match": true,
+        "schema": { "$ref": "#/$defs/json_schema_subset" }
+      },
+      "if": {
+        "required": ["mode"],
+        "properties": { "mode": { "const": "schema" } }
+      },
+      "then": { "required": ["schema"], "not": { "required": ["match"] } },
+      "else": { "required": ["match"], "not": { "required": ["schema"] } }
+    },
+    "output": {
+      "description": "Exactly one of regex, equals or jsonpath (jsonpath may carry equals).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turn": {
+          "oneOf": [
+            { "const": "last" },
+            { "type": "integer", "minimum": 1 }
+          ]
+        },
+        "regex": { "$ref": "defs.schema.json#/$defs/regex" },
+        "jsonpath": { "type": "string" },
+        "equals": true
+      },
+      "oneOf": [
+        {
+          "required": ["regex"],
+          "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["jsonpath"] }] }
+        },
+        {
+          "required": ["jsonpath"],
+          "not": { "required": ["regex"] }
+        },
+        {
+          "required": ["equals"],
+          "properties": { "equals": { "type": "string" } },
+          "not": { "anyOf": [{ "required": ["regex"] }, { "required": ["jsonpath"] }] }
+        }
+      ]
+    }
+  }
+}

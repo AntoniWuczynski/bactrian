@@ -1,0 +1,8 @@
+{
+  "passed": false,
+  "items": [
+    { "name": "assertions[0] max_steps", "verdict": "fail", "reason": "max_steps: 3 exceeds the limit of 2" },
+    { "name": "checkers[0] ./check", "verdict": "checker_failed", "reason": "checker exited with status 2" },
+    { "name": "assertions[1] output", "verdict": "pass" }
+  ]
+}

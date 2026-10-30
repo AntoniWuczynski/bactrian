@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/ledger-line.schema.json",
+  "title": "Spend ledger line",
+  "description": "One line of ledger.jsonl, the append-only record of money reserved and spent per provider. It has no version field. A reservation counts at its reserved amount until a settle (the actual cost) or gap (usage unknown, so the reservation stands) line with the same id ends it. Lines with an event are written with a date and a model, which the reader does not use. The oldest files hold lines with only a provider and an amount, still read. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["provider"],
+  "properties": {
+    "date": { "$ref": "defs.schema.json#/$defs/rfc3339" },
+    "provider": { "$ref": "defs.schema.json#/$defs/provider" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "event": { "const": "reserve" },
+        "id": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "model": { "type": "string" },
+        "owner": { "description": "Absent in ledgers written before spend was attributed to runs, read as empty.", "type": "string" },
+        "reserved_usd": { "type": "number", "minimum": 0 }
+      },
+      "required": ["date", "event", "id", "model", "reserved_usd"]
+    },
+    {
+      "properties": {
+        "event": { "enum": ["settle", "gap"] },
+        "id": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "model": { "type": "string" },
+        "usd": { "type": "number", "minimum": 0 }
+      },
+      "required": ["date", "event", "id", "model", "usd"]
+    },
+    {
+      "description": "The oldest form.",
+      "properties": { "usd": { "type": "number", "minimum": 0 } },
+      "required": ["usd"],
+      "not": { "required": ["event"] }
+    }
+  ],
+  "unevaluatedProperties": false
+}

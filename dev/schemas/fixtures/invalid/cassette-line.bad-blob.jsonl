@@ -1,0 +1,1 @@
+{"type":"exchange","v":1,"seq":0,"t_ms":0,"channel":"model","protocol":"p","method":"POST","path":"/","query":[],"key":"k","occurrence":0,"canonical":{},"request":{"blob":"not-a-digest"},"error":"x"}

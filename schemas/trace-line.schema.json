@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/trace-line.schema.json",
+  "title": "Trace line",
+  "description": "One line of trace.jsonl, and one element of the array a checker reads on standard input: a normalised event. Field names follow the OpenTelemetry GenAI conventions where they exist. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["v", "seq", "t_ms", "type"],
+  "properties": {
+    "v": { "const": 1 },
+    "seq": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+    "t_ms": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+    "type": {
+      "enum": [
+        "run_start",
+        "turn_start",
+        "model_call",
+        "tool_call",
+        "tool_result",
+        "http_call",
+        "agent_event",
+        "reply",
+        "sandbox_violation",
+        "done"
+      ]
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/run_start" },
+    { "$ref": "#/$defs/turn_start" },
+    { "$ref": "#/$defs/model_call" },
+    { "$ref": "#/$defs/tool_call" },
+    { "$ref": "#/$defs/tool_result" },
+    { "$ref": "#/$defs/http_call" },
+    { "$ref": "#/$defs/agent_event" },
+    { "$ref": "#/$defs/reply" },
+    { "$ref": "#/$defs/sandbox_violation" },
+    { "$ref": "#/$defs/done" }
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "turn": { "type": "integer", "minimum": 0 },
+    "run_start": {
+      "properties": {
+        "type": { "const": "run_start" },
+        "run_id": { "type": "string" },
+        "scenario": { "type": "string" },
+        "variant": { "type": "string" },
+        "sim_now": { "type": "string" },
+        "clock": { "$ref": "defs.schema.json#/$defs/clock_name" }
+      },
+      "required": ["run_id", "scenario", "variant", "sim_now", "clock"]
+    },
+    "turn_start": {
+      "properties": {
+        "type": { "const": "turn_start" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "content": { "type": "string" }
+      },
+      "required": ["turn", "content"]
+    },
+    "model_call": {
+      "description": "Usage is flattened to top-level keys. The input and output token counts are present together or not at all, and the other counts need them.",
+      "properties": {
+        "type": { "const": "model_call" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "protocol": { "type": "string" },
+        "gen_ai.request.model": { "type": "string" },
+        "status": { "type": "integer" },
+        "duration_ms": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "ttft_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "gen_ai.usage.input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "gen_ai.usage.output_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "gen_ai.usage.cache_read.input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "gen_ai.usage.cache_write.input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+        "gen_ai.usage.reasoning.output_tokens": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "required": ["turn", "protocol", "gen_ai.request.model", "status", "duration_ms"],
+      "dependentRequired": {
+        "gen_ai.usage.input_tokens": ["gen_ai.usage.output_tokens"],
+        "gen_ai.usage.output_tokens": ["gen_ai.usage.input_tokens"],
+        "gen_ai.usage.cache_read.input_tokens": ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"],
+        "gen_ai.usage.cache_write.input_tokens": ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"],
+        "gen_ai.usage.reasoning.output_tokens": ["gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"]
+      }
+    },
+    "tool_call": {
+      "properties": {
+        "type": { "const": "tool_call" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "index": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "name": { "type": "string" },
+        "arguments": true,
+        "mcp": { "enum": ["joined", "joined_by_order", "unjoined"] }
+      },
+      "required": ["turn", "index", "name", "arguments", "mcp"]
+    },
+    "tool_result": {
+      "properties": {
+        "type": { "const": "tool_result" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "index": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "content": { "type": "string" },
+        "is_error": { "type": "boolean" }
+      },
+      "required": ["turn", "index", "content", "is_error"]
+    },
+    "http_call": {
+      "properties": {
+        "type": { "const": "http_call" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "method": { "type": "string" },
+        "host": { "type": "string" },
+        "path": { "type": "string" },
+        "status": { "type": "integer" }
+      },
+      "required": ["turn", "method", "host", "path", "status"]
+    },
+    "agent_event": {
+      "properties": {
+        "type": { "const": "agent_event" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "name": { "type": "string" },
+        "data": true
+      },
+      "required": ["turn", "name", "data"]
+    },
+    "reply": {
+      "properties": {
+        "type": { "const": "reply" },
+        "turn": { "$ref": "#/$defs/turn" },
+        "content": { "type": "string" }
+      },
+      "required": ["turn", "content"]
+    },
+    "sandbox_violation": {
+      "properties": {
+        "type": { "const": "sandbox_violation" },
+        "kind": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "required": ["kind", "detail"]
+    },
+    "done": {
+      "properties": { "type": { "const": "done" } }
+    }
+  }
+}

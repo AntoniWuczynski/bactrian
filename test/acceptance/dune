@@ -5,6 +5,7 @@
 
 (executables
  (names
+  gen_schema_samples
   test_acceptance
   test_launch_env_outside
   test_mcp_client
@@ -16,6 +17,7 @@
   bactrian.app
   bactrian.runtime
   fake_upstream
+  weather_agent
   denials
   eio_main
   mirage-crypto-rng.unix
@@ -91,3 +93,47 @@
    BACTRIAN_EXE
    %{exe:../../bin/main.exe}
    (run %{exe:test_vm.exe}))))
+
+; The JSON Schemas in schemas/ against real files. The binary under test runs an
+; experiment, a diverging replay, compare, plan and check against a fake
+; upstream, and dev/schemas/validate.py (a uv project, `uv sync --locked` first)
+; validates everything they left behind, then the hand-written fixtures, then
+; mutated copies that must be rejected. Needs python3 for the agent and uv.
+; Run it with `dune build @schemas`. `uv run --locked` creates or syncs
+; dev/schemas/.venv in the source tree, outside _build, which is gitignored.
+
+(rule
+ (alias schemas)
+ (deps
+  (source_tree ../fixtures/protocols/openai_chat)
+  (source_tree ../../schemas)
+  (source_tree ../../dev/schemas/fixtures)
+  ../../dev/schemas/validate.py
+  ../../dev/schemas/pyproject.toml
+  ../../dev/schemas/uv.lock)
+ (action
+  (setenv
+   BACTRIAN_EXE
+   %{exe:../../bin/main.exe}
+   (setenv
+    FAKE_UPSTREAM_SERVER
+    %{exe:../support/fake_upstream/fake_upstream_server.exe}
+    (progn
+     (run
+      %{exe:gen_schema_samples.exe}
+      schema-samples
+      ../../dev/schemas/fixtures)
+     (run
+      uv
+      run
+      --locked
+      --project
+      %{env:DUNE_SOURCEROOT=.}/dev/schemas
+      python
+      %{env:DUNE_SOURCEROOT=.}/dev/schemas/validate.py
+      --schemas
+      ../../schemas
+      --samples
+      schema-samples
+      --fixtures
+      ../../dev/schemas/fixtures))))))

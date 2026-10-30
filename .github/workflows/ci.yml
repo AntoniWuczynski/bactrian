@@ -46,6 +46,14 @@ jobs:
           dpkg -L libfaketime | grep libfaketimeMT.so.1
       - run: opam exec -- dune build
       - run: opam exec -- dune test
+      # The JSON Schemas in schemas/ against real files the binary just wrote,
+      # then hand-written fixtures and mutated copies (dev/schemas).
+      - run: uv sync --locked --project dev/schemas
+      - name: Type-check the schema validator
+        run: |
+          uv run --no-sync --directory dev/schemas mypy
+          uv run --no-sync --directory dev/schemas pyright
+      - run: opam exec -- dune build @schemas
       # The virtual machine sandbox's tests need a container runtime. Ubuntu's
       # runner has Docker, so there they must run rather than skip.
       - run: opam exec -- dune build @acceptance

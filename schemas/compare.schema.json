@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/compare.schema.json",
+  "title": "Compare output",
+  "description": "What `bactrian compare --json` prints: the verdicts of one candidate against a baseline, with the per-scenario and per-arm detail behind them. Statistics are rounded to 12 significant digits, and non-finite ones are null. Unknown fields are rejected.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "experiment",
+    "baseline",
+    "candidate",
+    "estimand",
+    "confidence",
+    "gate",
+    "seed",
+    "resamples",
+    "missing",
+    "dropped_scenarios",
+    "unsandboxed_runs",
+    "checkers_unsandboxed_runs",
+    "clock_unenforced_runs",
+    "exit",
+    "metrics",
+    "scenarios",
+    "arms",
+    "summaries"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "experiment_id": { "type": "string" },
+    "experiment": { "type": "string" },
+    "baseline": { "type": "string" },
+    "candidate": { "type": "string" },
+    "estimand": { "enum": ["suite", "scenarios"] },
+    "confidence": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+    "gate": {
+      "type": "object",
+      "required": ["metrics", "level"],
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["metric", "threshold"],
+            "additionalProperties": false,
+            "properties": {
+              "metric": { "type": "string" },
+              "threshold": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+            }
+          }
+        },
+        "level": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+      }
+    },
+    "seed": { "type": "integer" },
+    "resamples": { "type": "integer", "minimum": 0 },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["variant", "runs", "errored", "not_run"],
+        "additionalProperties": false,
+        "properties": {
+          "variant": { "type": "string" },
+          "runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+          "errored": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+          "not_run": { "$ref": "defs.schema.json#/$defs/non_negative_integer" }
+        }
+      }
+    },
+    "dropped_scenarios": { "$ref": "defs.schema.json#/$defs/string_list" },
+    "unsandboxed_runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+    "checkers_unsandboxed_runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+    "clock_unenforced_runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+    "exit": { "enum": [0, 1, 2, 3] },
+    "metrics": { "type": "array", "items": { "$ref": "#/$defs/metric" } },
+    "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } },
+    "arms": {
+      "type": "object",
+      "required": ["level", "rows"],
+      "additionalProperties": false,
+      "properties": {
+        "level": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "rows": { "type": "array", "items": { "$ref": "#/$defs/arm" } }
+      }
+    },
+    "summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["variant", "cost_usd", "latency_ms", "tokens"],
+        "additionalProperties": false,
+        "properties": {
+          "variant": { "type": "string" },
+          "cost_usd": { "$ref": "#/$defs/dist" },
+          "latency_ms": { "$ref": "#/$defs/dist" },
+          "tokens": { "$ref": "#/$defs/dist" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "interval": {
+      "type": "object",
+      "required": ["lower", "upper"],
+      "additionalProperties": false,
+      "properties": {
+        "lower": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "upper": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+      }
+    },
+    "interval_or_null": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/interval" }]
+    },
+    "verdict": {
+      "type": "object",
+      "required": ["verdict", "lean"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": { "enum": ["regression", "improvement", "no_change", "inconclusive"] },
+        "lean": {
+          "description": "Which way an inconclusive verdict leans. Null for the others.",
+          "enum": ["worse", "better", "none", null]
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "required": [
+        "metric",
+        "in_gate",
+        "estimate",
+        "interval",
+        "threshold",
+        "threshold_scaled",
+        "level",
+        "result",
+        "undefined",
+        "extra_repeats"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "metric": { "type": "string" },
+        "in_gate": { "type": "boolean" },
+        "estimate": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "interval": { "$ref": "#/$defs/interval" },
+        "threshold": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "threshold_scaled": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "level": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "relative": {
+          "description": "The estimate and interval as a relative change, for metrics on the log ratio scale.",
+          "type": "object",
+          "required": ["estimate", "interval"],
+          "additionalProperties": false,
+          "properties": {
+            "estimate": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+            "interval": { "$ref": "#/$defs/interval" }
+          }
+        },
+        "result": { "$ref": "#/$defs/verdict" },
+        "undefined": {
+          "description": "Why the metric has no value, when it has none.",
+          "type": ["string", "null"]
+        },
+        "extra_repeats": {
+          "description": "For an inconclusive gate metric: the extra repeats per scenario and variant that would resolve it, or why that is not known.",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 0 },
+            { "enum": ["cannot_resolve", "not_simulated"] }
+          ]
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": [
+        "scenario",
+        "baseline_passes",
+        "baseline_runs",
+        "candidate_passes",
+        "candidate_runs",
+        "difference",
+        "interval",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenario": { "type": "string" },
+        "baseline_passes": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "baseline_runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "candidate_passes": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "candidate_runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "difference": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "interval": { "$ref": "#/$defs/interval" },
+        "result": { "$ref": "#/$defs/verdict" }
+      }
+    },
+    "measure": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["runs", "values", "median", "median_interval", "p90", "p90_interval"],
+          "additionalProperties": false,
+          "properties": {
+            "runs": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+            "values": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+            "median": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+            "median_interval": { "$ref": "#/$defs/interval_or_null" },
+            "p90": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+            "p90_interval": { "$ref": "#/$defs/interval_or_null" }
+          }
+        }
+      ]
+    },
+    "arm": {
+      "type": "object",
+      "required": [
+        "scenario",
+        "variant",
+        "finished",
+        "passes",
+        "errored",
+        "not_run",
+        "pass_rate_interval",
+        "pass_hat_k",
+        "cost_usd",
+        "tokens",
+        "latency_ms",
+        "ttft_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenario": { "type": "string" },
+        "variant": { "type": "string" },
+        "finished": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "passes": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "errored": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "not_run": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "pass_rate_interval": { "$ref": "#/$defs/interval_or_null" },
+        "pass_hat_k": {
+          "description": "pass^k for k = 1, 2, and so on.",
+          "type": "array",
+          "items": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+        },
+        "cost_usd": { "$ref": "#/$defs/measure" },
+        "tokens": { "$ref": "#/$defs/measure" },
+        "latency_ms": { "$ref": "#/$defs/measure" },
+        "ttft_ms": { "$ref": "#/$defs/measure" }
+      }
+    },
+    "dist": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["n", "median", "p90"],
+          "additionalProperties": false,
+          "properties": {
+            "n": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+            "median": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+            "p90": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+          }
+        }
+      ]
+    }
+  }
+}

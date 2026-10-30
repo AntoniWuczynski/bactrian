@@ -1,0 +1,6 @@
+version: 1
+name: x
+scenarios: [s.yaml]
+variants: { a: {} }
+agent: { protocol: http, url: "http://127.0.0.1:8080/chat", namespace_header: X-Run }
+sandbox: strict

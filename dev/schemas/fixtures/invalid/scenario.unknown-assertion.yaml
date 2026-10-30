@@ -1,0 +1,5 @@
+version: 1
+id: s
+turns: [{ user: hi }]
+assertions:
+  - sing: la

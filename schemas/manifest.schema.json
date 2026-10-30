@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/manifest.schema.json",
+  "title": "Experiment manifest",
+  "description": "manifest.json: the plan of an experiment and how far each run got, rewritten as runs finish so that a run can be resumed. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["version", "experiment_id", "experiment", "experiment_file", "seed", "fingerprint", "runs"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "experiment_id": { "type": "string", "minLength": 1 },
+    "experiment": { "type": "string" },
+    "experiment_file": { "type": "string" },
+    "seed": { "type": "integer" },
+    "fingerprint": {
+      "description": "Digests of what a resumed experiment must not have changed: the experiment (without caps_usd and concurrency), the agent, the price file and each scenario file.",
+      "type": "object",
+      "required": ["experiment", "agent", "scenarios"],
+      "additionalProperties": false,
+      "properties": {
+        "experiment": { "$ref": "defs.schema.json#/$defs/hex_digest_256" },
+        "agent": { "$ref": "defs.schema.json#/$defs/hex_digest_256" },
+        "pricing": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "digest"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string" },
+              "digest": { "$ref": "defs.schema.json#/$defs/hex_digest_256" }
+            }
+          }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "scenario", "variant", "repeat", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "index": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+          "scenario": { "type": "string" },
+          "variant": { "type": "string" },
+          "repeat": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["pending", "interrupted", "done"] },
+          "outcome": { "enum": ["passed", "failed", "diverged", "errored", "not_run"] },
+          "reason": { "type": ["string", "null"] },
+          "run_id": { "type": ["string", "null"] },
+          "previous_run_ids": { "$ref": "defs.schema.json#/$defs/string_list" }
+        },
+        "if": { "properties": { "status": { "const": "done" } } },
+        "then": { "required": ["outcome"] },
+        "else": { "not": { "required": ["outcome"] } }
+      }
+    }
+  }
+}

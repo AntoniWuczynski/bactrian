@@ -1,0 +1,13 @@
+version: 1
+name: vm
+agent: { protocol: command, command: ["node", "dist/agent.js"] }
+scenarios: ["s.yaml"]
+variants: { a: {}, b: { env: { X: "1" } } }
+sandbox:
+  mode: strict
+  backend: vm
+  image: "node:24-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  runtime: container
+  allow_write: [out]
+  deny_read: [secrets]
+clock: { faketime: "off" }

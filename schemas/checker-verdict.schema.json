@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/checker-verdict.schema.json",
+  "title": "Checker verdict",
+  "description": "What a checker command prints on standard output: one object. Unknown and duplicate fields are errors.",
+  "type": "object",
+  "required": ["pass"],
+  "additionalProperties": false,
+  "properties": {
+    "pass": { "type": "boolean" },
+    "score": { "type": ["number", "null"] },
+    "message": { "type": ["string", "null"] }
+  }
+}

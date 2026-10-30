@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/agent-output.schema.json",
+  "title": "Agent output line",
+  "description": "A line a command-mode agent writes to its standard output (JSON Lines). Unknown fields are rejected.",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "enum": ["reply", "event", "error"] }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "reply" },
+        "turn": { "type": "integer" },
+        "content": { "type": "string" }
+      },
+      "required": ["turn", "content"]
+    },
+    {
+      "properties": {
+        "type": { "const": "event" },
+        "turn": { "type": "integer" },
+        "name": { "type": "string" },
+        "data": { "type": "object" }
+      },
+      "required": ["turn", "name", "data"]
+    },
+    {
+      "properties": {
+        "type": { "const": "error" },
+        "turn": { "type": "integer" },
+        "message": { "type": "string" }
+      },
+      "required": ["turn", "message"]
+    }
+  ],
+  "unevaluatedProperties": false
+}

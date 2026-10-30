@@ -1,0 +1,34 @@
+version: 1
+name: http-and-everything
+agent:
+  protocol: http
+  url: http://127.0.0.1:8080/chat
+  namespace_header: X-Bactrian-Run
+  timeouts: { turn: 90, total: 10m }
+  env_passthrough: [HTTP_PROXY]
+scenarios: ["scenarios/a.yaml", "scenarios/*.json"]
+variants:
+  - name: luna
+    env: { AGENT_MODEL: gpt-6-luna }
+  - name: flash
+repeats: 20
+concurrency: 4
+intercept: [model, mcp, fixtures, egress]
+egress: { default: block, hosts: { "www.googleapis.com": record, "example.com": passthrough } }
+mcp:
+  calendar: { command: ["python3", "tools/calendar_server.py"], policy: record, env: { A: b }, cwd: tools }
+  remote: { url: "https://mcp.example.com/mcp", policy: block }
+  plain: { command: ["./server"] }
+normalise: ["\\d{4}-\\d{2}-\\d{2}"]
+redact: ["sk-[a-z0-9]+"]
+sandbox: auto
+clock: { faketime: auto }
+caps_usd: { openai: 5, gemini: 5, anthropic: 5, openrouter: 0 }
+pricing: ./prices.yaml
+seed: 1
+compare:
+  baseline: luna
+  confidence: 0.95
+  thresholds: { pass_rate: 0.05, cost: 0.2, latency_p50: 0.25 }
+  gate: [pass_rate, cost]
+  population: scenarios

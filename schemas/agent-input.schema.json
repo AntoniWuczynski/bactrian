@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/agent-input.schema.json",
+  "title": "Agent input line",
+  "description": "A line bactrian writes to a command-mode agent's standard input (JSON Lines).",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "enum": ["start", "turn", "end"] }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "start" },
+        "run_id": { "type": "string" },
+        "scenario": { "type": "string" },
+        "variant": { "type": "string" },
+        "sim_now": { "type": "string" },
+        "state_dir": { "type": "string" },
+        "env": { "$ref": "defs.schema.json#/$defs/string_map" }
+      },
+      "required": ["run_id", "scenario", "variant", "sim_now", "state_dir"]
+    },
+    {
+      "properties": {
+        "type": { "const": "turn" },
+        "turn": { "type": "integer" },
+        "content": { "type": "string" }
+      },
+      "required": ["turn", "content"]
+    },
+    { "properties": { "type": { "const": "end" } } }
+  ],
+  "unevaluatedProperties": false
+}

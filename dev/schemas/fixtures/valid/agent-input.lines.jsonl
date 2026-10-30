@@ -1,0 +1,4 @@
+{"v":1,"type":"start","run_id":"20261030T121731Z-174b1af3","scenario":"weather","variant":"base","sim_now":"2026-10-14T09:00:00+01:00","state_dir":"/work/state"}
+{"v":1,"type":"start","run_id":"r","scenario":"s","variant":"v","sim_now":"2026-10-14T09:00:00Z","state_dir":"/work/state","env":{"AGENT_MODEL":"m"}}
+{"v":1,"type":"turn","turn":1,"content":"What is the weather in Paris?"}
+{"v":1,"type":"end"}
