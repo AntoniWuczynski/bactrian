@@ -184,6 +184,61 @@ let test_raw_target =
     !lines_seen;
   ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
 
+let has text = Re.execp (Re.compile (Re.str text))
+let noted (f : Model_proxy.findings) text = List.exists (has text) f.errors
+
+(* Interim answers are skipped, so the agent and the cassette get the final
+   one. *)
+let test_interim =
+  with_world
+    ~raw:(fun _ ->
+      "HTTP/1.1 100 Continue\r\n\
+       \r\n\
+       HTTP/1.1 103 Early Hints\r\n\
+       Link: </s.css>\r\n\
+       \r\n\
+       HTTP/1.1 201 Created\r\n\
+       Content-Length: 4\r\n\
+       \r\n\
+       real")
+    "interim"
+  @@ fun w ->
+  let run =
+    register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ]))
+  in
+  let a =
+    through ~creds:(creds token_a) w ~meth:"POST" ~path:"/upload" ~body:"data"
+      ()
+  in
+  Alcotest.(check (pair int string))
+    "the final answer" (201, "real") (a.status, a.body);
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a);
+  Alcotest.(check (list int))
+    "recorded" [ 201 ]
+    (List.map
+       (fun (e : Bactrian_core.Cassette.exchange) ->
+         match e.outcome with
+         | Response { status; _ } -> status
+         | Transport_error _ -> 0)
+       (recording w.ctx run).exchanges)
+
+(* The agent's [Expect: 100-continue] is not passed on. *)
+let test_expect_dropped =
+  with_world "expect" @@ fun w ->
+  let _ = register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ])) in
+  let a =
+    through ~creds:(creds token_a) w ~meth:"POST" ~path:"/upload" ~body:"data"
+      ~headers:[ ("Expect", "100-continue") ]
+      ()
+  in
+  Alcotest.(check int) "answered" 200 a.status;
+  Alcotest.(check (list (option string)))
+    "no expect upstream" [ None ]
+    (List.map
+       (fun (r : F.request) -> List.assoc_opt "expect" r.headers)
+       (F.requests w.up));
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
+
 (* An agent whose clock libfaketime set to the run's SIM_NOW, a month back,
    still accepts the tunnel's certificate. *)
 let test_past_sim_now =
@@ -204,9 +259,6 @@ let test_past_sim_now =
   in
   Alcotest.(check int) "answered" 200 a.status;
   ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
-
-let has text = Re.execp (Re.compile (Re.str text))
-let noted (f : Model_proxy.findings) text = List.exists (has text) f.errors
 
 (* Refused inside the tunnel, before the host is called. *)
 let test_refusals =
@@ -375,8 +427,12 @@ let () =
             test_targets_stay_on_the_tunnel;
         ] );
       ( "framing",
-        [ Alcotest.test_case "HEAD and 204 have no body" `Quick test_bodiless ]
-      );
+        [
+          Alcotest.test_case "HEAD and 204 have no body" `Quick test_bodiless;
+          Alcotest.test_case "100 and 103 before the answer" `Quick test_interim;
+          Alcotest.test_case "Expect is not passed on" `Quick
+            test_expect_dropped;
+        ] );
       ( "failures",
         [
           Alcotest.test_case "413 and 501" `Quick test_refusals;

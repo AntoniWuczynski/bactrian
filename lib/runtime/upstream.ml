@@ -102,7 +102,7 @@ let framing ~meth ~status headers =
    because its body reader reports a connection dropped inside a chunked body
    as a clean end, and a dropped stream has to be told apart from a finished
    one. *)
-let read_head r =
+let rec read_head r =
   let status_line = Eio.Buf_read.line r in
   let status =
     match String.split_on_char ' ' status_line with
@@ -122,6 +122,11 @@ let read_head r =
         | None -> headers acc)
   in
   match status with
+  (* An interim answer (100 Continue, 103 Early Hints) comes before the final
+     one. 101 is final: the connection changes protocol after it. *)
+  | Some status when status >= 100 && status < 200 && status <> 101 ->
+      ignore (headers [] : (string * string) list);
+      read_head r
   | Some status -> Ok (status, headers [])
   | None -> Error (Failed_after_send ("bad status line: " ^ status_line))
 

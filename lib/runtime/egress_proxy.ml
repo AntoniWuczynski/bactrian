@@ -87,9 +87,12 @@ let header name headers =
       if String.equal (String.lowercase_ascii k) name then Some v else None)
     headers
 
+(* [expect] too: the body is sent with the head, so a [100 Continue] would only
+   come before the real answer. *)
 let dropped_headers =
   [
     "connection";
+    "expect";
     "keep-alive";
     "proxy-authorization";
     "proxy-connection";
