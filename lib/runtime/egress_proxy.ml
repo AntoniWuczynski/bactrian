@@ -146,19 +146,31 @@ let live r ~host ~port ~authority x ~record ~log =
   let target =
     match x.raw_query with Some q -> x.raw_path ^ "?" ^ q | None -> x.raw_path
   in
-  let head = ref None and chunks = ref [] in
+  let head = ref None and chunks = ref [] and size = ref 0 in
+  let exception Response_too_large in
   let result =
-    Eio.Switch.run @@ fun sw ->
-    r.call ~sw r.shared.connector
-      {
-        meth = x.meth;
-        url;
-        target = Some target;
-        headers = forwarded x.headers;
-        body = x.body;
-      }
-      ~on_head:(fun h -> head := Some h)
-      ~on_chunk:(fun ~dt_ms:_ c -> chunks := c :: !chunks)
+    match
+      Eio.Switch.run @@ fun sw ->
+      r.call ~sw r.shared.connector
+        {
+          meth = x.meth;
+          url;
+          target = Some target;
+          headers = forwarded x.headers;
+          body = x.body;
+        }
+        ~on_head:(fun h -> head := Some h)
+        ~on_chunk:(fun ~dt_ms:_ c ->
+          size := !size + String.length c;
+          if !size > r.max_body then raise Response_too_large;
+          chunks := c :: !chunks)
+    with
+    | result -> result
+    | exception Response_too_large ->
+        head := None;
+        Error
+          (Failed_after_send
+             (Printf.sprintf "the response body is over %d bytes" r.max_body))
   in
   let text = String.concat "" (List.rev !chunks) in
   let failed e =

@@ -239,6 +239,35 @@ let test_expect_dropped =
        (F.requests w.up));
   ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
 
+(* A response body over [max_body] is not buffered past it. *)
+let test_response_too_large =
+  with_world ~max_body:64
+    ~handler:(fun _ ->
+      {
+        status = 200;
+        headers = [ ("content-type", "text/plain") ];
+        chunks = [ String.make 40 'a'; String.make 40 'b' ];
+        ending = Complete;
+      })
+    "response-too-large"
+  @@ fun w ->
+  let run =
+    register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ]))
+  in
+  let a = through ~creds:(creds token_a) w ~meth:"GET" ~path:"/big" () in
+  Alcotest.(check int) "502" 502 a.status;
+  Alcotest.(check bool)
+    "says why" true
+    (has "the response body is over 64 bytes" a.body);
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "noted" true (noted f "the response body is over");
+  Alcotest.(check (list bool))
+    "recorded as a transport error" [ true ]
+    (List.map
+       (fun (e : Bactrian_core.Cassette.exchange) ->
+         match e.outcome with Transport_error _ -> true | Response _ -> false)
+       (recording w.ctx run).exchanges)
+
 (* An agent whose clock libfaketime set to the run's SIM_NOW, a month back,
    still accepts the tunnel's certificate. *)
 let test_past_sim_now =
@@ -432,6 +461,8 @@ let () =
           Alcotest.test_case "100 and 103 before the answer" `Quick test_interim;
           Alcotest.test_case "Expect is not passed on" `Quick
             test_expect_dropped;
+          Alcotest.test_case "a response over the cap" `Quick
+            test_response_too_large;
         ] );
       ( "failures",
         [

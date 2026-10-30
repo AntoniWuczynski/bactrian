@@ -42,7 +42,10 @@ type run = {
     on_head:(Upstream.head -> unit) ->
     on_chunk:(dt_ms:int -> string -> unit) ->
     (unit, Upstream.error) result;
-  max_body : int;  (** Larger request bodies get 413. *)
+  max_body : int;
+      (** Larger request bodies get 413. A response body is buffered whole, up
+          to the same size: a larger one is cut off there and answered with 502
+          and [bactrian_upstream_error], recorded as a transport error. *)
   logged : Trace_builder.http_call -> unit;
       (** Called for every request: refused at [CONNECT], refused, answered from
           the recording or forwarded. *)
