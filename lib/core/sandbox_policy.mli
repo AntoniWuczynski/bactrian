@@ -53,8 +53,13 @@ type input = {
           root with [CAP_NET_BIND_SERVICE] and [CAP_SETFCAP], and it starts the
           agent as [uid:gid] in a user namespace of its own, with no capability
           ([--dns=UID:GID], see [Sandbox_init]). [None] for a checker, which has
-          no network, and for a set-user-ID bubblewrap, which grants no
-          capability. Unused on macOS. *)
+          no network, for a set-user-ID bubblewrap, which grants no capability,
+          and for bactrian run as root, whose agent would be root of its own
+          user namespace. Unused on macOS. *)
+  drop_capabilities : bool;
+      (** On Linux, whether bubblewrap is told to drop every capability
+          ([--cap-drop ALL], before any it adds): bubblewrap run by root leaves
+          the command root's capabilities otherwise. Unused on macOS. *)
   tag : string;
       (** Text that Seatbelt appends to the system log line of every denial, so
           the caller can find the run's violations. Non-empty. Unused on Linux.

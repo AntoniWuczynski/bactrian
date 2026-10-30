@@ -15,6 +15,7 @@ type input = {
   bactrian_exe : string;
   preload : string option;
   dns_as : (int * int) option;
+  drop_capabilities : bool;
   tag : string;
 }
 
@@ -362,9 +363,11 @@ let bwrap_of ~exists ~resolve i =
           @ [ "--cap-add"; "CAP_SETFCAP" ],
           [ Printf.sprintf "--dns=%d:%d" uid gid ] )
   in
+  (* Before the two above, which bubblewrap applies in order. *)
+  let drop = if i.drop_capabilities then [ "--cap-drop"; "ALL" ] else [] in
   [ "bwrap"; "--die-with-parent"; "--new-session"; "--unshare-net" ]
   @ [ "--unshare-pid"; "--unshare-ipc" ]
-  @ dns_caps @ [ "--ro-bind"; "/"; "/" ]
+  @ drop @ dns_caps @ [ "--ro-bind"; "/"; "/" ]
   @ [ "--dev"; "/dev"; "--proc"; "/proc"; "--tmpfs"; "/tmp" ]
   @ [ "--tmpfs"; "/dev/shm"; "--tmpfs"; "/run" ]
   (* The executable and the preloaded library may live under one of the fresh

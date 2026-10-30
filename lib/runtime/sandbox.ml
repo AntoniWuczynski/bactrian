@@ -64,7 +64,11 @@ type host = {
   engine : engine;
   dns_as : (int * int) option;
       (** Whom the forwarder starts the agent as when it answers DNS: bactrian's
-          own IDs, with a bubblewrap that is not set-user-ID. *)
+          own IDs, with a bubblewrap that is not set-user-ID, run by a user
+          other than root. *)
+  drop_capabilities : bool;
+      (** bactrian runs as root, whose capabilities bubblewrap would otherwise
+          leave to the command. *)
   bactrian_exe : string;
   home : string;
   project_root : string;
@@ -192,6 +196,7 @@ let input_of ?(dns = false) (host : host) ~state_dir ~temp_dir ~listeners ~tag
     bactrian_exe = host.bactrian_exe;
     preload;
     dns_as = (if dns then host.dns_as else None);
+    drop_capabilities = host.drop_capabilities;
     tag;
   }
 
@@ -427,17 +432,21 @@ let setuid path =
   | st -> st.st_perm land 0o4000 <> 0
   | exception Unix.Unix_error _ -> false
 
+(* Root's agent under [__sandbox-user] would be root of its own user namespace,
+   with every capability there, which the probe refuses. *)
 let make_host ~env settings engine =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700
     Eio.Path.(Eio.Stdenv.fs env / Proc_util.absolute settings.bactrian_dir);
   let bactrian_dir = resolved settings.bactrian_dir in
+  let root = Unix.geteuid () = 0 in
   {
     engine;
     dns_as =
       (match engine with
-      | Bubblewrap path when not (setuid path) ->
+      | Bubblewrap path when not (root || setuid path) ->
           Some (Unix.getuid (), Unix.getgid ())
       | Bubblewrap _ | Seatbelt | Vm _ -> None);
+    drop_capabilities = root;
     bactrian_exe = resolved settings.bactrian_exe;
     home = resolved (home ());
     project_root = Filename.dirname bactrian_dir;
@@ -446,18 +455,11 @@ let make_host ~env settings engine =
     deny_read = List.map resolved settings.deny_read;
   }
 
-(* bubblewrap run by root keeps root's capabilities for the command, so the
-   probe's capability check fails whatever the flags. *)
-let root_cause =
-  "bactrian runs as root, and bubblewrap leaves the agent every capability of \
-   root. Fix: run bactrian as a user other than root"
-
 let check_host ~env ~warn settings backend =
   let* engine = host_engine ~env backend in
   let host = make_host ~env settings engine in
   let explain cause =
     match engine with
-    | Bubblewrap _ when Unix.geteuid () = 0 -> Error (cause ^ ". " ^ root_cause)
     | Bubblewrap path when apparmor_restricted () ->
         Error (cause ^ ". " ^ apparmor_fix path)
     | Bubblewrap _ | Seatbelt | Vm _ -> Error cause

@@ -22,6 +22,7 @@ let base : P.input =
     bactrian_exe = "/opt/bin/bactrian";
     preload = None;
     dns_as = None;
+    drop_capabilities = false;
     tag = "bactrian-sandbox:r1";
   }
 
@@ -234,6 +235,19 @@ let test_bwrap_dns () =
     "nothing else changes"
     (List.length plain + 9)
     (List.length argv)
+
+(* Root's capabilities are dropped before the forwarder's are added. *)
+let test_bwrap_drops_capabilities () =
+  let caps (i : P.input) =
+    List.filter
+      (fun a -> String.starts_with ~prefix:"--cap-" a || String.equal a "ALL")
+      (bwrap ~exists:fixture_exists { i with drop_capabilities = true })
+  in
+  Alcotest.(check (list string)) "plain" [ "--cap-drop"; "ALL" ] (caps linux);
+  Alcotest.(check (list string))
+    "with dns"
+    [ "--cap-drop"; "ALL"; "--cap-add"; "--cap-add" ]
+    (caps { linux with dns_as = Some (0, 0) })
 
 (* ---- unit cases ---- *)
 
@@ -543,6 +557,7 @@ let gen_input platform : P.input QCheck.Gen.t =
       bactrian_exe = "/opt/bin/bactrian";
       preload = None;
       dns_as = None;
+      drop_capabilities = false;
       tag = "bactrian-sandbox:t";
     }
 
@@ -726,6 +741,8 @@ let () =
           Alcotest.test_case "seatbelt" `Quick test_seatbelt_snapshot;
           Alcotest.test_case "bwrap" `Quick test_bwrap_snapshot;
           Alcotest.test_case "bwrap with dns" `Quick test_bwrap_dns;
+          Alcotest.test_case "bwrap run by root" `Quick
+            test_bwrap_drops_capabilities;
         ] );
       ( "cases",
         [
