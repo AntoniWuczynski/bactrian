@@ -184,10 +184,13 @@ let read_body ~clock ~t_head ~on_chunk ~failure framing r =
       Error (Truncated { bytes = !total; reason = Printexc.to_string e })
   | exception Eio.Buf_read.Buffer_limit_exceeded ->
       Error (Truncated { bytes = !total; reason = "chunk header too large" })
+  (* The connector's exceptions cannot be named here, because this library
+     builds without the TLS stack, so [failure] tells them from the others. *)
   | exception e -> (
+      let backtrace = Printexc.get_raw_backtrace () in
       match failure e with
       | Some reason -> Error (Truncated { bytes = !total; reason })
-      | None -> raise e)
+      | None -> Printexc.raise_with_backtrace e backtrace)
 
 let request_text (req : request) ~host =
   let target = match Uri.path_and_query req.url with "" -> "/" | t -> t in
@@ -257,7 +260,11 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
       | End_of_file -> failed "connection closed before the response head"
       | Eio.Buf_read.Buffer_limit_exceeded -> failed "response head too large"
       | e -> (
-          match failure e with Some reason -> failed reason | None -> raise e))
+          (* As in [read_body]: only [failure] can name the TLS exceptions. *)
+          let backtrace = Printexc.get_raw_backtrace () in
+          match failure e with
+          | Some reason -> failed reason
+          | None -> Printexc.raise_with_backtrace e backtrace))
 
 let call ~sw:_ ~net ~clock ~timeout connector (req : request) ~on_head ~on_chunk
     =
