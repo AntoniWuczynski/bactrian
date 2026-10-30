@@ -156,13 +156,16 @@ let expected_paths =
     ("scenario.unknown-assertion.yaml", "assertions[0].sing");
   ]
 
+let errors_of printed =
+  Option.value ~default:[] (Canon.list_member "errors" printed)
+
 let reports ~file ~path printed =
   let is key want e =
     Option.equal String.equal (Canon.str_member key e) (Some want)
   in
   List.exists
     (fun e -> is "file" file e && is "path" path e)
-    (Option.value ~default:[] (Canon.list_member "errors" printed))
+    (errors_of printed)
 
 let check_fixtures_agree ~dir ~fixtures ~env =
   let copy = Filename.concat dir "agreement" in
@@ -203,7 +206,10 @@ let check_fixtures_agree ~dir ~fixtures ~env =
               in
               match (should_reject, List.assoc_opt name expected_paths) with
               | false, _ ->
-                  if code = config_error then fail "bactrian rejected the file"
+                  if
+                    code = config_error
+                    || not (List.is_empty (errors_of printed))
+                  then fail "bactrian rejected the file"
               | true, None -> fail "no expected error path is listed for it"
               | true, Some path ->
                   if
