@@ -292,15 +292,30 @@ let plain_mounts i =
       dirs
   in
   let masked path = List.exists (String.equal path) (dirs @ files) in
-  (* One bind to a path, the first listed: a writable one wins over a
-     read-only one for the same path, and the project root is shown once. *)
+  (* One bind to a path, where the first is listed: writable when any bind of
+     that path is (an allow_write of the project root or of a read-only path
+     wins), and the project root is shown once. *)
   let once binds =
+    let writable path =
+      List.exists
+        (function
+          | Bind { path = p; writable } -> writable && String.equal p path
+          | Mask_dir _ | Mask_file _ | Mask_parent _ -> false)
+        binds
+    in
     List.fold_left
       (fun kept b ->
         if
           List.exists (fun k -> String.equal (mount_path k) (mount_path b)) kept
         then kept
-        else kept @ [ b ])
+        else
+          kept
+          @ [
+              (match b with
+              | Bind { path; writable = false } when writable path ->
+                  Bind { path; writable = true }
+              | Bind _ | Mask_dir _ | Mask_file _ | Mask_parent _ -> b);
+            ])
       [] binds
   in
   let binds =

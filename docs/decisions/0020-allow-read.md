@@ -20,7 +20,7 @@ Two more kinds of path are refused:
 The mount takes part in the existing rules instead of adding its own:
 
 - The deny-list is masked wherever a mount shows it, so an `allow_read` of the home directory still hides `~/.ssh` and the other credential paths. A path under a masked directory is not mounted, and a path equal to a masked one is replaced by the mask.
-- One bind is made for a path. A writable mount of the same path (an `allow_write` path, the run's own directories) wins over a read-only one, and the project is mounted once if `allow_read` names it.
+- One bind is made for a path. A writable mount of the same path (an `allow_write` path, the run's own directories) wins over a read-only one (the project root, a read-only path, an `allow_read` path), so `allow_write` of the project root mounts it writable, and the project is mounted once if `allow_read` names it.
 - The agent's working directory may be in an `allow_read` path.
 
 **The `.env` files.** The files that the deny-list names at the project root (`.env`, `.env.local`, `.env.production` and the others) are also named at the root of each `allow_read` path, on every backend. In the virtual machine that makes the directory of such a file a read-only replacement that holds its other entries, as for the project, and the rule that a masked file's directory has at most 1000 entries applies. Only the root of each path is covered, as only the root of the project is, because neither Seatbelt parameters nor mounts take patterns. A file that is `allow_read` itself and is a masked path is therefore hidden, and the deny-list wins over the allow.

@@ -67,7 +67,7 @@ let kinds =
       (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
 
 let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
-    ?faketime ?(deny = []) ?(listing = default_listing)
+    ?(read_only = []) ?faketime ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -94,7 +94,7 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
     temp_dir = "/p/.bactrian/runs/r1/tmp";
     allow_read = kinds allow_read;
     allow_write = kinds allow_write;
-    read_only = [];
+    read_only;
     deny;
     staging_dir = "/p/.bactrian/runs/r1/staging";
     forwards = [ 4242 ];
@@ -806,7 +806,18 @@ let test_readable_paths () =
     (List.length
        (List.filter
           (fun s -> contains s "source=/p,target=/p,")
-          (mounts (input ~allow_read:[ "/p" ] ()))))
+          (mounts (input ~allow_read:[ "/p" ] ()))));
+  let project_writable = mounts (input ~allow_write:[ "/p" ] ()) in
+  Alcotest.(check (list string))
+    "allow_write of the project root mounts it writable, once"
+    [ "type=bind,source=/p,target=/p" ]
+    (List.filter (fun s -> contains s "source=/p,target=/p") project_writable);
+  Alcotest.(check (list string))
+    "allow_write of a read-only path mounts it writable, once"
+    [ "type=bind,source=/p/lib,target=/p/lib" ]
+    (List.filter
+       (fun s -> contains s "source=/p/lib,")
+       (mounts (input ~read_only:[ "/p/lib" ] ~allow_write:[ "/p/lib" ] ())))
 
 let test_readable_workdir () =
   Alcotest.(check bool)
