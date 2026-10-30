@@ -12,6 +12,7 @@ type report = {
   other_run_write : outcome;
   no_new_privs : outcome;
   heartbeat : outcome;
+  heartbeat_write : outcome;
   interfaces_listed : outcome;
   interfaces : string list;
 }
@@ -28,6 +29,7 @@ type wire = {
   other_run_write : string;
   no_new_privs : string;
   heartbeat : string;
+  heartbeat_write : string;
   interfaces_listed : string;
   interfaces : string list;
 }
@@ -53,6 +55,7 @@ let of_line line =
             other_run_write = of_word w.other_run_write;
             no_new_privs = of_word w.no_new_privs;
             heartbeat = of_word w.heartbeat;
+            heartbeat_write = of_word w.heartbeat_write;
             interfaces_listed = of_word w.interfaces_listed;
             interfaces = w.interfaces;
           })
@@ -131,8 +134,15 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
             e Vm_frame.liveness_timeout;
         ]
   in
+  let heartbeat_write =
+    match r.heartbeat_write with
+    | Error "unchecked" -> []
+    | (Ok () | Error _) as w ->
+        (* A file the agent can write lets it keep its own relay alive. *)
+        fails_with "a write to the heartbeat file" "EROFS" w
+  in
   match
-    public @ interfaces @ no_new_privs @ heartbeat
+    public @ interfaces @ no_new_privs @ heartbeat @ heartbeat_write
     @ fails_with "a read of a masked file" "ENOENT" r.masked_read
     @ fails_with "a read of a masked file under its name in another case"
         "ENOENT" r.masked_case_read

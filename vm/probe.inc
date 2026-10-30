@@ -150,6 +150,17 @@ static const char *probe_heartbeat(long wait_ms) {
   return "unchanged";
 }
 
+/* NULL when a write to the heartbeat file succeeds, which it must not: the
+   agent could then keep its own relay alive. Otherwise the error, which should
+   be "EROFS", or "unchecked" when no heartbeat file is watched. */
+static const char *probe_heartbeat_write(void) {
+  if (heartbeat_path == NULL) return "unchecked";
+  int fd = open(heartbeat_path, O_WRONLY | O_CLOEXEC);
+  if (fd < 0) return errno_name(errno);
+  close(fd);
+  return NULL;
+}
+
 static void put_outcome(FILE *f, const char *name, const char *res, int comma) {
   fprintf(f, "\"%s\":\"%s\"%s", name, res == NULL ? "ok" : res,
           comma ? "," : "");
@@ -168,6 +179,7 @@ static int run_probe(int port, const char **paths) {
   const char *other_run_w = probe_create(paths[6]);
   const char *no_new_privs = probe_no_new_privs();
   const char *heartbeat = probe_heartbeat(PROBE_BEAT_MS);
+  const char *heartbeat_w = probe_heartbeat_write();
   FILE *f = stdout;
   fputc('{', f);
   put_outcome(f, "public", public_, 1);
@@ -181,6 +193,7 @@ static int run_probe(int port, const char **paths) {
   put_outcome(f, "other_run_write", other_run_w, 1);
   put_outcome(f, "no_new_privs", no_new_privs, 1);
   put_outcome(f, "heartbeat", heartbeat, 1);
+  put_outcome(f, "heartbeat_write", heartbeat_w, 1);
   DIR *d = opendir("/sys/class/net");
   put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
   fputs("\"interfaces\":[", f);

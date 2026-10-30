@@ -28,6 +28,9 @@ type report = {
           seconds, as the bridge touches it every {!Vm_frame.heartbeat_interval}
           seconds: [Error "unchanged"] when it did not, or the error of looking
           at it. Without a heartbeat file, [Ok ()]. *)
+  heartbeat_write : outcome;
+      (** Opening the heartbeat file for writing, which must fail with
+          ["EROFS"]. [Error "unchecked"] when no heartbeat file is watched. *)
   interfaces_listed : outcome;  (** Listing [/sys/class/net]. *)
   interfaces : string list;  (** The container's network interfaces. *)
 }
