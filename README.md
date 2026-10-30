@@ -328,13 +328,13 @@ With `--json` it prints the file it wrote and the same comparison as `compare --
 
 ## Driving bactrian from a coding agent
 
-`bactrian serve-mcp` offers bactrian's commands to a coding agent as Model Context Protocol (MCP) tools over standard input and output. Start it in the project directory, which becomes its root. For Claude Code:
+`bactrian serve-mcp` offers bactrian's commands to a coding agent as Model Context Protocol (MCP) tools over standard input and output, or over Streamable HTTP (see below). Start it in the project directory, which becomes its root. For Claude Code:
 
 ```sh
 claude mcp add bactrian -- bactrian serve-mcp
 ```
 
-`compare`, `plan`, `report`, `check` and `doctor` return the JSON their commands print with `--json`, and `divergences` returns one run's stored divergences as `replay --json` reports them. `run`, `record` and `replay` take longer than a tool call should, so `run_start`, `record_start` and `replay_start` return a job ID at once. `job_status` then gives the job's state, its progress in runs and, once it has finished, the command's JSON. `job_cancel` stops a job as Ctrl-C would, and a cancelled experiment's error names the ID to pass back to `run_start` as `resume`. At most four jobs run at once (`serve-mcp --max-jobs N` changes that), and a further one is refused until one ends. A finished job can be queried for an hour, and only the newest 100 finished jobs are kept. What a job wrote stays under `.bactrian`.
+`compare`, `plan`, `report`, `check` and `doctor` return the JSON their commands print with `--json`, and `divergences` returns one run's stored divergences as `replay --json` reports them. `run`, `record` and `replay` take longer than a tool call should, so `run_start`, `record_start` and `replay_start` return a job ID at once. `job_status` then gives the job's state, its progress in runs and, once it has finished, the command's JSON. `job_cancel` stops a job as Ctrl-C would, and a cancelled experiment's error names the ID to pass back to `run_start` as `resume`. At most four jobs run at once (`serve-mcp --max-jobs N` changes that), and a further one is refused until one ends. A finished job can be queried for an hour, and only the newest 100 finished jobs are kept. What a job wrote stays under `.bactrian`. A client that declares the MCP Tasks extension (`io.modelcontextprotocol/tasks`) in a `tools/call` gets the job as a task instead: `tasks/get` follows it, its result once completed is the tool result carrying the command's JSON (with `isError` for a failed command), and `tasks/cancel` stops it as `job_cancel` would, but answers at once rather than once its agents are gone. The task ID is the job ID, so the job tools work on it too. Tasks are offered in the 2026-07-28 revision only, and clients without them keep the job tools.
 
 Every path argument must lie inside the server's working directory, symbolic links included, and run and experiment IDs cannot climb out of `.bactrian`. So must the files that an experiment or a scenario names (scenarios, the price file, golden traces, fixtures, writable paths, an MCP server's directory), and a report is not written under `.bactrian` or `.git`. A symbolic link with an absolute target cannot be followed through the server. Spend is capped by the `BACTRIAN_CAP_<PROVIDER>` variables of the server's own environment, and no tool can change a cap. Warnings go to standard error. When the agent closes the server's input, running jobs are cancelled (an experiment stays resumable) and the server exits once their agents are gone.
 
@@ -349,6 +349,19 @@ claude mcp add bactrian -- bactrian serve-mcp --trust-project
 ```
 
 The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the 2025-11-25 revision and earlier for clients that open with `initialize`. Cursor is one of those, as it does not speak 2026-07-28 yet. The reasoning is in [`docs/decisions/0011-mcp-server.md`](docs/decisions/0011-mcp-server.md).
+
+### Over Streamable HTTP
+
+`bactrian serve-mcp --http PORT` serves the same tools at `http://127.0.0.1:PORT/mcp` instead (`--http 0` picks a free port), until SIGINT or SIGTERM, and takes the same flags. It listens on the loopback interface only. Every request must carry `Authorization: Bearer TOKEN`, where the token is the value of `BACTRIAN_MCP_TOKEN` (at least 32 characters) or, when that is not set, one the server makes and prints on standard error at start. A request whose `Host` is not `127.0.0.1:PORT` or `localhost:PORT`, or that carries an `Origin` other than those two, is refused with status 403, so a web page you visit cannot drive the server, even through DNS rebinding. `--http-allow-origin ORIGIN` accepts one more origin, for a client that runs in a browser. For Claude Code:
+
+```sh
+export BACTRIAN_MCP_TOKEN=$(openssl rand -hex 32)
+bactrian serve-mcp --http 8931 &
+claude mcp add --transport http bactrian http://127.0.0.1:8931/mcp \
+  --header "Authorization: Bearer $BACTRIAN_MCP_TOKEN"
+```
+
+Each POST carries one message and there are no sessions. A 2026-07-28 request must repeat its protocol version, method and tool or task in the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, or it is refused with status 400 and error -32020. A tool call is answered with an event stream when the request accepts one, and with JSON otherwise, and a client that closes the connection before the answer cancels the call. Jobs and tasks belong to the server, not to a connection, and SIGINT or SIGTERM cancels the running ones as the end of input does over stdio. The reasoning is in [`docs/decisions/0016-mcp-http-and-tasks.md`](docs/decisions/0016-mcp-http-and-tasks.md).
 
 ## Building from source
 
