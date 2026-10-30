@@ -440,7 +440,7 @@ let neighbours () =
 (* Shared memory. /dev/shm is writable under every runtime, as it is under
    Docker, so POSIX shared memory and named semaphores (Python's
    multiprocessing, Chromium) work. A read-only root under Podman makes it
-   read-only unless bactrian mounts one (decision 0016). *)
+   read-only unless bactrian mounts one (decision 0022). *)
 
 let shm_agent =
   {|import errno, json, multiprocessing, os, sys

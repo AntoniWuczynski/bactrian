@@ -67,7 +67,7 @@ Two checks on OrbStack decided the teardown. SIGTERM to `docker run -i` without 
 
 **Not in this phase.**
 
-- Podman. There was no Podman on the machine this was built on, so `runtime: podman` was refused. Decision 0016 adds it.
+- Podman. There was no Podman on the machine this was built on, so `runtime: podman` was refused. Decision 0022 adds it.
 - Apple's `container`. Its documentation names no `--network none`, and it is not installed here. `runtime: container` is refused the same way. (Added later by decision 0015.)
 - `libfaketime` inside the image, and `sandbox.allow_read` for paths outside the project. The project is all the container shows.
 
