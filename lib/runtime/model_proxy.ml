@@ -703,7 +703,7 @@ let find ?only t token =
   | Some own when not (String.equal (token_key own) (token_key token)) -> None
   | Some _ | None -> Runs.find_opt t.runs (token_key token)
 
-(* CONNECT, for egress (decision 0018): the run ID is the proxy user name and
+(* CONNECT, for egress (decision 0026): the run ID is the proxy user name and
    the run token its password. *)
 let connect ?only t ~conn st_target request =
   let credentials =

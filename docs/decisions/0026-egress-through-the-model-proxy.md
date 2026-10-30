@@ -1,4 +1,4 @@
-# 0018: HTTPS egress goes through the model proxy's listener
+# 0026: HTTPS egress goes through the model proxy's listener
 
 Date: 2026-10-30
 

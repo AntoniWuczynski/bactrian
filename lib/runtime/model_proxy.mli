@@ -2,7 +2,7 @@
     listeners of a single run where the sandbox needs them ({!listen_unix},
     {!listen_tcp}). Requests arrive at /r/<token>/<provider>/<provider path>.
     The same listeners take the egress proxy's [CONNECT] requests (decision
-    0018): without [Proxy-Authorization] they get 407 with [Proxy-Authenticate],
+    0026): without [Proxy-Authorization] they get 407 with [Proxy-Authenticate],
     with a run ID and token that are not a live run's (or another run's, on a
     listener of one run) 403, before any TLS work.
 

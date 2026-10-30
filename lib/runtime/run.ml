@@ -322,7 +322,7 @@ let process_env config variables ~state_dir ~temp_dir =
   in
   merge (base_env @ passthrough @ variables @ home_env ~state_dir ~temp_dir)
 
-(* Egress (decision 0018): the agent's HTTPS clients reach the model proxy's
+(* Egress (decision 0026): the agent's HTTPS clients reach the model proxy's
    port as a proxy, and trust the bundle of the system's roots and the
    project CA. Only a command agent's own process gets them. *)
 

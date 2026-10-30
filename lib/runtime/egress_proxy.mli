@@ -1,4 +1,4 @@
-(** HTTPS egress interception (design §5.3, decision record 0018).
+(** HTTPS egress interception (design §5.3, decision record 0026).
 
     An agent's HTTPS client reaches its host through [HTTPS_PROXY], which names
     the model proxy's listener: the model proxy authenticates the [CONNECT]
