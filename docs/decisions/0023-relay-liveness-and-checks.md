@@ -1,4 +1,4 @@
-# 0016: A heartbeat file for the relay, a second look at bound-back entries, and tests for both
+# 0023: A heartbeat file for the relay, a second look at bound-back entries, and tests for both
 
 Date: 2026-10-30
 
