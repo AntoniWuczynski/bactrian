@@ -91,21 +91,31 @@ let answer ~record ~transport message =
   Dns.refused message
 
 (* An agent that is gone when its answer arrives, or a source the answer cannot
-   be sent to, is no reason to stop. *)
+   be sent to, is no reason to stop. An error that every receive gives is, as
+   the loop would otherwise spin. *)
 let udp_loop ~record sock =
   let buf = Cstruct.create max_message in
-  let rec loop () =
-    (match Eio.Net.recv sock buf with
-    | from, n -> (
-        match answer ~record ~transport:`Udp (Cstruct.to_string ~len:n buf) with
+  let rec loop failures =
+    match Eio.Net.recv sock buf with
+    | from, n ->
+        (match
+           answer ~record ~transport:`Udp (Cstruct.to_string ~len:n buf)
+         with
         | Some reply -> (
             try Eio.Net.send sock ~dst:from [ Cstruct.of_string reply ]
             with Eio.Io _ -> ())
-        | None -> ())
-    | exception Eio.Io _ -> ());
-    loop ()
+        | None -> ());
+        loop 0
+    | exception (Eio.Io _ as e) ->
+        if failures < 100 then loop (failures + 1)
+        else begin
+          prerr_endline
+            ("bactrian sandbox-init: DNS over UDP stopped: "
+           ^ Printexc.to_string e);
+          `Stop_daemon
+        end
   in
-  loop ()
+  loop 0
 
 let length_prefixed text =
   let n = String.length text in
