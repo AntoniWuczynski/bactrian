@@ -311,6 +311,48 @@ let http_concurrent agent () =
   Alcotest.(check bool) "distinct run IDs" true (a.run_id <> b.run_id);
   Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests up))
 
+(* sandbox.allow_read under the host's sandbox: the whole host is readable
+   already, so what the option adds is the hidden .env of the allowed
+   directory (decision 0020). *)
+let allow_read_env () =
+  if not sandbox_available then begin
+    print_endline "no sandbox on this host: skipped";
+    Alcotest.skip ()
+  end;
+  let dir = Filename.concat (Sys.getcwd ()) "tmp-allow-read-env" in
+  let remove () = ignore (Sys.command ("rm -rf " ^ Filename.quote dir)) in
+  remove ();
+  Fun.protect ~finally:remove @@ fun () ->
+  Unix.mkdir dir 0o700;
+  let write name text =
+    Out_channel.with_open_bin name (fun oc -> output_string oc text)
+  in
+  write (Filename.concat dir "data.txt") "shared\n";
+  write (Filename.concat dir ".env") "OPENAI_API_KEY=sk-allowed-dir\n";
+  let reads file =
+    Printf.sprintf "cat %s >/dev/null 2>&1 && echo read || echo denied"
+      (Filename.quote (Filename.concat dir file))
+  in
+  with_world ~allow_read:[ dir ] "allow-read-env" @@ fun w ->
+  let script = Filename.concat w.dir "agent.sh" in
+  write script shell_agent;
+  let r =
+    w.execute
+      ~agent:(Command [ "/bin/sh"; script ])
+      ~variant_env:
+        [
+          ( "PROBE",
+            Printf.sprintf "echo data=$(%s) env=$(%s)" (reads "data.txt")
+              (reads ".env") );
+        ]
+      ()
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  check_sandboxed w r;
+  Alcotest.(check string)
+    "the .env of the allowed directory is hidden" "data=read env=denied"
+    (reply_text r)
+
 let () =
   Alcotest.run "acceptance"
     [
@@ -351,4 +393,6 @@ let () =
       ( "sandbox escapes",
         List.map (fun a -> Alcotest.test_case a.name `Slow (escapes a)) escapers
       );
+      ( "allow_read",
+        [ Alcotest.test_case "the .env of a directory" `Slow allow_read_env ] );
     ]
