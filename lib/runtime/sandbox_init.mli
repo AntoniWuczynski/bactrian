@@ -27,7 +27,8 @@ type config = {
 }
 
 type parse_error =
-  | Bad_identity of string  (** Not two decimal numbers [UID:GID]. *)
+  | Bad_identity of string
+      (** Not two decimal numbers [UID:GID], each at most 4294967294. *)
   | Bad_pair of string  (** Not of the form [PORT=SOCKET]. *)
   | Bad_port of string  (** Not a decimal number from 1 to 65535. *)
   | Bad_socket of string  (** Not an absolute path. *)

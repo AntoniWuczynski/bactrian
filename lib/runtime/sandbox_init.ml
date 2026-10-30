@@ -35,12 +35,19 @@ let digits text =
   (not (String.equal text ""))
   && String.for_all (function '0' .. '9' -> true | _ -> false) text
 
+(* The largest user or group ID: 2^32 - 1 is the kernel's "no ID". *)
+let max_id = 4294967294
+
+let id text =
+  if digits text && String.length text <= 10 then
+    Option.bind (int_of_string_opt text) (fun n ->
+        if n <= max_id then Some n else None)
+  else None
+
 let parse_identity text =
   match String.split_on_char ':' text with
-  | [ u; g ]
-    when digits u && digits g && String.length u <= 9 && String.length g <= 9
-    -> (
-      match (int_of_string_opt u, int_of_string_opt g) with
+  | [ u; g ] -> (
+      match (id u, id g) with
       | Some uid, Some gid -> Ok { uid; gid }
       | None, (Some _ | None) | Some _, None -> Error (Bad_identity text))
   | [] | [ _ ] | _ :: _ :: _ -> Error (Bad_identity text)

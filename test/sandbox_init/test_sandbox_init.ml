@@ -50,7 +50,15 @@ let parses () =
          dns = Some { uid = 1001; gid = 118 };
          agent = [ "x" ];
        })
-    [ "--dns=1001:118"; "9=/s"; "--"; "x" ]
+    [ "--dns=1001:118"; "9=/s"; "--"; "x" ];
+  check "dns as a directory user's ten-digit IDs"
+    (Ok
+       {
+         forwards = [];
+         dns = Some { uid = 1876400001; gid = 4294967294 };
+         agent = [ "x" ];
+       })
+    [ "--dns=1876400001:4294967294"; "--"; "x" ]
 
 let rejects () =
   let check name expected args =
@@ -72,7 +80,19 @@ let rejects () =
   List.iter
     (fun id ->
       check ("identity " ^ id) (S.Bad_identity id) [ "--dns=" ^ id; "--"; "x" ])
-    [ ""; "1"; "1:"; ":1"; "a:b"; "1:2:3"; "-1:2"; "1:+2"; "1234567890:1" ];
+    [
+      "";
+      "1";
+      "1:";
+      ":1";
+      "a:b";
+      "1:2:3";
+      "-1:2";
+      "1:+2";
+      "4294967295:1";
+      "1:12345678901";
+      "99999999999:1";
+    ];
   check "dns only first" (S.Bad_port "--dns")
     [ "80=/a"; "--dns=1:1"; "--"; "x" ]
 
