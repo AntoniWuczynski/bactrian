@@ -2,7 +2,7 @@
 
 Date: 2026-10-13
 
-Superseded in part by decision 0016, which adds serving over Streamable HTTP and the Tasks extension beside the jobs, and makes job IDs 128 random bits.
+Superseded in part by decision 0021, which adds serving over Streamable HTTP and the Tasks extension beside the jobs, and makes job IDs 128 random bits.
 
 ## Context
 

@@ -7,7 +7,7 @@
     [io.modelcontextprotocol/protocolVersion] selects 2026-07-28.
 
     In 2026-07-28 the server offers the Tasks extension
-    ([io.modelcontextprotocol/tasks], decision record 0016): a [tools/call]
+    ([io.modelcontextprotocol/tasks], decision record 0021): a [tools/call]
     whose request declares it may be answered with a task, and [tasks/get],
     [tasks/update] and [tasks/cancel] answer for one. *)
 

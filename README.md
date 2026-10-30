@@ -361,7 +361,7 @@ claude mcp add --transport http bactrian http://127.0.0.1:8931/mcp \
   --header "Authorization: Bearer $BACTRIAN_MCP_TOKEN"
 ```
 
-Each POST carries one message and there are no sessions. A 2026-07-28 request must repeat its protocol version, method and tool or task in the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, or it is refused with status 400 and error -32020. A tool call is answered with an event stream when the request accepts one, and with JSON otherwise, and a client that closes the connection before the answer cancels the call. The server keeps at most 64 connections, and closes one that has no request admitted within 30 seconds. Jobs and tasks belong to the server, not to a connection, and SIGINT or SIGTERM cancels the running ones as the end of input does over stdio. The reasoning is in [`docs/decisions/0016-mcp-http-and-tasks.md`](docs/decisions/0016-mcp-http-and-tasks.md).
+Each POST carries one message and there are no sessions. A 2026-07-28 request must repeat its protocol version, method and tool or task in the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, or it is refused with status 400 and error -32020. A tool call is answered with an event stream when the request accepts one, and with JSON otherwise, and a client that closes the connection before the answer cancels the call. The server keeps at most 64 connections, and closes one that has no request admitted within 30 seconds. Jobs and tasks belong to the server, not to a connection, and SIGINT or SIGTERM cancels the running ones as the end of input does over stdio. The reasoning is in [`docs/decisions/0021-mcp-http-and-tasks.md`](docs/decisions/0021-mcp-http-and-tasks.md).
 
 ## Building from source
 
