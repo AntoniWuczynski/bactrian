@@ -13,19 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.5.1"
-      - uses: pnpm/action-setup@v6.1.0
-        with:
-          version: "10.7.0"
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version: "24"
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
-      - run: pnpm --dir examples/agents/typescript build
-      - run: uv sync --locked --project examples/agents/python
+      - uses: ./.github/actions/setup-toolchains
       - name: Type-check the sandbox escape agents
         run: |
           pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
@@ -52,24 +40,14 @@ jobs:
         env:
           BACTRIAN_REQUIRE_VM: ${{ runner.os == 'Linux' && '1' || '0' }}
   # The virtual machine sandbox's suite again on Podman, which Ubuntu's runner
-  # ships (rootless, with the user's subordinate IDs set up below).
+  # ships (rootless, with the user's subordinate IDs set up below). Pinned to
+  # 24.04, whose Podman 4.9.3 decision 0016 was checked against: ubuntu-latest
+  # will move to a newer release, with a newer Podman.
   podman:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: "5.5.1"
-      - uses: pnpm/action-setup@v6.1.0
-        with:
-          version: "10.7.0"
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version: "24"
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
-      - run: pnpm --dir examples/agents/typescript build
-      - run: uv sync --locked --project examples/agents/python
+      - uses: ./.github/actions/setup-toolchains
       - run: opam install . --deps-only --with-test --locked
       - name: Set up rootless Podman
         run: |
