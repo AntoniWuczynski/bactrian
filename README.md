@@ -372,7 +372,7 @@ pnpm --dir examples/agents/typescript build
 uv sync --locked --project examples/agents/python
 ```
 
-The schemas have an alias of their own, `opam exec -- dune build @schemas`, which needs python3 and uv. The test binary runs an experiment, a diverging replay, `compare`, `plan` and `check` against a fake upstream, and `dev/schemas/validate.py` validates the files they leave behind, then the hand-written fixtures in `dev/schemas/fixtures`, then copies of both with an unknown field added or the version removed, which must be rejected. The scenario, experiment and price file fixtures are also fed to bactrian's own decoders, which must reject the same invalid ones, each at the path of its fault. Prepare the validator first:
+The schemas have an alias of their own, `opam exec -- dune build @schemas`, which needs python3 and uv. The test binary runs an experiment, a diverging replay, `compare`, `plan` and `check` against a fake upstream, and `dev/schemas/validate.py` validates the files they leave behind, then the hand-written fixtures in `dev/schemas/fixtures` (each invalid one must be rejected where its fault is, and valid once repaired), then copies of both with an unknown field added or the version removed, which must be rejected. The scenario, experiment and price file fixtures are also fed to bactrian's own decoders, which must reject the same invalid ones, each at the path of its fault. Prepare the validator first:
 
 ```sh
 uv sync --locked --project dev/schemas

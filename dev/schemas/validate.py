@@ -64,6 +64,59 @@ SCHEMA_FREE_FORM = {"enum", "title", "description"}
 
 UNKNOWN_FIELD = "bactrian_unknown_field"
 
+# Schemas whose invalid fixtures bactrian's own decoder also judges, at the path
+# the fault names (test/acceptance/gen_schema_samples.ml).
+DECODER_JUDGED = {"experiment", "scenario", "price-file"}
+
+ZEROS = "0" * 64
+
+# Every other invalid fixture, by file name: the JSON pointer where the schema
+# must report an error (a parent, when the schema is a oneOf), and the repairs
+# that make the document valid. A rejection counts only when the error is where
+# the name says and the repaired twin passes, so a second, accidental fault
+# cannot stand in for the one under test. A repair that is only a pointer removes the member.
+type Repair = str | tuple[str, JSON]
+INVALID: dict[str, tuple[str, tuple[Repair, ...]]] = {
+    "agent-input.end-with-field.jsonl": ("", ("/turn",)),
+    "agent-input.turn-without-content.jsonl": ("", (("/content", "hi"),)),
+    "agent-output.event-data-not-object.jsonl": ("", (("/data", {}),)),
+    "agent-output.no-version.jsonl": ("", (("/v", 1),)),
+    "agent-output.unknown-field.jsonl": ("", ("/extra",)),
+    "agent-output.version-2.jsonl": ("/v", (("/v", 1),)),
+    "cassette-line.bad-blob.jsonl": ("", (("/request", {"inline": ""}),)),
+    "cassette-line.complete-true.jsonl": ("", (("/body/complete", False),)),
+    "cassette-line.end-with-field.jsonl": ("", ("/extra",)),
+    "cassette-line.response-and-error.jsonl": ("", ("/error",)),
+    "cassette-line.unknown-channel.jsonl": ("", (("/channel", "model"),)),
+    "checker-verdict.no-pass.json": ("", (("/pass", True),)),
+    "checker-verdict.string-pass.json": ("/pass", (("/pass", True),)),
+    "checker-verdict.unknown-field.json": ("", ("/extra",)),
+    "compare.unknown-verdict.json": ("/metrics/0/result/verdict", (("/metrics/0/result/verdict", "inconclusive"),)),
+    "divergences.no-changes.json": ("/divergences/0", (("/divergences/0/changes", []),)),
+    "divergences.unknown-kind.json": ("/divergences/0/kind", (("/divergences/0/kind", "unconsumed"),)),
+    "ledger-line.bad-date.jsonl": ("/date", (("/date", "2026-10-30T12:17:31Z"),)),
+    "ledger-line.settle-without-date.jsonl": ("", (("/date", "2026-10-30T12:17:31Z"),)),
+    "ledger-line.settle-without-id.jsonl": ("", (("/id", 1),)),
+    "manifest.done-without-outcome.json": ("/runs/2", (("/runs/2/outcome", "failed"),)),
+    "manifest.pending-with-outcome.json": ("/runs/0", ("/runs/0/outcome",)),
+    "manifest.short-digest.json": ("/fingerprint/experiment", (("/fingerprint/experiment", ZEROS),)),
+    "meta.contract-only-without-reason.json": ("/clock", (("/clock/reason", "static-binary"),)),
+    "meta.no-violations.json": (
+        "",
+        (("/sandbox_violations", {"collected": True, "coverage": "seatbelt-log", "complete": True, "items": []}),),
+    ),
+    "meta.unknown-outcome.json": ("/outcome", (("/outcome", "not_run"),)),
+    "meta.vm-without-details.json": ("/sandbox", (("/sandbox/backend", "seatbelt"),)),
+    "plan.zero-repeats.json": ("/answer", (("/answer/repeats", 1),)),
+    "trace-line.bad-join.jsonl": ("", (("/mcp", "joined"),)),
+    "trace-line.done-with-field.jsonl": ("", ("/extra",)),
+    "trace-line.unknown-type.jsonl": ("/type", (("/type", "done"),)),
+    "trace-line.usage-without-output.jsonl": ("", (("/gen_ai.usage.output_tokens", 5),)),
+    "verdicts.fail-without-reason.json": ("/items/0", (("/items/0/reason", "why"),)),
+    "verdicts.pass-with-reason.json": ("/items/2", ("/items/2/reason",)),
+    "verdicts.with-version.json": ("", ("/version",)),
+}
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -259,6 +312,10 @@ class Schemas:
             name: Draft202012Validator(schema, registry=registry) for name, schema in contents.items()
         }
 
+    def error_pointers(self, document: Document) -> set[str]:
+        validator = self.validators[document.schema]
+        return {"".join(f"/{p}" for p in e.absolute_path) for e in validator.iter_errors(document.value)}
+
     def errors(self, document: Document) -> list[str]:
         validator = self.validators.get(document.schema)
         if validator is None:
@@ -267,6 +324,40 @@ class Schemas:
             f"/{'/'.join(str(p) for p in e.absolute_path)}: {e.message[:200]}"
             for e in validator.iter_errors(document.value)
         ]
+
+
+def repaired(document: Document, repairs: tuple[Repair, ...]) -> Document:
+    """The document with each repair applied: a member set, or removed when the
+    repair is only its pointer."""
+    value = copy.deepcopy(document.value)
+    for repair in repairs:
+        pointer = repair if isinstance(repair, str) else repair[0]
+        *parents, last = pointer.split("/")[1:]
+        node = at(value, tuple(int(s) if s.isdigit() else s for s in parents))
+        if isinstance(repair, str):
+            del node[last]
+        else:
+            node[last] = repair[1]
+    return Document(document.origin, document.schema, value)
+
+
+def judge_invalid(schemas: "Schemas", fixture: Fixture) -> list[str]:
+    """Why an invalid fixture does not prove its fault, if it does not."""
+    name = fixture.origin.rsplit("/", 1)[-1]
+    if fixture.schema in DECODER_JUDGED:
+        return []
+    if name not in INVALID:
+        return [f"{fixture.origin}: no expected error pointer or repair is listed for it"]
+    if len(fixture.documents) != 1:
+        return [f"{fixture.origin}: holds {len(fixture.documents)} documents, expected one"]
+    pointer, repairs = INVALID[name]
+    document = fixture.documents[0]
+    found = schemas.error_pointers(document)
+    problems: list[str] = []
+    if pointer not in found:
+        problems.append(f"{fixture.origin}: no error at {pointer or '/'} (errors at {sorted(found) or 'none'})")
+    problems.extend(f"{fixture.origin}: still invalid once repaired: {e}" for e in schemas.errors(repaired(document, repairs)))
+    return problems
 
 
 def objects(value: JSON, path: Path_ = ()) -> Iterator[tuple[Path_, dict[str, JSON]]]:
@@ -362,6 +453,8 @@ def main() -> int:
             failures.append(f"{origin}: holds no documents")
             continue
         rejected = [d for d in fixture.documents if schemas.errors(d)]
+        if not fixture.expected_valid:
+            failures.extend(judge_invalid(schemas, fixture))
         if fixture.expected_valid:
             for document in fixture.documents:
                 covered[document.schema] = covered.get(document.schema, 0) + 1
@@ -371,6 +464,9 @@ def main() -> int:
             failures.append(f"{origin}: expected to be rejected, but every document is valid")
         elif args.verbose:
             print(f"{origin}: {schemas.errors(rejected[0])[0]}")
+
+    judged = {f.origin.rsplit("/", 1)[-1] for f in fixtures(args.fixtures) if not f.expected_valid}
+    failures.extend(f"{name} is listed but is not an invalid fixture" for name in sorted(INVALID.keys() - judged))
 
     mutated = 0
     for document in valid:
