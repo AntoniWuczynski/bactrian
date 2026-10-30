@@ -156,6 +156,42 @@ let untrusted_cache () =
     "contract-only, not a failed start" contract_vm (clock_label r);
   no_container r
 
+(* Both libraries build one after the other from a cold cache. The archive is
+   downloaded once, as root in a rootful Docker, and the second build refuses
+   it unless the download handed it to the user. *)
+let libraries_in_turn () =
+  gate [];
+  let base = Filename.concat (Sys.getcwd ()) "tmp-vm-faketime-turn" in
+  let remove () = ignore (Sys.command ("rm -rf " ^ Filename.quote base)) in
+  remove ();
+  Fun.protect ~finally:remove @@ fun () ->
+  with_env [ ("XDG_CACHE_HOME", base) ] @@ fun () ->
+  Eio_main.run @@ fun env ->
+  let process_mgr = Eio.Stdenv.process_mgr env
+  and clock = Eio.Stdenv.clock env in
+  let rt =
+    match Vm_runtime.detect ~process_mgr ~clock (Some vm_runtime) with
+    | Ok rt -> rt
+    | Error m -> Alcotest.failf "no runtime: %s" m
+  in
+  List.iter
+    (fun libc ->
+      let name = Bactrian_core.Vm_exec_probe.libc_name libc in
+      (match Vm_runtime.faketime ~process_mgr ~clock rt libc with
+      | Ok _ -> ()
+      | Error m -> Alcotest.failf "the %s library: %s" name m);
+      Alcotest.(check (result bool string))
+        (name ^ " is cached and trusted")
+        (Ok true)
+        (Vm_runtime.faketime_cached rt libc))
+    [ Bactrian_core.Vm_exec_probe.Musl; Glibc ];
+  let archive =
+    Filename.concat (Vm_runtime.relay_cache_dir ()) Vm_runtime.faketime_archive
+  in
+  Alcotest.(check int)
+    "the archive belongs to this user" (Unix.getuid ())
+    (Unix.stat archive).st_uid
+
 (* allow_read: a file (docker mounts files) is there and its neighbour is not. *)
 let readable_file () =
   docker_only "a file as sandbox.allow_read";
@@ -227,6 +263,8 @@ let () =
           Alcotest.test_case "a static agent" `Slow static_agent;
           Alcotest.test_case "a library cache that is not trusted" `Slow
             untrusted_cache;
+          Alcotest.test_case "both libraries, one after the other" `Slow
+            libraries_in_turn;
         ] );
       ( "allow_read",
         [
