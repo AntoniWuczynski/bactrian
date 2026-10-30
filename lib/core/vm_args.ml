@@ -130,12 +130,30 @@ let relay_dir = "/bactrian"
    host. 1024 processes is far above what a Node or Python agent starts, 4 GiB
    covers a large agent's heap, and swap is set equal to memory so there is
    none. *)
-let limits = [ "--pids-limit"; "1024"; "--memory"; "4g"; "--memory-swap"; "4g" ]
+let max_processes = 1024
+let max_memory_gib = 4
+let memory = Printf.sprintf "%dg" max_memory_gib
+
+let limits =
+  [
+    "--pids-limit";
+    string_of_int max_processes;
+    "--memory";
+    memory;
+    "--memory-swap";
+    memory;
+  ]
 
 (* container has no --pids-limit. Each container is a virtual machine of its
    own, where the agent's user is the only one but root, so a limit on that
    user's processes is a limit on the container's. It has no swap setting. *)
-let container_limits = [ "--ulimit"; "nproc=1024:1024"; "--memory"; "4g" ]
+let container_limits =
+  [
+    "--ulimit";
+    Printf.sprintf "nproc=%d:%d" max_processes max_processes;
+    "--memory";
+    memory;
+  ]
 
 (* Written out, rather than left to the daemon, so they hold whatever its
    defaults are. *)

@@ -128,6 +128,13 @@ type error =
 
 val describe_error : error -> string
 
+val max_processes : int
+(** The container's limit on processes, 1024. *)
+
+val max_memory_gib : int
+(** The container's limit on memory in GiB, 4, with no swap for Docker and
+    Podman. *)
+
 val relay_path : string
 (** [/bactrian/relay], where Docker mounts the relay. *)
 

@@ -23,6 +23,12 @@ type report = {
   no_new_privs : outcome;
       (** Whether [NoNewPrivs] is 1 in [/proc/self/status], so no program the
           agent runs gains privileges. [Error "off"] when it is 0. *)
+  pids_max : string;
+      (** The first line of the container's [pids.max] (control groups version
+          2, else version 1's file), or the error's name. *)
+  memory_max : string;
+      (** The first line of [memory.max] (version 1: [memory.limit_in_bytes]),
+          or the error's name. *)
   interfaces_listed : outcome;  (** Listing [/sys/class/net]. *)
   interfaces : string list;  (** The container's network interfaces. *)
 }
@@ -43,9 +49,12 @@ val judge : Experiment.sandbox_runtime -> report -> (unit, string list) result
 (** Every check with the wrong result, described. The interfaces must have been
     listed and be [lo] alone, and the public connection must fail at once rather
     than time out, which would mean a route that drops packets, and
-    [no_new_privs] must be set. Reads of the masked file under either name and
-    the write into another run must fail with [ENOENT], the write to [/] with
-    [EROFS], and the write outside the state directory, which is under a mask,
-    with [EROFS] for Docker (a read-only tmpfs) and [EACCES] for container (a
-    tmpfs only root can write to): another error is a surprise, so it fails the
-    probe too. *)
+    [no_new_privs] must be set. Under Docker and Podman the control group must
+    hold {!Vm_args.max_processes} and {!Vm_args.max_memory_gib}, because a
+    runtime that cannot apply them (a rootless one without the controllers) may
+    run the container without them. Reads of the masked file under either name
+    and the write into another run must fail with [ENOENT], the write to [/]
+    with [EROFS], and the write outside the state directory, which is under a
+    mask, with [EROFS] for Docker (a read-only tmpfs) and [EACCES] for container
+    (a tmpfs only root can write to): another error is a surprise, so it fails
+    the probe too. *)

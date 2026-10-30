@@ -3,7 +3,7 @@
 open Bactrian_core
 
 let good =
-  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|}
+  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","pids_max":"1024","memory_max":"4294967296","interfaces_listed":"ok","interfaces":["lo"]}|}
 
 let judged ?(runtime = `Docker) line =
   match Vm_probe.of_line line with
@@ -58,7 +58,7 @@ let test_judge () =
          "a read of a denied file succeeded";
        ])
     (judged
-       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|});
+       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","pids_max":"1024","memory_max":"4294967296","interfaces_listed":"ok","interfaces":["lo"]}|});
   Alcotest.check wrong "a masked file read under another name"
     (Error
        [ "a read of a masked file under its name in another case succeeded" ])
@@ -139,6 +139,44 @@ let test_container () =
             ("masked_case_read", `String "ok");
           ]))
 
+(* A runtime that cannot apply a limit (a rootless Podman without the
+   controllers) can run the container without it, with exit status 0 and no
+   warning, so the probe reads the container's control group. container limits
+   processes per user and memory by the virtual machine's size instead. *)
+let test_limits () =
+  let dropped what value flag =
+    Printf.sprintf
+      "the container's limit on %s is %s, not %s, so the runtime did not apply \
+       %s (a rootless one needs control groups version 2 with the pids and \
+       memory controllers delegated to the user)"
+      what value
+      (if String.equal what "processes" then "1024" else "4294967296")
+      flag
+  in
+  List.iter
+    (fun runtime ->
+      Alcotest.check wrong "no limits"
+        (Error
+           [
+             dropped "processes" "ENOENT" "--pids-limit";
+             dropped "memory" "max" "--memory";
+           ])
+        (judged ~runtime
+           (with_fields
+              [ ("pids_max", `String "ENOENT"); ("memory_max", `String "max") ]));
+      Alcotest.check wrong "another limit"
+        (Error [ dropped "processes" "2048" "--pids-limit" ])
+        (judged ~runtime (with_field "pids_max" (`String "2048"))))
+    [ `Docker; `Podman ];
+  Alcotest.check wrong "container's are its own" (Ok ())
+    (judged ~runtime:`Container
+       (with_fields
+          [
+            ("outside_write", `String "EACCES");
+            ("pids_max", `String "max");
+            ("memory_max", `String "1073741824");
+          ]))
+
 let () =
   Alcotest.run "vm_probe"
     [
@@ -147,5 +185,6 @@ let () =
           Alcotest.test_case "reports" `Quick test_judge;
           Alcotest.test_case "podman" `Quick test_podman;
           Alcotest.test_case "container" `Quick test_container;
+          Alcotest.test_case "limits" `Quick test_limits;
         ] );
     ]
