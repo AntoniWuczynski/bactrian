@@ -33,15 +33,18 @@ let answer ~record ~transport message =
   record (line ~transport (Dns.parse message));
   Dns.refused message
 
+(* An agent that is gone when its answer arrives, or a source the answer cannot
+   be sent to, is no reason to stop. *)
 let udp_loop ~record sock =
   let buf = Cstruct.create max_message in
   let rec loop () =
     (match Eio.Net.recv sock buf with
     | from, n -> (
         match answer ~record ~transport:`Udp (Cstruct.to_string ~len:n buf) with
-        | Some reply -> Eio.Net.send sock ~dst:from [ Cstruct.of_string reply ]
+        | Some reply -> (
+            try Eio.Net.send sock ~dst:from [ Cstruct.of_string reply ]
+            with Eio.Io _ -> ())
         | None -> ())
-    (* An agent that is gone when its answer arrives is no reason to stop. *)
     | exception Eio.Io _ -> ());
     loop ()
   in
@@ -89,16 +92,16 @@ let bind ~sw ~net ~on_bound (ip, port) =
     let tcp =
       Eio.Net.listen ~sw ~reuse_addr:true ~backlog:32 net (`Tcp (ip, port))
     in
-    (udp, tcp)
+    let tcp_port =
+      match Eio.Net.listening_addr tcp with `Tcp (_, p) -> p | `Unix _ -> port
+    in
+    (udp, bound_port udp ~requested:port, tcp, tcp_port)
   with
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Error { address; reason = Printexc.to_string e }
-  | udp, tcp ->
-      on_bound `Udp (bound_port udp ~requested:port);
-      on_bound `Tcp
-        (match Eio.Net.listening_addr tcp with
-        | `Tcp (_, p) -> p
-        | `Unix _ -> port);
+  | udp, udp_port, tcp, tcp_port ->
+      on_bound `Udp udp_port;
+      on_bound `Tcp tcp_port;
       Ok (udp, tcp)
 
 let serve ?(on_bound = fun (_ : [ `Udp | `Tcp ]) (_ : int) -> ()) ~sw ~net
@@ -115,6 +118,9 @@ let serve ?(on_bound = fun (_ : [ `Udp | `Tcp ]) (_ : int) -> ()) ~sw ~net
          Eio.Fiber.fork_daemon ~sw (fun () -> udp_loop ~record udp);
          Eio.Fiber.fork_daemon ~sw (fun () ->
              Eio.Net.run_server tcp
-               ~on_error:(fun (_ : exn) -> ())
+               ~on_error:(fun e ->
+                 prerr_endline
+                   ("bactrian sandbox-init: DNS connection failed: "
+                  ^ Printexc.to_string e))
                (fun flow _ -> tcp_connection ~record flow))))
     (bind_all [] addresses)
