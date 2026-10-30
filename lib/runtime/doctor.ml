@@ -366,33 +366,57 @@ let reason_text : Clock_label.reason -> string = function
    for the C library of the agent's executable. The executable and the image
    are looked at by each run, so all this can say is whether the libraries are
    there: a missing one is built on the first run that needs it, if the network
-   and the image allow, and otherwise that run is contract-only. *)
+   and the image allow, and otherwise that run is contract-only. A cache that
+   cannot be trusted is not built over, so it warns with its fix. Which library
+   an image needs is only known from the image, so one that is built is enough
+   for a pass. *)
 let vm_clock_check ~(vm : vm_host) ~faketime =
   if not faketime then
     check "clock" Skip
       "contract-only (faketime-off): the experiment turns faketime off"
   else
-    let missing =
-      List.filter_map
-        (fun libc ->
-          match vm.faketime_cached libc with
-          | Ok true -> None
-          | Ok false | Error _ -> Some (Vm_exec_probe.libc_name libc))
+    let found =
+      List.map
+        (fun libc -> (Vm_exec_probe.libc_name libc, vm.faketime_cached libc))
         [ Vm_exec_probe.Musl; Glibc ]
     in
-    match missing with
-    | [] ->
+    let names f = List.filter_map f found in
+    let built =
+      names (function n, Ok true -> Some n | _, (Ok false | Error _) -> None)
+    and missing =
+      names (function n, Ok false -> Some n | _, (Ok true | Error _) -> None)
+    and refused =
+      names (function
+        | n, Error why -> Some (Printf.sprintf "for %s images, %s" n why)
+        | _, Ok (_ : bool) -> None)
+    in
+    let images = String.concat " or " in
+    match (refused, built, missing) with
+    | _ :: _, _, _ ->
+        check "clock" Warn
+          (Printf.sprintf
+             "libfaketime cannot be used, so the runs that need it are \
+              contract-only (vm): %s"
+             (String.concat "; " refused))
+    | [], _, [] ->
         check "clock" Pass
           "libfaketime is built for musl and glibc images (each run looks at \
            the agent's executable in the image, and a static or Go one stays \
            contract-only)"
-    | _ :: _ ->
+    | [], _ :: _, _ :: _ ->
+        check "clock" Pass
+          (Printf.sprintf
+             "libfaketime is built for %s images, and for %s images the first \
+              run that needs it builds it, which needs the network once, and \
+              is contract-only (vm) if that fails"
+             (images built) (images missing))
+    | [], [], _ :: _ ->
         check "clock" Warn
           (Printf.sprintf
              "libfaketime is not built for %s images yet: the first run that \
               needs it builds it, which needs the network once, and is \
               contract-only (vm) if that fails"
-             (String.concat " or " missing))
+             (images missing))
 
 let clock_check ~vm ~linux ~library_override ~path target =
   let contract_only reason =

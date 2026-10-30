@@ -218,11 +218,11 @@ let test_vm_clock () =
       (function Vm_exec_probe.Musl -> Ok true | Glibc -> Ok false)
       (Some (vm_target ()))
   in
-  check_status "one built" Warn c;
+  check_status "one built is enough, the image decides which it needs" Pass c;
   Alcotest.(check bool)
-    "names the one that is not" true
-    (contains ~sub:"glibc images yet" c.message
-    && not (contains ~sub:"musl" c.message));
+    "names the one that is built on first use" true
+    (contains ~sub:"built for musl images, and for glibc images the first run"
+       c.message);
   let c =
     check_with (fun (_ : Vm_exec_probe.libc) -> Ok false) (Some (vm_target ()))
   in
@@ -232,10 +232,19 @@ let test_vm_clock () =
     (contains ~sub:"musl or glibc images" c.message);
   let c =
     check_with
-      (fun (_ : Vm_exec_probe.libc) -> Error "not trusted")
+      (function
+        | Vm_exec_probe.Musl -> Ok true
+        | Glibc -> Error "it is not trusted. Fix: remove /c/faketime")
       (Some (vm_target ()))
   in
   check_status "an untrusted cache" Warn c;
+  Alcotest.(check bool)
+    "says why and how to fix it, not that a run builds it" true
+    (contains
+       ~sub:"for glibc images, it is not trusted. Fix: remove /c/faketime"
+       c.message
+    && contains ~sub:"contract-only (vm)" c.message
+    && not (contains ~sub:"builds it" c.message));
   check_status "faketime off" Skip (both (Some (vm_target ~faketime:false ())))
 
 let test_clock () =

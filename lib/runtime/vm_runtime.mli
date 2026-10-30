@@ -128,7 +128,8 @@ val faketime :
 
 val faketime_cached :
   t -> Bactrian_core.Vm_exec_probe.libc -> (bool, string) result
-(** Whether that library is cached and passes the checks of {!faketime}. *)
+(** Whether that library is cached and passes the checks of {!faketime}. [Error]
+    is the message {!faketime} would give, with its fix. *)
 
 val labels : run_id:string -> (string * string) list
 (** The labels of a container bactrian starts: [bactrian.run] (the run's ID),

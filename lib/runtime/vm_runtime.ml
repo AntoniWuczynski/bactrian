@@ -506,21 +506,22 @@ let faketime_trusted ~parent libc =
     if not dir_ok then Ok false
     else owned ~kind:S_REG ~what:"a regular file" lib
 
+let untrusted_faketime ~parent why =
+  Error
+    (Printf.sprintf
+       "the cached libfaketime cannot be trusted: %s. Fix: remove %s" why parent)
+
 let faketime_cached t libc =
   let parent = Filename.concat (relay_cache_dir ()) (faketime_name t) in
   match faketime_trusted ~parent libc with
-  | result -> result
+  | Ok _ as result -> result
+  | Error why -> untrusted_faketime ~parent why
   | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
 
 let faketime ~process_mgr ~clock t libc =
   let dir = relay_cache_dir () in
   let parent = Filename.concat dir (faketime_name t) in
-  let untrusted why =
-    Error
-      (Printf.sprintf
-         "the cached libfaketime cannot be trusted: %s. Fix: remove %s" why
-         parent)
-  in
+  let untrusted = untrusted_faketime ~parent in
   match
     mkdirs dir;
     match owned ~kind:S_DIR ~what:"a directory" dir with
