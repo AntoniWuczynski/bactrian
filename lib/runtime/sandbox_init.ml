@@ -273,6 +273,9 @@ let watch_requests ~terminate fd =
     | _ ->
         terminate ();
         loop ()
+    (* A signal or a spurious wake-up is not the end of the pipe. *)
+    | exception Unix.Unix_error ((EINTR | EAGAIN | EWOULDBLOCK), _, _) ->
+        loop ()
     | exception (Unix.Unix_error _ | Eio.Io _) -> ()
   in
   loop ()
