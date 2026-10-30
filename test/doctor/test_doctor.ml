@@ -210,15 +210,32 @@ let test_vm_clock () =
   Alcotest.(check bool)
     "names both libraries" true
     (contains ~sub:"musl and glibc" c.message);
+  Alcotest.(check bool)
+    "not claimed to be enforced" false
+    (contains ~sub:"enforced" c.message);
   let c =
     check_with
       (function Vm_exec_probe.Musl -> Ok true | Glibc -> Ok false)
       (Some (vm_target ()))
   in
-  check_status "one built" Pass c;
+  check_status "one built" Warn c;
   Alcotest.(check bool)
-    "the rest on first use" true
-    (contains ~sub:"first use" c.message && contains ~sub:"musl" c.message);
+    "names the one that is not" true
+    (contains ~sub:"glibc images yet" c.message
+    && not (contains ~sub:"musl" c.message));
+  let c =
+    check_with (fun (_ : Vm_exec_probe.libc) -> Ok false) (Some (vm_target ()))
+  in
+  check_status "none built" Warn c;
+  Alcotest.(check bool)
+    "names both" true
+    (contains ~sub:"musl or glibc images" c.message);
+  let c =
+    check_with
+      (fun (_ : Vm_exec_probe.libc) -> Error "not trusted")
+      (Some (vm_target ()))
+  in
+  check_status "an untrusted cache" Warn c;
   check_status "faketime off" Skip (both (Some (vm_target ~faketime:false ())))
 
 let test_clock () =

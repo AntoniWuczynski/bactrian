@@ -363,32 +363,36 @@ let reason_text : Clock_label.reason -> string = function
        for it"
 
 (* In the virtual machine the relay starts the clock with a libfaketime built
-   for the image's C library, so the check is whether those are built. The
-   executable and the image are looked at by each run. *)
+   for the C library of the agent's executable. The executable and the image
+   are looked at by each run, so all this can say is whether the libraries are
+   there: a missing one is built on the first run that needs it, if the network
+   and the image allow, and otherwise that run is contract-only. *)
 let vm_clock_check ~(vm : vm_host) ~faketime =
   if not faketime then
     check "clock" Skip
       "contract-only (faketime-off): the experiment turns faketime off"
   else
-    let built =
+    let missing =
       List.filter_map
         (fun libc ->
           match vm.faketime_cached libc with
-          | Ok true -> Some (Vm_exec_probe.libc_name libc)
-          | Ok false | Error _ -> None)
+          | Ok true -> None
+          | Ok false | Error _ -> Some (Vm_exec_probe.libc_name libc))
         [ Vm_exec_probe.Musl; Glibc ]
     in
-    check "clock" Pass
-      (Printf.sprintf
-         "enforced for an executable that takes a preload (libfaketime is \
-          built for %s%s; each run looks at the image and the agent)"
-         (match built with
-         | [] -> "no C library yet"
-         | _ :: _ -> String.concat " and " built)
-         (if List.length built = 2 then ""
-          else
-            ", and for the image's own on first use, which needs the network \
-             once"))
+    match missing with
+    | [] ->
+        check "clock" Pass
+          "libfaketime is built for musl and glibc images (each run looks at \
+           the agent's executable in the image, and a static or Go one stays \
+           contract-only)"
+    | _ :: _ ->
+        check "clock" Warn
+          (Printf.sprintf
+             "libfaketime is not built for %s images yet: the first run that \
+              needs it builds it, which needs the network once, and is \
+              contract-only (vm) if that fails"
+             (String.concat " or " missing))
 
 let clock_check ~vm ~linux ~library_override ~path target =
   let contract_only reason =
