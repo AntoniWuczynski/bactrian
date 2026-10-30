@@ -578,28 +578,26 @@ let sandbox_user_cmd =
     Arg.(value & pos_all string [] & info [] ~docv:"UID:GID -- AGENT...")
   in
   let run (_ : string list) =
-    let fail m =
+    let fail code m =
       prerr_endline ("bactrian __sandbox-user: " ^ m);
-      Exit_code.environment
+      code
     in
     match Sandbox_init.parse_user (raw_arguments "__sandbox-user") with
-    | Error m ->
-        prerr_endline ("bactrian __sandbox-user: " ^ m);
-        Exit_code.usage
+    | Error m -> fail Exit_code.usage m
     | Ok (id, agent) -> (
         match Sandbox_init.enter_user_namespace id with
-        | Error m -> fail m
+        | Error m -> fail Exit_code.environment m
         | Ok () -> (
             match agent with
-            | [] -> fail "no agent command"
+            | [] -> fail Exit_code.environment "no agent command"
             | exe :: _ -> (
-                try Unix.execvp exe (Array.of_list agent)
-                with Unix.Unix_error (e, _, _) ->
-                  prerr_endline
-                    (Printf.sprintf "bactrian __sandbox-user: %s: %s" exe
-                       (Unix.error_message e));
-                  (* A shell's codes for a missing and an unusable command. *)
-                  if e = Unix.ENOENT then 127 else 126)))
+                let failed code e =
+                  fail code (exe ^ ": " ^ Unix.error_message e)
+                in
+                (* A shell's codes for a missing and an unusable command. *)
+                try Unix.execvp exe (Array.of_list agent) with
+                | Unix.Unix_error ((ENOENT as e), _, _) -> failed 127 e
+                | Unix.Unix_error (e, _, _) -> failed 126 e)))
   in
   let info =
     Cmd.info "__sandbox-user" ~docs:Manpage.s_none ~exits:Cli.exits
