@@ -3,27 +3,27 @@ to sentinels whose text must never be printed. The sandbox, vm and clock lines
 depend on the host (macOS or Linux, and whether a container runtime runs), so
 they are filtered out here, and the unit tests cover them with the host stated.
 The number of trusted root certificates depends on the host too, so it is
-masked.
+masked, and so are the project CA's expiry and fingerprint. The node line
+depends on the Node.js installed, and the unit tests cover it.
 
   $ run() { env -i PATH="$PATH" "$@"; }
-  $ roots() { sed 's/load ([0-9]*)/load (N)/'; }
+  $ roots() { sed -e 's/load ([0-9]*)/load (N)/' -e 's/valid until [0-9-]*, SHA-256 [0-9a-f]*/valid until DATE, SHA-256 HASH/' -e 's/"name":"node","status":"[a-z]*","message":"[^"]*"/"name":"node","status":"S","message":"M"/'; }
 
 With no experiment, every known provider is listed and a missing key is a
 warning. Only the variable name is printed.
 
   $ run OPENAI_API_KEY=sk-SENTINEL-one ANTHROPIC_API_KEY=sk-SENTINEL-two bactrian doctor > out.txt; echo "exit $?"
   exit 0
-  $ grep -v -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt | roots
+  $ grep -v -e ' sandbox:' -e ' vm:' -e ' clock:' -e ' node:' out.txt | roots
   ok    key-openai: OPENAI_API_KEY is set
   ok    key-anthropic: ANTHROPIC_API_KEY is set
   warn  key-gemini: GEMINI_API_KEY is not set
   warn  key-openrouter: OPENROUTER_API_KEY is not set
   ok    loopback: a port on 127.0.0.1 can be bound
   ok    tls: the trusted root certificates load (N)
-  skip  ca: egress interception is not built yet
-  skip  node: egress interception is not built yet
-  $ grep -c -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt
-  3
+  ok    ca: the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
+  $ grep -c -e ' sandbox:' -e ' vm:' -e ' clock:' -e ' node:' out.txt
+  4
   $ grep -c SENTINEL out.txt
   0
   [1]
@@ -43,8 +43,8 @@ The same as JSON, with the same shape every time.
   {"name":"key-openrouter","status":"warn","message":"OPENROUTER_API_KEY is not set"},
   {"name":"loopback","status":"ok","message":"a port on 127.0.0.1 can be bound"},
   {"name":"tls","status":"ok","message":"the trusted root certificates load (N)"},
-  {"name":"ca","status":"skip","message":"egress interception is not built yet"},
-  {"name":"node","status":"skip","message":"egress interception is not built yet"}],"ok":true}
+  {"name":"ca","status":"ok","message":"the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH"},
+  {"name":"node","status":"S","message":"M"}],"ok":true}
 
 An empty key counts as missing.
 
@@ -66,7 +66,7 @@ experiment, so the caps check fails.
   > YAML
   $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment exp.yaml > out.txt; echo "exit $?"
   exit 69
-  $ grep -v ' clock:' out.txt | sed 's/ resolves to .*/ resolves to FILE/' | roots
+  $ grep -v -e ' clock:' -e ' node:' out.txt | sed 's/ resolves to .*/ resolves to FILE/' | roots
   ok    key-openai: OPENAI_API_KEY is set
   skip  key-anthropic: ANTHROPIC_API_KEY is not set, and the experiment has no spend cap for anthropic
   skip  key-gemini: GEMINI_API_KEY is not set, and the experiment has no spend cap for gemini
@@ -77,8 +77,7 @@ experiment, so the caps check fails.
   skip  sandbox: sandbox: off
   skip  vm: the agent is not sandboxed
   ok    tls: the trusted root certificates load (N)
-  skip  ca: egress interception is not built yet
-  skip  node: egress interception is not built yet
+  ok    ca: the project CA is ./.bactrian/ca/ca.pem, valid until DATE, SHA-256 HASH
 
 A provider with a spend cap is called live, so its missing key fails.
 

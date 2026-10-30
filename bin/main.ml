@@ -652,6 +652,7 @@ let cmd =
       Plan_cmd.cmd;
       Report_cmd.cmd;
       Doctor_cmd.cmd ~bactrian_exe;
+      Ca_cmd.cmd;
       Serve_mcp_cmd.cmd ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;

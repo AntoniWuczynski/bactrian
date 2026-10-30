@@ -49,6 +49,7 @@ type target = {
   faketime : bool;
   funded : (P.provider * string) list;
   mcp_https : string list;
+  egress : bool;
 }
 
 let target ~dir (e : Experiment.t) =
@@ -77,6 +78,10 @@ let target ~dir (e : Experiment.t) =
                 | Mcp_stdio _ -> None)
               e.mcp)
        else []);
+    egress =
+      (match e.agent with
+      | Command _ -> Option.is_some (Executor.egress e)
+      | Http _ -> false);
   }
 
 let check name status message = { name; status; message }
@@ -436,15 +441,50 @@ let tls_check ~tls ~upstream target =
 
 (* Egress *)
 
-let egress_checks =
-  [
-    check "ca" Skip "egress interception is not built yet";
-    check "node" Skip "egress interception is not built yet";
-  ]
+let ca_check ~ca =
+  match ca () with
+  | Ok message -> check "ca" Pass message
+  | Error reason -> check "ca" Fail reason
+
+let node_check ~egress version =
+  match (egress, version) with
+  | false, _ -> check "node" Skip "the experiment does not intercept egress"
+  | true, None -> check "node" Skip "node is not on PATH"
+  | true, Some (Error reason) ->
+      check "node" Warn ("node --version failed: " ^ reason)
+  | true, Some (Ok text) -> (
+      let text = String.trim text in
+      match Egress.node_env_proxy text with
+      | Ok true ->
+          check "node" Pass
+            (text
+           ^ " honours NODE_USE_ENV_PROXY, so fetch uses the egress proxy")
+      | Ok false ->
+          check "node" Warn
+            (text
+           ^ " ignores NODE_USE_ENV_PROXY (it needs 24.0 or later, or 22.21 or \
+              later), so a Node agent's fetch bypasses the egress proxy and \
+              fails in the sandbox")
+      | Error reason -> check "node" Warn reason)
+
+(* [node --version] with nothing of bactrian's environment but PATH. *)
+let node_version ~env ~path =
+  Option.map
+    (fun node ->
+      match
+        Eio.Process.parse_out
+          (Eio.Stdenv.process_mgr env)
+          Eio.Buf_read.take_all
+          ~env:(match path with Some p -> [| "PATH=" ^ p |] | None -> [||])
+          ~executable:node [ node; "--version" ]
+      with
+      | text -> Ok text
+      | exception (Eio.Io _ as e) -> Error (Printexc.to_string e))
+    (Proc_util.find_executable ~path ~cwd:(Sys.getcwd ()) "node")
 
 (* All of them *)
 
-let run ~env ~bactrian_exe ~tls ~upstream ~keys ~path target =
+let run ~env ~bactrian_exe ~tls ~ca ~upstream ~keys ~path target =
   let keys = List.map fst keys in
   let cwd = match target with Some t -> t.dir | None -> Sys.getcwd () in
   let http_agent =
@@ -487,4 +527,12 @@ let run ~env ~bactrian_exe ~tls ~upstream ~keys ~path target =
         ~path target;
       tls_check ~tls ~upstream target;
     ]
-  @ egress_checks
+  @
+  (* Without an experiment, record and replay intercept egress. *)
+  let egress = match target with Some t -> t.egress | None -> true in
+  if egress then [ ca_check ~ca; node_check ~egress (node_version ~env ~path) ]
+  else
+    [
+      check "ca" Skip "the experiment does not intercept egress";
+      node_check ~egress None;
+    ]
