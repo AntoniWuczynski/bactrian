@@ -1,2 +1,3 @@
 {"date":"2026-10-30T12:17:31Z","provider":"openai","usd":0.5}
 {"date":"2026-10-30T12:17:31Z","event":"gap","id":3,"model":"m","provider":"gemini","usd":0.01}
+{"provider":"anthropic","usd":0.25}
