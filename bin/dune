@@ -2,6 +2,8 @@
  (name main)
  (public_name bactrian)
  (package bactrian)
+ (link_flags
+  (:include link_flags.sexp))
  (libraries
   bactrian.app
   bactrian.core
@@ -11,3 +13,16 @@
   eio_main
   unix
   yojson))
+
+; The release workflow sets BACTRIAN_STATIC=1 on Alpine to link statically
+; against musl. Every other build links as usual.
+
+(rule
+ (targets link_flags.sexp)
+ (deps
+  (env_var BACTRIAN_STATIC))
+ (action
+  (with-stdout-to
+   %{targets}
+   (system
+    "if [ \"$BACTRIAN_STATIC\" = 1 ]; then echo '(-ccopt -static)'; else echo '()'; fi"))))

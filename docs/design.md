@@ -43,7 +43,7 @@ Replay is deterministic for every exchange that crosses the proxies, and in a sa
 | Process architecture | One binary, one process, Eio fibres. One listener per proxy type, routed by run. |
 | Sandbox | On by default when available (`auto`), an unsandboxed fallback with a warning and a label, `strict` to fail closed, `off` to skip. Placeholder keys, egress blocked by default and an allowlisted environment apply in every mode. macOS: a Linux container in a virtual machine when an image and a Docker-compatible runtime are there (decision record 0014), otherwise `sandbox-exec` with a generated Seatbelt profile. Linux: bubblewrap with the network namespace removed and the proxies reached through bind-mounted Unix sockets. Checkers run in the same mode under a tighter policy: no network and writes only to a temporary directory of their own (decision record 0013). |
 | Platforms | macOS and Linux. No Windows. |
-| Distribution | Prebuilt binaries (static musl on Linux, native on macOS) are planned. |
+| Distribution | Prebuilt binaries: static musl on Linux (x86_64, arm64) and native on macOS (arm64), each with a checksum. A CI workflow to build them, check them on a runner without OCaml and publish them to GitHub Releases on a tag is written but has not run yet (decision record 0016). |
 
 ## 3. Reserved
 
