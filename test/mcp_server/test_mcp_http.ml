@@ -584,6 +584,28 @@ let test_endless_head () =
     "a head past the bound is cut" ""
     (until_closed ~port ("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" ^ pad))
 
+(* A POST with neither Content-Length nor Transfer-Encoding has no body, so it
+   is answered at once and the next request follows its head. *)
+let test_no_length () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
+  let head headers =
+    Printf.sprintf "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n%s\r\n" port
+      (String.concat ""
+         (List.map (fun (k, v) -> k ^ ": " ^ v ^ "\r\n") headers))
+  in
+  let last =
+    H.request ~port (call_headers "echo")
+      (H.body ~id:8 "tools/call" (call_params "echo"))
+  in
+  Alcotest.(check (list int))
+    "refused, then the next request" [ 401; 200 ]
+    (statuses
+       (until_closed ~port
+          (head [ ("Content-Type", "application/json") ] ^ last)));
+  Alcotest.(check (list int))
+    "admitted with an empty body, then the next request" [ 400; 200 ]
+    (statuses (until_closed ~port (head (call_headers "echo") ^ last)))
+
 (* A connection that sends refused requests and never reads the answers, until
    the server stops reading them: its writes stall, or it has closed the
    connection. *)
@@ -651,6 +673,7 @@ let () =
           Alcotest.test_case "a body too long" `Quick test_too_long;
           Alcotest.test_case "CORS" `Quick test_cors;
           Alcotest.test_case "a request during a call" `Quick test_pipelined;
+          Alcotest.test_case "a POST without a length" `Quick test_no_length;
           Alcotest.test_case "clients that never read" `Quick test_stalled;
         ] );
     ]

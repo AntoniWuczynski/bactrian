@@ -516,6 +516,14 @@ let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
 
 let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
+  (* A request with neither Content-Length nor Transfer-Encoding has no body
+     (RFC 9112, section 6.3), where cohttp would read one until the client
+     closes the connection. *)
+  let body =
+    match Http.Request.has_body request with
+    | `Unknown -> Eio.Flow.string_source ""
+    | `No | `Yes -> body
+  in
   with_cors config request
   @@
   match admit config request with
