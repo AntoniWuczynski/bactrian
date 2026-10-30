@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats are not built yet. Prebuilt binaries are built by CI (see [Installing a release](#installing-a-release)). Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
 
@@ -349,6 +349,18 @@ claude mcp add bactrian -- bactrian serve-mcp --trust-project
 ```
 
 The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the 2025-11-25 revision and earlier for clients that open with `initialize`. Cursor is one of those, as it does not speak 2026-07-28 yet. The reasoning is in [`docs/decisions/0011-mcp-server.md`](docs/decisions/0011-mcp-server.md).
+
+## Installing a release
+
+Available once the first release is tagged. Each release on the [releases page](https://github.com/AntoniWuczynski/bactrian/releases) has `bactrian-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-arm64` (both static, so they need no libraries) and `macos-arm64`, plus `SHA256SUMS`.
+
+```sh
+tar -xzf bactrian-<version>-<target>.tar.gz
+shasum -a 256 -c bactrian-<version>-<target>.tar.gz.sha256   # or sha256sum -c on Linux
+./bactrian-<version>-<target>/bactrian doctor
+```
+
+Put `bactrian` on your `PATH`. The sandbox, clock and container requirements in [Checking the host](#checking-the-host) still apply. Every pull request builds and checks the three archives without publishing them (decision record 0016).
 
 ## Building from source
 
