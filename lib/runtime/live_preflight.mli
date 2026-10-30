@@ -59,7 +59,8 @@ val https_refusal :
 
 val extra_trust : Upstream.extra_trust -> string
 (** Says that the variable's certificates are trusted for every HTTPS host, the
-    providers included, and how many there are. *)
+    providers included, and names the file, how many there are and how many PEM
+    blocks in it did not decode. *)
 
 val trust_warning :
   tls:(unit -> (Upstream.trust, string) result) -> string list -> string option

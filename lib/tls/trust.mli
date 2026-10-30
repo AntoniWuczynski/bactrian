@@ -26,15 +26,22 @@ val macos_admin_keychain : string
 (** The keychain of certificates an administrator added, also read on macOS.
     Nothing is taken from it when [security] cannot read it. *)
 
+type extra = {
+  path : string;  (** The file {!extra_variable} names. *)
+  certs : X509.Certificate.t list;
+      (** Its certificates, trusted for every host. *)
+  skipped : int;  (** How many PEM blocks in it did not decode. *)
+}
+
 type t = {
   system : X509.Certificate.t list;  (** The system's root certificates. *)
-  extra : X509.Certificate.t list;
-      (** Those of {!extra_variable}, trusted for every host. *)
+  extra : extra option;  (** [None] when {!extra_variable} is unset or empty. *)
 }
 
 val load : process_mgr:_ Eio.Process.mgr -> (t, string) result
 (** The system's root certificates and those of {!extra_variable}. Certificates
     that do not decode are skipped. [Error] when no system root certificate is
     found, when the macOS system roots keychain cannot be read, or when
-    {!extra_variable} names a file that cannot be read or holds no certificate.
-*)
+    {!extra_variable} names a file that cannot be read, holds no certificate,
+    belongs to a user other than this one or root, or can be written by its
+    group or by others. *)

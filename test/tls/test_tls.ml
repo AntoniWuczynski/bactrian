@@ -200,15 +200,40 @@ let http_stays_plain () =
 
 let http_stays_plain () = try http_stays_plain () with Exit -> ()
 
-(* The system connector: roots from this host plus BACTRIAN_EXTRA_CA_CERTS. *)
-let with_extra value f =
-  let before =
-    Option.value (Sys.getenv_opt Bactrian_tls.Trust.extra_variable) ~default:""
-  in
-  Unix.putenv Bactrian_tls.Trust.extra_variable value;
+(* Sets the variables for the length of [f], then restores each as it was,
+   unset included. *)
+let with_variables vars f =
+  let before = List.map (fun (v, _) -> (v, Sys.getenv_opt v)) vars in
+  List.iter (fun (v, value) -> Unix.putenv v value) vars;
   Fun.protect
-    ~finally:(fun () -> Unix.putenv Bactrian_tls.Trust.extra_variable before)
+    ~finally:(fun () ->
+      List.iter
+        (fun (v, value) ->
+          match value with
+          | Some value -> Unix.putenv v value
+          | None -> Unix.unsetenv v)
+        before)
     f
+
+(* The system connector: roots from this host plus BACTRIAN_EXTRA_CA_CERTS. *)
+let with_extra value =
+  with_variables [ (Bactrian_tls.Trust.extra_variable, value) ]
+
+(* A file holding [contents] with mode [perm], for the length of [f]. *)
+let with_file ?(perm = 0o600) contents f =
+  let file = Filename.temp_file "bactrian-test-ca" ".pem" in
+  Out_channel.with_open_bin file (fun oc -> output_string oc contents);
+  Unix.chmod file perm;
+  Fun.protect ~finally:(fun () -> Sys.remove file) (fun () -> f file)
+
+(* The same file, named by BACTRIAN_EXTRA_CA_CERTS. *)
+let with_extra_file ?perm contents f =
+  with_file ?perm contents @@ fun file -> with_extra file (fun () -> f file)
+
+let system_ready env =
+  Upstream.tls_ready
+    (Bactrian_tls.Tls_connector.system
+       ~process_mgr:(Eio.Stdenv.process_mgr env))
 
 let system_roots () =
   Eio_main.run @@ fun env ->
@@ -218,32 +243,64 @@ let system_roots () =
       Alcotest.(check bool)
         "this host has root certificates" true
         (List.length system > 10);
-      Alcotest.(check int) "no extra certificates" 0 (List.length extra)
+      Alcotest.(check bool) "no extra certificates" true (Option.is_none extra)
   | Error e -> Alcotest.fail e
+
+let refused what ~says ready =
+  match ready with
+  | Ok (_ : Upstream.trust) -> Alcotest.failf "%s was accepted" what
+  | Error e ->
+      List.iter
+        (fun sub ->
+          Alcotest.(check bool)
+            (what ^ ": " ^ e ^ " names " ^ sub)
+            true (contains e sub))
+        (Bactrian_tls.Trust.extra_variable :: says)
 
 let bad_extra () =
   Eio_main.run @@ fun env ->
   with_extra "/nonexistent/ca.pem" @@ fun () ->
-  let c =
-    Bactrian_tls.Tls_connector.system ~process_mgr:(Eio.Stdenv.process_mgr env)
+  refused "a missing extra file" ~says:[ "/nonexistent/ca.pem" ]
+    (system_ready env)
+
+(* A file another user could change is refused, by group or by others. *)
+let writable_extra perm () =
+  let ca =
+    Mirage_crypto_rng_unix.use_default ();
+    H.ca ()
   in
-  match Upstream.tls_ready c with
-  | Ok (_ : Upstream.trust) -> Alcotest.fail "a missing extra file was accepted"
-  | Error e ->
-      Alcotest.(check bool)
-        ("names the variable: " ^ e)
-        true
-        (contains e Bactrian_tls.Trust.extra_variable)
+  Eio_main.run @@ fun env ->
+  with_extra_file ~perm (H.ca_pem ca) @@ fun file ->
+  refused
+    (Printf.sprintf "a file with mode %o" perm)
+    ~says:[ file; "other users can write" ]
+    (system_ready env)
+
+(* A block that does not decode is counted, and the good ones are kept. *)
+let corrupt_block () =
+  let ca =
+    Mirage_crypto_rng_unix.use_default ();
+    H.ca ()
+  in
+  Eio_main.run @@ fun env ->
+  with_extra_file
+    (H.ca_pem ca
+   ^ "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+  @@ fun file ->
+  match system_ready env with
+  | Ok { extra = Some { path; count; skipped; _ }; _ } ->
+      Alcotest.(check string) "the file" file path;
+      Alcotest.(check int) "the good certificate" 1 count;
+      Alcotest.(check int) "the bad block" 1 skipped
+  | Ok { extra = None; _ } -> Alcotest.fail "the extra CA is not counted"
+  | Error e -> Alcotest.fail e
 
 let system_with_extra () =
   let ca =
     Mirage_crypto_rng_unix.use_default ();
     H.ca ()
   in
-  let file = Filename.temp_file "bactrian-test-ca" ".pem" in
-  Out_channel.with_open_bin file (fun oc -> output_string oc (H.ca_pem ca));
-  Fun.protect ~finally:(fun () -> Sys.remove file) @@ fun () ->
-  with_extra file @@ fun () ->
+  with_extra_file (H.ca_pem ca) @@ fun file ->
   run_server ~ca
     [ json_reply [ "{}" ] ]
     (fun env _ port ->
@@ -252,10 +309,12 @@ let system_with_extra () =
           ~process_mgr:(Eio.Stdenv.process_mgr env)
       in
       (match Upstream.tls_ready c with
-      | Ok { extra = Some { variable; count }; roots } ->
+      | Ok { extra = Some { variable; path; count; skipped }; roots } ->
           Alcotest.(check string)
             "the variable" Bactrian_tls.Trust.extra_variable variable;
+          Alcotest.(check string) "the file" file path;
           Alcotest.(check int) "one extra certificate" 1 count;
+          Alcotest.(check int) "no bad block" 0 skipped;
           Alcotest.(check bool) "the system's too" true (roots > count)
       | Ok { extra = None; _ } -> Alcotest.fail "the extra CA is not counted"
       | Error e -> Alcotest.fail e);
@@ -264,24 +323,12 @@ let system_with_extra () =
 
 (* The variables other tools read for their trust bundle do not reach
    bactrian's: a CA named only there is not trusted. *)
-let with_variables vars f =
-  let before = List.map (fun (v, _) -> (v, Sys.getenv_opt v)) vars in
-  List.iter (fun (v, value) -> Unix.putenv v value) vars;
-  Fun.protect
-    ~finally:(fun () ->
-      List.iter
-        (fun (v, value) -> Unix.putenv v (Option.value value ~default:""))
-        before)
-    f
-
 let foreign_variables_ignored () =
   let ca =
     Mirage_crypto_rng_unix.use_default ();
     H.ca ()
   in
-  let file = Filename.temp_file "bactrian-test-ca" ".pem" in
-  Out_channel.with_open_bin file (fun oc -> output_string oc (H.ca_pem ca));
-  Fun.protect ~finally:(fun () -> Sys.remove file) @@ fun () ->
+  with_file (H.ca_pem ca) @@ fun file ->
   with_variables
     [
       ("SSL_CERT_FILE", file);
@@ -376,6 +423,12 @@ let () =
         [
           Alcotest.test_case "the system roots load" `Quick system_roots;
           Alcotest.test_case "a missing extra file" `Quick bad_extra;
+          Alcotest.test_case "an extra file the group can write" `Quick
+            (writable_extra 0o620);
+          Alcotest.test_case "an extra file others can write" `Quick
+            (writable_extra 0o602);
+          Alcotest.test_case "an extra block that does not decode" `Quick
+            corrupt_block;
           Alcotest.test_case "the system connector with an extra CA" `Quick
             system_with_extra;
           Alcotest.test_case "SSL_CERT_FILE and the others are ignored" `Quick

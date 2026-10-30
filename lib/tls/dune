@@ -10,5 +10,6 @@
   ptime.clock.os
   tls
   tls-eio
+  unix
   uri
   x509))

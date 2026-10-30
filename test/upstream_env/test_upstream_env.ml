@@ -144,14 +144,30 @@ let test_mcp_https () =
         over HTTPS")
     (Live_preflight.https_refusal ~tls:fails
        [ "the MCP server a"; "the agent at u" ]);
-  let extra = { Upstream.variable = "BACTRIAN_EXTRA_CA_CERTS"; count = 1 } in
+  let extra =
+    {
+      Upstream.variable = "BACTRIAN_EXTRA_CA_CERTS";
+      path = "/etc/proxy-ca.pem";
+      count = 1;
+      skipped = 0;
+    }
+  in
   let trusts e = tls (Ok { Upstream.roots = 3; extra = e }) in
   Alcotest.(check (option string))
     "extra certificates are named"
     (Some
-       "BACTRIAN_EXTRA_CA_CERTS adds 1 certificate trusted for every HTTPS \
-        host, the providers included")
+       "BACTRIAN_EXTRA_CA_CERTS (/etc/proxy-ca.pem) adds 1 certificate trusted \
+        for every HTTPS host, the providers included")
     (Live_preflight.trust_warning ~tls:(trusts (Some extra)) [ "openai" ]);
+  Alcotest.(check (option string))
+    "blocks that did not decode are counted"
+    (Some
+       "BACTRIAN_EXTRA_CA_CERTS (/etc/proxy-ca.pem) adds 2 certificates \
+        trusted for every HTTPS host, the providers included, and 1 PEM block \
+        in it did not decode")
+    (Live_preflight.trust_warning
+       ~tls:(trusts (Some { extra with count = 2; skipped = 1 }))
+       [ "openai" ]);
   Alcotest.(check (option string))
     "none without extra certificates" None
     (Live_preflight.trust_warning ~tls:(trusts None) [ "openai" ]);

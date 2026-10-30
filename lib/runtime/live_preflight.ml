@@ -101,12 +101,16 @@ let https_refusal ~tls = function
             (Printf.sprintf "%s, so bactrian cannot call %s over HTTPS" reason
                (String.concat ", " needs)))
 
-let extra_trust ({ variable; count } : Upstream.extra_trust) =
+let extra_trust ({ variable; path; count; skipped } : Upstream.extra_trust) =
+  let plural n = if n = 1 then "" else "s" in
   Printf.sprintf
-    "%s adds %d certificate%s trusted for every HTTPS host, the providers \
-     included"
-    variable count
-    (if count = 1 then "" else "s")
+    "%s (%s) adds %d certificate%s trusted for every HTTPS host, the providers \
+     included%s"
+    variable path count (plural count)
+    (if skipped = 0 then ""
+     else
+       Printf.sprintf ", and %d PEM block%s in it did not decode" skipped
+         (plural skipped))
 
 let trust_warning ~tls = function
   | [] -> None

@@ -270,14 +270,21 @@ let test_tls () =
     "the count" "the trusted root certificates load (140)" c.message;
   let c =
     tls ~available:true
-      ~extra:{ variable = "BACTRIAN_EXTRA_CA_CERTS"; count = 2 }
+      ~extra:
+        {
+          variable = "BACTRIAN_EXTRA_CA_CERTS";
+          path = "/etc/proxy-ca.pem";
+          count = 2;
+          skipped = 0;
+        }
       None
   in
   check_status "extra certificates" Warn c;
   Alcotest.(check string)
-    "names the variable and the count"
-    "the trusted root certificates load (140): BACTRIAN_EXTRA_CA_CERTS adds 2 \
-     certificates trusted for every HTTPS host, the providers included"
+    "names the variable, the file and the count"
+    "the trusted root certificates load (140): BACTRIAN_EXTRA_CA_CERTS \
+     (/etc/proxy-ca.pem) adds 2 certificates trusted for every HTTPS host, the \
+     providers included"
     c.message;
   Alcotest.check pairs "egress is not built"
     [ ("ca", "skip"); ("node", "skip") ]

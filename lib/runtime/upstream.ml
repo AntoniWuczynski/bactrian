@@ -1,5 +1,12 @@
 type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
-type extra_trust = { variable : string; count : int }
+
+type extra_trust = {
+  variable : string;
+  path : string;
+  count : int;
+  skipped : int;
+}
+
 type trust = { roots : int; extra : extra_trust option }
 
 type https = {

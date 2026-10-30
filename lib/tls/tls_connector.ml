@@ -58,21 +58,25 @@ let system ~process_mgr =
   let trust () =
     Result.map
       (fun ({ system; extra } : Trust.t) ->
-        let roots = system @ extra in
+        let roots =
+          system
+          @ Option.fold ~none:[] ~some:(fun (e : Trust.extra) -> e.certs) extra
+        in
         ( X509.Authenticator.chain_of_trust
             ~time:(fun () -> Some (Ptime_clock.now ()))
             roots,
           {
             Upstream.roots = List.length roots;
             extra =
-              (match extra with
-              | [] -> None
-              | _ :: _ ->
-                  Some
-                    {
-                      variable = Trust.extra_variable;
-                      count = List.length extra;
-                    });
+              Option.map
+                (fun ({ path; certs; skipped } : Trust.extra) ->
+                  {
+                    Upstream.variable = Trust.extra_variable;
+                    path;
+                    count = List.length certs;
+                    skipped;
+                  })
+                extra;
           } ))
       (Eio.Lazy.force roots)
   in

@@ -85,8 +85,11 @@ let main fixtures hold log tls_ca =
         | Some file ->
             Mirage_crypto_rng_unix.use_default ();
             let ca = Fake_https.ca () in
-            Out_channel.with_open_bin file (fun oc ->
-                output_string oc (Fake_https.ca_pem ca));
+            (* bactrian refuses a CA file that others can write to, so its
+               mode must not depend on the umask. *)
+            Out_channel.with_open_gen
+              [ Open_wronly; Open_creat; Open_trunc; Open_binary ] 0o600 file
+              (fun oc -> output_string oc (Fake_https.ca_pem ca));
             Fake_https.port
               (Fake_https.start ~sw ~net:(Eio.Stdenv.net env)
                  ~chain:(Fake_https.leaf ca [ Dns "localhost"; Ip "127.0.0.1" ])

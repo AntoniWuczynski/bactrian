@@ -12,9 +12,14 @@ val plain : connector
 
 type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
 
-type extra_trust = { variable : string; count : int }
-(** Certificates trusted for every host on top of the system's, and the variable
-    that named them. *)
+type extra_trust = {
+  variable : string;  (** The variable that names the file. *)
+  path : string;  (** The file. *)
+  count : int;  (** Its certificates, trusted for every host. *)
+  skipped : int;  (** Its PEM blocks that did not decode. *)
+}
+(** Certificates trusted for every host on top of the system's, and where they
+    came from. *)
 
 type trust = { roots : int; extra : extra_trust option }
 (** What a connector trusts: [roots] certificates in all, [extra]'s included. *)
