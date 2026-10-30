@@ -1,0 +1,112 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+permissions: read-all
+env:
+  # The tag on a release, a placeholder otherwise.
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('dev-{0}', github.sha) }}
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+            static: true
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            static: true
+          - target: macos-arm64
+            runner: macos-15
+            static: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      # Linux: a static binary needs musl, so build in Alpine.
+      - if: matrix.static
+        uses: actions/cache@v5
+        with:
+          path: opam-root
+          key: opam-musl-${{ matrix.target }}-${{ hashFiles('bactrian.opam.locked') }}
+      - if: matrix.static
+        run: |
+          mkdir -p opam-root
+          docker run --rm -v "$PWD:/src" -v "$PWD/opam-root:/opam-root" -w /src \
+            -e OPAMROOT=/opam-root alpine:3.22 sh dev/release/build-static.sh /src/bactrian
+      - if: matrix.static
+        run: sudo chown "$USER" bactrian
+      # macOS: native, against the system libraries only.
+      - if: ${{ !matrix.static }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.5.1"
+      - if: ${{ !matrix.static }}
+        run: |
+          opam install . --deps-only --locked
+          opam exec -- dune build --profile release bin/main.exe
+          cp _build/default/bin/main.exe bactrian
+      - run: sh dev/release/package.sh bactrian "${{ matrix.target }}" "$VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bactrian-${{ matrix.target }}
+          path: bactrian-*.tar.gz*
+          if-no-files-found: error
+  # A fresh runner image has no OCaml. Download the artefact and run it.
+  verify:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: macos-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bactrian-${{ matrix.target }}
+      - name: No OCaml on this runner
+        run: "! command -v ocaml && ! command -v opam"
+      - name: Check the checksum
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum -c ./*.sha256; else shasum -a 256 -c ./*.sha256; fi
+      - run: tar -xzf bactrian-*.tar.gz
+      - run: ./bactrian-*/bactrian --version
+      - run: ./bactrian-*/bactrian doctor --json
+      - name: Linux binaries are static
+        if: runner.os == 'Linux'
+        run: |
+          file ./bactrian-*/bactrian
+          file ./bactrian-*/bactrian | grep -E 'statically linked|static-pie linked'
+          if ldd ./bactrian-*/bactrian; then exit 1; fi
+      - name: macOS binary links system libraries only
+        if: runner.os == 'macOS'
+        run: |
+          file ./bactrian-*/bactrian | grep arm64
+          otool -L ./bactrian-*/bactrian
+          if otool -L ./bactrian-*/bactrian | tail -n +2 | grep -Ev '^\s+(/usr/lib/|/System/)'; then exit 1; fi
+  # Only a tag publishes.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bactrian-*
+          merge-multiple: true
+      - run: cat ./*.sha256 >SHA256SUMS && cat SHA256SUMS
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes ./*.tar.gz SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
