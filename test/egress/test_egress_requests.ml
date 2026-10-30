@@ -244,6 +244,31 @@ let test_refusals =
     ]
     (flat (calls f))
 
+(* Headers past the reader's cap close the tunnel instead of growing it. The
+   proxy may close before reading all the agent sent, so the agent can see a
+   reset rather than the end of the stream. *)
+let test_head_too_large =
+  with_world "head-too-large" @@ fun w ->
+  let _ = register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ])) in
+  let text =
+    request_text
+      ~headers:[ ("X-Big", String.make 1_048_600 'a') ]
+      ~meth:"GET" ~path:"/big" ()
+  in
+  let answer =
+    with_tunnel ~creds:(creds token_a) w (fun tls ->
+        try
+          Eio.Flow.copy_string text tls;
+          Eio.Buf_read.take_all (Eio.Buf_read.of_flow ~max_size:1_000_000 tls)
+        with End_of_file | Eio.Io _ -> "")
+  in
+  Alcotest.(check (result string int)) "no answer" (Ok "") answer;
+  Alcotest.(check int)
+    "nothing reached the server" 0
+    (List.length (F.requests w.up));
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "noted" true (noted f "over 1048576 bytes")
+
 let cut_short (r : F.request) : F.reply =
   if String.equal r.path "/cut" then
     {
@@ -336,6 +361,7 @@ let () =
       ( "failures",
         [
           Alcotest.test_case "413 and 501" `Quick test_refusals;
+          Alcotest.test_case "headers over the cap" `Quick test_head_too_large;
           Alcotest.test_case "a dropped and an unreachable host" `Quick
             test_upstream_failures;
           Alcotest.test_case "TLS that never starts" `Quick test_tls_refused;

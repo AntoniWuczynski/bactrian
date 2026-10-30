@@ -334,6 +334,10 @@ let handle r ~host ~port ~authority act request body =
     then bodiless reply
     else reply
 
+(* The request line and headers must fit in the reader's buffer. Bodies stream
+   through it, and [max_body] caps them. *)
+let max_head = 1_048_576
+
 let serve r ~conn ~host ~port ~authority act tls =
   let server =
     Cohttp_eio.Server.make_expert
@@ -344,10 +348,16 @@ let serve r ~conn ~host ~port ~authority act tls =
   try
     Eio.Buf_write.with_flow tls (fun oc ->
         Cohttp_eio.Server.callback server conn
-          (Eio.Buf_read.of_flow ~max_size:max_int tls)
+          (Eio.Buf_read.of_flow ~max_size:max_head tls)
           oc)
   with
   | End_of_file -> ()
+  | Eio.Buf_read.Buffer_limit_exceeded ->
+      r.shared.note
+        (Printf.sprintf
+           "egress to %s: a request line or headers over %d bytes closed the \
+            tunnel"
+           authority max_head)
   | ex when Option.is_some (r.tls.failure ex) ->
       r.shared.note
         (Printf.sprintf "egress to %s: %s" authority
