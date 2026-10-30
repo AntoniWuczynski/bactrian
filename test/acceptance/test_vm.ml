@@ -4,12 +4,12 @@
    interrupt or a bactrian killed with SIGKILL.
 
    They run on docker, or on podman or Apple's container when
-   BACTRIAN_VM_RUNTIME is podman or container. Without a working runtime the tests are skipped, unless
-   BACTRIAN_REQUIRE_VM is 1 (continuous integration on Linux sets it), where
-   they fail. The agents
-   run from copies inside each world, because the virtual machine shows the
-   project alone, and the Python agent from a Linux environment that uv builds
-   in a container from the lock file. *)
+   BACTRIAN_VM_RUNTIME is podman or container. Without a working runtime the
+   tests are skipped, unless BACTRIAN_REQUIRE_VM is 1 (continuous integration
+   on Linux sets it), where they fail. The agents run from copies inside each
+   world, because the virtual machine shows the project alone, and the Python
+   agent from a Linux environment that uv builds in a container from the lock
+   file. *)
 
 open Bactrian_runtime
 open Acceptance_world
@@ -33,6 +33,14 @@ let runtime_works =
         (Vm_runtime.detect
            ~process_mgr:(Eio.Stdenv.process_mgr env)
            ~clock:(Eio.Stdenv.clock env) (Some vm_runtime)) )
+
+let podman_rootless () =
+  let ic =
+    Unix.open_process_in "podman info --format '{{.Host.Security.Rootless}}'"
+  in
+  let answer = In_channel.input_line ic in
+  ignore (Unix.close_process_in ic : Unix.process_status);
+  Option.equal String.equal answer (Some "true")
 
 (* The runtime's own command for each thing the tests do beside bactrian. *)
 let image_present image =
@@ -114,11 +122,11 @@ let typescript =
    wheels, at the path the agent's container sees it at. *)
 let python =
   (* A rootless Podman maps the user to a subordinate ID unless told to keep
-     it. *)
+     it, and a rootful one refuses [keep-id]. *)
   let keep_user =
     match vm_runtime with
-    | `Podman -> [ "--userns=keep-id" ]
-    | `Docker | `Container -> []
+    | `Podman when podman_rootless () -> [ "--userns=keep-id" ]
+    | `Podman | `Docker | `Container -> []
   in
   {
     name = "python";
@@ -352,8 +360,8 @@ let seatbelt_control () =
    spelling of its name (the host's file system ignores case), while the files
    and directories beside it are, read-only. Docker's replacement directory is
    a tmpfs (Podman's too), where only the exact name of a neighbour is there.
-   container's is a
-   staging directory on the host, so a neighbour's other spellings read it. *)
+   container's is a staging directory on the host, so a neighbour's other
+   spellings read it. *)
 
 let neighbours_agent =
   {|import errno, json, os, sys
