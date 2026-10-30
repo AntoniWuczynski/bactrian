@@ -124,6 +124,7 @@ let serve ~bactrian_exe (policy : Policy.t) transport =
                                Mcp_server.run ~env ~root config
                                  (fun server handlers ->
                                    Mcp_http.serve ~server ~handlers ~stop ~log
+                                     ~clock:(Eio.Stdenv.clock env)
                                      { port; token; allowed_origins }
                                      socket)))))))
 

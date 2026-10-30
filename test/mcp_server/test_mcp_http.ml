@@ -206,7 +206,7 @@ let test_status () =
    server. *)
 let client ~port g = Eio_unix.run_in_systhread (fun () -> g ~port)
 
-let with_listener f =
+let with_listener ?head_timeout f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let started, set_started = Eio.Promise.create () in
@@ -240,7 +240,8 @@ let with_listener f =
                   server with
                   tools = [ ("echo", canon "{}"); ("slow", canon "{}") ];
                 }
-              ~handlers ~stop ~log:ignore config socket)
+              ~handlers ~stop ~log:ignore ~clock:(Eio.Stdenv.clock env)
+              ?head_timeout config socket)
           (fun () ->
             let within p () =
               Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 10. (fun () ->
@@ -355,7 +356,54 @@ let test_hang_up () =
   in
   Alcotest.(check int) "the next request is answered" 200 after.status
 
+(* What a connection got before the server closed it, or reset it while the
+   client was still writing. *)
+let until_closed ~port text =
+  client ~port (fun ~port ->
+      match H.exchange ~timeout:10. ~port text with
+      | got -> got
+      | exception Unix.Unix_error ((ECONNRESET | EPIPE), _, _) -> "")
+
+let statuses got = List.map (fun (r : H.response) -> r.status) (H.answers got)
+
+(* A connection gets bounded time until its request is admitted, and
+   an admitted one gets what it needs. *)
+let test_bounds () =
+  with_listener ~head_timeout:0.3 @@ fun ~port ~started:_ ~cancelled:_ ->
+  Alcotest.(check string)
+    "an idle connection is closed" "" (until_closed ~port "");
+  Alcotest.(check string)
+    "so is one that stops in its head" ""
+    (until_closed ~port "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+  Alcotest.(check (list int))
+    "a kept-alive connection idles out after its answer" [ 200 ]
+    (statuses
+       (until_closed ~port
+          (H.request ~close:false ~port (call_headers "echo")
+             (H.body ~id:1 "tools/call" (call_params "echo")))));
+  let padded =
+    H.with_meta ~tasks:false
+      (canon
+         (Printf.sprintf {|{"name":"echo","arguments":{"pad":"%s"}}|}
+            (String.make 300_000 'x')))
+  in
+  Alcotest.(check int)
+    "an admitted request may be long" 200
+    (client ~port (fun ~port ->
+         H.send ~port (call_headers "echo") (H.body ~id:2 "tools/call" padded)))
+      .status
+
+let test_endless_head () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  let pad =
+    String.concat "" (List.init 3000 (Printf.sprintf "X-Pad-%d: %064d\r\n" 0))
+  in
+  Alcotest.(check string)
+    "a head past the bound is cut" ""
+    (until_closed ~port ("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" ^ pad))
+
 let () =
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   Alcotest.run "mcp_http"
     [
       ( "checks",
@@ -369,5 +417,7 @@ let () =
         [
           Alcotest.test_case "answers" `Quick test_listener;
           Alcotest.test_case "hanging up cancels" `Quick test_hang_up;
+          Alcotest.test_case "bounds before admission" `Quick test_bounds;
+          Alcotest.test_case "an endless head" `Quick test_endless_head;
         ] );
     ]

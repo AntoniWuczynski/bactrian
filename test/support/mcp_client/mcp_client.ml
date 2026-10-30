@@ -366,14 +366,6 @@ module Http = struct
     body : string;
   }
 
-  let header r name =
-    List.find_map
-      (fun (k, v) ->
-        if String.equal (String.lowercase_ascii k) (String.lowercase_ascii name)
-        then Some v
-        else None)
-      r.headers
-
   let has name headers =
     List.exists
       (fun (k, _) ->
@@ -398,15 +390,14 @@ module Http = struct
     in
     go 0
 
-  let request_text ~meth ~path ~port headers body =
+  let request ?(meth = "POST") ?(path = "/mcp") ?(close = true) ~port headers
+      body =
     let headers =
       (if has "host" headers then []
        else [ ("Host", Printf.sprintf "127.0.0.1:%d" port) ])
       @ headers
-      @ [
-          ("Content-Length", string_of_int (String.length body));
-          ("Connection", "close");
-        ]
+      @ [ ("Content-Length", string_of_int (String.length body)) ]
+      @ if close then [ ("Connection", "close") ] else []
     in
     Printf.sprintf "%s %s HTTP/1.1\r\n%s\r\n%s" meth path
       (String.concat ""
@@ -423,78 +414,110 @@ module Http = struct
     | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK), _, _) ->
         raise (Timeout "no answer from the HTTP server")
 
-  let find s sub =
+  let find ?(from = 0) s sub =
     let n = String.length sub in
     let rec go i =
       if i + n > String.length s then None
       else if String.equal (String.sub s i n) sub then Some i
       else go (i + 1)
     in
-    go 0
+    go from
 
-  let rec dechunk s =
-    match find s "\r\n" with
+  let header r name =
+    List.find_map
+      (fun (k, v) ->
+        if String.equal (String.lowercase_ascii k) (String.lowercase_ascii name)
+        then Some v
+        else None)
+      r.headers
+
+  (* The chunks from [pos], and where they end. *)
+  let rec dechunk s pos =
+    match find ~from:pos s "\r\n" with
     | None -> violation "a chunked body without a size line"
     | Some i -> (
-        match int_of_string_opt ("0x" ^ String.trim (String.sub s 0 i)) with
+        match
+          int_of_string_opt ("0x" ^ String.trim (String.sub s pos (i - pos)))
+        with
         | None -> violation "a chunk size that is not hex"
-        | Some 0 -> ""
+        | Some 0 -> ("", i + 4)
         | Some n ->
-            String.sub s (i + 2) n
-            ^ dechunk (String.sub s (i + 4 + n) (String.length s - i - 4 - n)))
+            let rest, stop = dechunk s (i + 4 + n) in
+            (String.sub s (i + 2) n ^ rest, stop))
+
+  let head text =
+    match String.split_on_char '\n' text with
+    | [] -> violation "an empty HTTP head"
+    | status_line :: lines ->
+        let status =
+          match String.split_on_char ' ' status_line with
+          | _ :: code :: _ -> (
+              match int_of_string_opt code with
+              | Some c -> c
+              | None -> violation "a status line without a code")
+          | _ -> violation "a malformed status line: %S" status_line
+        in
+        let headers =
+          List.filter_map
+            (fun l ->
+              match String.index_opt l ':' with
+              | Some j ->
+                  Some
+                    ( String.sub l 0 j,
+                      String.trim
+                        (String.sub l (j + 1) (String.length l - j - 1)) )
+              | None -> None)
+            lines
+        in
+        { status; headers; body = "" }
+
+  let answers text =
+    let rec from pos acc =
+      if pos >= String.length text then List.rev acc
+      else
+        match find ~from:pos text "\r\n\r\n" with
+        | None -> violation "an HTTP answer without a head: %S" text
+        | Some i ->
+            let r = head (String.sub text pos (i - pos)) in
+            let start = i + 4 in
+            let body, stop =
+              match
+                (header r "transfer-encoding", header r "content-length")
+              with
+              | Some "chunked", _ -> dechunk text start
+              | (Some _ | None), Some n -> (
+                  match int_of_string_opt n with
+                  | Some n when start + n <= String.length text ->
+                      (String.sub text start n, start + n)
+                  | Some _ | None -> violation "a short or bad body: %S" text)
+              | (Some _ | None), None ->
+                  ( String.sub text start (String.length text - start),
+                    String.length text )
+            in
+            from stop ({ r with body } :: acc)
+    in
+    from 0 []
 
   let parse text =
-    match find text "\r\n\r\n" with
-    | None -> violation "an HTTP answer without a head: %S" text
-    | Some i -> (
-        let head = String.split_on_char '\n' (String.sub text 0 i) in
-        let rest = String.sub text (i + 4) (String.length text - i - 4) in
-        match head with
-        | [] -> violation "an empty HTTP head"
-        | status_line :: lines ->
-            let status =
-              match String.split_on_char ' ' status_line with
-              | _ :: code :: _ -> (
-                  match int_of_string_opt code with
-                  | Some c -> c
-                  | None -> violation "a status line without a code")
-              | _ -> violation "a malformed status line: %S" status_line
-            in
-            let headers =
-              List.filter_map
-                (fun l ->
-                  match String.index_opt l ':' with
-                  | Some j ->
-                      Some
-                        ( String.sub l 0 j,
-                          String.trim
-                            (String.sub l (j + 1) (String.length l - j - 1)) )
-                  | None -> None)
-                lines
-            in
-            let r = { status; headers; body = rest } in
-            if
-              Option.equal String.equal
-                (header r "transfer-encoding")
-                (Some "chunked")
-            then { r with body = dechunk rest }
-            else r)
+    match answers text with r :: _ -> r | [] -> violation "no HTTP answer"
 
-  let send ?(meth = "POST") ?(path = "/mcp") ?(timeout = 60.) ~port headers body
-      =
+  let exchange ?(timeout = 60.) ~port text =
     let fd = connect ~timeout port in
     Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
-    write_all fd (request_text ~meth ~path ~port headers body);
+    write_all fd text;
     let buf = Buffer.create 4096 in
     while read_some fd buf do
       ()
     done;
-    parse (Buffer.contents buf)
+    Buffer.contents buf
+
+  let send ?meth ?path ?timeout ~port headers body =
+    parse (exchange ?timeout ~port (request ?meth ?path ~port headers body))
 
   let hang_up ?(timeout = 60.) ?(linger = 0.2) ~port headers body =
     let fd = connect ~timeout port in
     Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
-    write_all fd (request_text ~meth:"POST" ~path:"/mcp" ~port headers body);
+    write_all fd (request ~port headers body);
     let buf = Buffer.create 4096 in
     let rec head () =
       match find (Buffer.contents buf) "\r\n\r\n" with

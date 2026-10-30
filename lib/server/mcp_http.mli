@@ -79,8 +79,10 @@ val serve :
   handlers:Mcp_dispatch.handlers ->
   stop:Bactrian_runtime.Interrupt.trigger ->
   log:(string -> unit) ->
+  clock:float Eio.Time.clock_ty Eio.Resource.t ->
+  ?head_timeout:float ->
   config ->
-  _ Eio.Net.listening_socket ->
+  [ `Generic | `Unix ] Eio.Net.listening_socket_ty Eio.Resource.t ->
   Mcp_server.ended
 (** Answers requests on the socket until [stop] fires, then cancels the
     connections and the calls in flight and returns [Stopped] once they have
@@ -88,4 +90,10 @@ val serve :
     [Accept] lists [text/event-stream], with JSON otherwise, and the client
     closing the connection before the answer cancels the call. A notification is
     accepted with 202, a message that is not JSON-RPC is 400 and GET and DELETE
-    are 405. [log] gets a line for each error of a connection. *)
+    are 405. [log] gets a line for each error of a connection.
+
+    At most 64 connections are open at once, and a request's head holds at most
+    64 KiB. Until a request is admitted, a connection has [head_timeout] seconds
+    (default 30), counted from its start or from the answer to its last admitted
+    request. One that idles longer, or sends a longer head, is closed without an
+    answer. *)

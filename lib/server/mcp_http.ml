@@ -322,11 +322,49 @@ let read_body body =
         (unidentified (-32600)
            (Printf.sprintf "Invalid Request: longer than %d bytes" max_body))
 
-let answer ~server ~(handlers : Mcp_dispatch.handlers) config request body =
-  match
-    let* () = admit config request in
-    read_body body
-  with
+let max_connections = 64
+
+(* cohttp buffers a request's head whole until it parses. *)
+let max_head = 64 * 1024
+
+(* Ends a connection. *)
+exception Hang_up
+
+(* The socket as the server reads it: by a deadline until a request is
+   admitted, so a client that sends nothing, or a head byte by byte, holds no
+   connection for long, and freely from then until the answer is out. *)
+type guard = {
+  socket : Eio.Flow.source_ty Eio.Resource.t;
+  clock : float Eio.Time.clock_ty Eio.Resource.t;
+  head_timeout : float;
+  mutable deadline : float option;
+}
+
+let waiting g = g.deadline <- Some (Eio.Time.now g.clock +. g.head_timeout)
+let admitted g = g.deadline <- None
+
+module Guarded = struct
+  type t = guard
+
+  let read_methods = []
+
+  let single_read g buf =
+    match g.deadline with
+    | None -> Eio.Flow.single_read g.socket buf
+    | Some d -> (
+        match
+          Eio.Time.with_timeout g.clock
+            (d -. Eio.Time.now g.clock)
+            (fun () -> Ok (Eio.Flow.single_read g.socket buf))
+        with
+        | Ok n -> n
+        | Error `Timeout -> raise Hang_up)
+end
+
+let guarded = Eio.Flow.Pi.source (module Guarded)
+
+let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
+  match read with
   | Error r -> of_rejection r
   | Ok text -> (
       match Mcp_msg.decode text with
@@ -361,19 +399,52 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) config request body =
                  cancellations. *)
               | Cancel _ | Ignore -> fixed ~status:202 ~headers:[] "")))
 
-let serve ~server ~handlers ~stop ~log config socket =
-  let callback _conn request body =
-    answer ~server ~handlers config request body
-  in
+let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
+    body =
+  match admit config request with
+  | Error r -> of_rejection r
+  | Ok () ->
+      admitted guard;
+      let response, write =
+        admitted_answer ~server ~handlers request (read_body body)
+      in
+      ( response,
+        fun ic oc ->
+          write ic oc;
+          waiting guard )
+
+let serve ~server ~handlers ~stop ~log ~clock ?(head_timeout = 30.) config
+    socket =
   let on_error = function
-    | Eio.Io _ -> ()
+    | Hang_up | Eio.Io _ | Eio.Buf_read.Buffer_limit_exceeded -> ()
     | ex -> log ("HTTP connection failed: " ^ Printexc.to_string ex)
+  in
+  let connection
+      (flow : [ `Generic | `Unix ] Eio.Net.stream_socket_ty Eio.Resource.t) peer
+      =
+    Eio.Switch.run @@ fun sw ->
+    let g =
+      {
+        socket = (flow :> Eio.Flow.source_ty Eio.Resource.t);
+        clock;
+        head_timeout;
+        deadline = None;
+      }
+    in
+    waiting g;
+    let callback _conn request body =
+      answer ~server ~handlers ~guard:g config request body
+    in
+    Eio.Buf_write.with_flow flow @@ fun output ->
+    Cohttp_eio.Server.callback
+      (Cohttp_eio.Server.make_expert ~callback ())
+      (sw, peer)
+      (Eio.Buf_read.of_flow ~max_size:max_head (Eio.Resource.T (g, guarded)))
+      output
   in
   match
     Interrupt.run ~stop (fun () ->
-        Cohttp_eio.Server.run socket
-          (Cohttp_eio.Server.make_expert ~callback ())
-          ~on_error)
+        Eio.Net.run_server ~max_connections ~on_error socket connection)
   with
   | Ok ended -> ended
   | Error signal -> Mcp_server.Stopped signal

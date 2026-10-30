@@ -134,6 +134,26 @@ module Http : sig
       and body, [Host] added unless given, on a connection of its own. [Timeout]
       when no answer comes within [timeout] (default 60) seconds. *)
 
+  val request :
+    ?meth:string ->
+    ?path:string ->
+    ?close:bool ->
+    port:int ->
+    (string * string) list ->
+    string ->
+    string
+  (** The bytes of the request {!send} makes, with [Connection: close] unless
+      [close] is [false]. *)
+
+  val exchange : ?timeout:float -> port:int -> string -> string
+  (** Writes these bytes on a connection of its own and returns all the server
+      sends until it closes the connection. [Timeout] when it neither sends nor
+      closes within [timeout] (default 60) seconds. *)
+
+  val answers : string -> response list
+  (** The answers in what {!exchange} returned, one after another, by their
+      framing. *)
+
   val hang_up :
     ?timeout:float ->
     ?linger:float ->
