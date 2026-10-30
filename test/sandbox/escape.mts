@@ -16,6 +16,7 @@ import { closeSync, constants, openSync, readFileSync, writeFileSync, writeSync 
 import { connect } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { connect as tlsConnect } from "node:tls";
 
 const TIMEOUT_MS = 5000;
 const PUBLIC = "1.1.1.1";
@@ -52,8 +53,21 @@ const model: Action = () =>
     }),
   });
 
-// Node's fetch reads no proxy variable unless NODE_USE_ENV_PROXY is set.
-const https: Action = () => status(`https://${PUBLIC}/`, {});
+// A TLS connection of its own, which no proxy variable can redirect: fetch
+// would go through the egress proxy, since bactrian sets NODE_USE_ENV_PROXY.
+const https: Action = () =>
+  new Promise((resolve, reject) => {
+    const socket = tlsConnect({ host: PUBLIC, port: 443, timeout: TIMEOUT_MS });
+    socket.once("secureConnect", () => {
+      socket.destroy();
+      resolve("connected");
+    });
+    socket.once("timeout", () => {
+      socket.destroy();
+      reject(new Error("timed out"));
+    });
+    socket.once("error", reject);
+  });
 
 const tcp: Action = () =>
   new Promise((resolve, reject) => {
