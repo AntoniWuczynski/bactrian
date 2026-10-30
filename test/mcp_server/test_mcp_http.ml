@@ -584,6 +584,51 @@ let test_endless_head () =
     "a head past the bound is cut" ""
     (until_closed ~port ("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" ^ pad))
 
+(* A connection that sends refused requests and never reads the answers, until
+   the server stops reading them: its writes stall, or it has closed the
+   connection. *)
+let stall ~port =
+  let fd = Unix.socket ~cloexec:true PF_INET SOCK_STREAM 0 in
+  Unix.setsockopt_int fd SO_RCVBUF 4096;
+  Unix.setsockopt_float fd SO_SNDTIMEO 0.2;
+  Unix.connect fd (ADDR_INET (Unix.inet_addr_loopback, port));
+  let batch =
+    String.concat ""
+      (List.init 1000 (fun _ ->
+           "POST /mcp HTTP/1.1\r\nContent-Length: 0\r\n\r\n"))
+  in
+  let rec fill off =
+    match Unix.write_substring fd batch off (String.length batch - off) with
+    | k -> fill ((off + k) mod String.length batch)
+    | exception
+        Unix.Unix_error ((EAGAIN | EWOULDBLOCK | EPIPE | ECONNRESET), _, _) ->
+        ()
+  in
+  fill 0;
+  fd
+
+(* Clients that never read fill all 64 connections, and are closed at the
+   deadline all the same, so the next client is answered once one ends. *)
+let test_stalled () =
+  with_listener ~head_timeout:3.
+  @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
+  let stalled =
+    Eio.Fiber.List.map
+      (fun () -> client ~port (fun ~port -> stall ~port))
+      (List.init 64 (fun _ -> ()))
+  in
+  Fun.protect ~finally:(fun () -> List.iter Unix.close stalled) @@ fun () ->
+  let start = Unix.gettimeofday () in
+  let answer =
+    client ~port (fun ~port ->
+        H.send ~timeout:10. ~port (call_headers "echo")
+          (H.body ~id:1 "tools/call" (call_params "echo")))
+  in
+  Alcotest.(check int) "the next client is answered" 200 answer.status;
+  Alcotest.(check bool)
+    "once a connection is free" true
+    (Unix.gettimeofday () -. start > 1.)
+
 let () =
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   Alcotest.run "mcp_http"
@@ -606,5 +651,6 @@ let () =
           Alcotest.test_case "a body too long" `Quick test_too_long;
           Alcotest.test_case "CORS" `Quick test_cors;
           Alcotest.test_case "a request during a call" `Quick test_pipelined;
+          Alcotest.test_case "clients that never read" `Quick test_stalled;
         ] );
     ]

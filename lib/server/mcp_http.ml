@@ -431,11 +431,12 @@ let max_connections = 64
 (* cohttp buffers a request's head whole until it parses. *)
 let max_head = 64 * 1024
 
-(* The socket as the server reads it: by a deadline until a request is
-   admitted, so a client that sends nothing, or a head byte by byte, holds no
-   connection for long, and freely from then until the answer is out. *)
+(* The socket as the server reads and writes it: by a deadline until a request
+   is admitted, so a client that sends nothing, sends a head byte by byte or
+   does not read the answers to its refused requests holds no connection for
+   long, and freely from then until the answer is out. *)
 type guard = {
-  socket : Eio.Flow.source_ty Eio.Resource.t;
+  socket : [ `Generic | `Unix ] Eio.Net.stream_socket_ty Eio.Resource.t;
   clock : float Eio.Time.clock_ty Eio.Resource.t;
   head_timeout : float;
   mutable deadline : float option;
@@ -444,25 +445,38 @@ type guard = {
 let waiting g = g.deadline <- Some (Eio.Time.now g.clock +. g.head_timeout)
 let admitted g = g.deadline <- None
 
-module Guarded = struct
+let by_deadline g f =
+  match g.deadline with
+  | None -> f ()
+  | Some d -> (
+      match
+        Eio.Time.with_timeout g.clock
+          (d -. Eio.Time.now g.clock)
+          (fun () -> Ok (f ()))
+      with
+      | Ok n -> n
+      | Error `Timeout -> raise Hang_up)
+
+module Guarded_source = struct
   type t = guard
 
   let read_methods = []
 
   let single_read g buf =
-    match g.deadline with
-    | None -> Eio.Flow.single_read g.socket buf
-    | Some d -> (
-        match
-          Eio.Time.with_timeout g.clock
-            (d -. Eio.Time.now g.clock)
-            (fun () -> Ok (Eio.Flow.single_read g.socket buf))
-        with
-        | Ok n -> n
-        | Error `Timeout -> raise Hang_up)
+    by_deadline g (fun () -> Eio.Flow.single_read g.socket buf)
 end
 
-let guarded = Eio.Flow.Pi.source (module Guarded)
+module Guarded_sink = struct
+  type t = guard
+
+  let single_write g bufs =
+    by_deadline g (fun () -> Eio.Flow.single_write g.socket bufs)
+
+  let copy g ~src = Eio.Flow.Pi.simple_copy ~single_write g ~src
+end
+
+let guarded_source = Eio.Flow.Pi.source (module Guarded_source)
+let guarded_sink = Eio.Flow.Pi.sink (module Guarded_sink)
 
 let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
   match read with
@@ -543,24 +557,19 @@ let serve ~server ~handlers ~stop ~log ~clock ?(head_timeout = 30.) config
       (flow : [ `Generic | `Unix ] Eio.Net.stream_socket_ty Eio.Resource.t) peer
       =
     Eio.Switch.run @@ fun sw ->
-    let g =
-      {
-        socket = (flow :> Eio.Flow.source_ty Eio.Resource.t);
-        clock;
-        head_timeout;
-        deadline = None;
-      }
-    in
+    let g = { socket = flow; clock; head_timeout; deadline = None } in
     waiting g;
     let callback _conn request body =
       answer ~server ~handlers ~guard:g config request body
     in
     match
-      Eio.Buf_write.with_flow flow @@ fun output ->
+      Eio.Buf_write.with_flow (Eio.Resource.T (g, guarded_sink))
+      @@ fun output ->
       Cohttp_eio.Server.callback
         (Cohttp_eio.Server.make_expert ~callback ())
         (sw, peer)
-        (Eio.Buf_read.of_flow ~max_size:max_head (Eio.Resource.T (g, guarded)))
+        (Eio.Buf_read.of_flow ~max_size:max_head
+           (Eio.Resource.T (g, guarded_source)))
         output
     with
     | () -> ()

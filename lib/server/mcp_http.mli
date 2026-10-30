@@ -104,5 +104,6 @@ val serve :
     At most 64 connections are open at once, and a request's head holds at most
     64 KiB. Until a request is admitted, a connection has [head_timeout] seconds
     (default 30), counted from its start or from the answer to its last admitted
-    request. One that idles longer, or sends a longer head, is closed without an
-    answer. *)
+    request, and the bound holds for what the server writes to it as well as for
+    what it reads. One that idles longer, sends a longer head or does not read
+    the answers to its refused requests is closed without an answer. *)
