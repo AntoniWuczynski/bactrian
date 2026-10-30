@@ -38,3 +38,50 @@ repeat the same cause.
   every run: warning: UNSANDBOXED (sandbox: off, sandbox: off)
     0  scenarios/s.yaml  a  #1  passed
   1 passed
+
+An HTTP-mode agent has no sandbox of its own, so its checkers run in the
+host's. Under `sandbox: off` the two labels give different causes, and the
+summary has a line for each.
+
+  $ cat > http_agent.py <<'PY'
+  > import http.server, json, sys
+  > class H(http.server.BaseHTTPRequestHandler):
+  >     def do_POST(self):
+  >         m = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+  >         out = [{"v": 1, "type": "reply", "turn": m["turn"], "content": "ok"}] if m["type"] == "turn" else []
+  >         body = json.dumps(out).encode()
+  >         self.send_response(200)
+  >         self.send_header("Content-Type", "application/json")
+  >         self.send_header("Content-Length", str(len(body)))
+  >         self.end_headers()
+  >         self.wfile.write(body)
+  >     def log_message(self, *args):
+  >         pass
+  > s = http.server.HTTPServer(("127.0.0.1", 0), H)
+  > import os
+  > with open("agent.pid", "w") as f:
+  >     f.write(str(os.getpid()))
+  > with open("port.tmp", "w") as f:
+  >     f.write(str(s.server_address[1]))
+  > os.rename("port.tmp", "port")
+  > s.serve_forever()
+  > PY
+  $ (python3 -I http_agent.py &)
+  $ while [ ! -f port ]; do sleep 0.1; done
+  $ cat > http.yaml <<YAML
+  > version: 1
+  > name: demo
+  > agent: { protocol: http, url: "http://127.0.0.1:$(cat port)/agent", namespace_header: X-Run }
+  > scenarios: ["scenarios/*.yaml"]
+  > variants:
+  >   a: { env: {} }
+  > caps_usd: { openai: 1 }
+  > sandbox: off
+  > YAML
+  $ bactrian run http.yaml > out.txt 2> err.txt; echo "exit $?"; kill "$(cat agent.pid)"
+  exit 0
+  $ grep -e 'every' -e 'passed' out.txt | sed 's/  [0-9TZ]*-[0-9a-f]*$//'
+  every run: warning: UNSANDBOXED (sandbox: off, http mode)
+  every checker: warning: UNSANDBOXED (sandbox: off, sandbox: off)
+    0  scenarios/s.yaml  a  #1  passed
+  1 passed
