@@ -18,10 +18,12 @@ if [ ! -d "$OPAMROOT/bactrian" ]; then
 fi
 eval "$(opam env --switch=bactrian --set-switch)"
 opam install . --deps-only --locked
-# The lock file is made on macOS, so it has no Linux-only Eio backend. Pin it
-# here, and the version of uring that eio_linux 1.6 needs, rather than let the
-# solver pick the newest. The install may add packages but must not move a
-# locked one, or the binary would drift from the lock.
+# The lock file is made on macOS, so it has no Linux-only Eio backend. The
+# locked install takes eio_linux and uring through eio_main, at versions the
+# solver picks. Require the versions the release is built with, eio_linux 1.6
+# and the uring it needs. The install may add packages but must not move one
+# already installed, so if the solver picked others the build fails here and
+# these versions need raising.
 opam list --installed --short --columns=package | sort >/tmp/before
 opam install eio_linux.1.6 uring.2.15.0
 opam list --installed --short --columns=package | sort >/tmp/after
