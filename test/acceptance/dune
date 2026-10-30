@@ -93,4 +93,7 @@
   (setenv
    BACTRIAN_EXE
    %{exe:../../bin/main.exe}
-   (run %{exe:test_vm.exe}))))
+   (setenv
+    FAKE_UPSTREAM_SERVER
+    %{exe:../support/fake_upstream/fake_upstream_server.exe}
+    (run %{exe:test_vm.exe})))))
