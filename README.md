@@ -366,7 +366,7 @@ Put `bactrian` on your `PATH`. The sandbox, clock and container requirements in 
 
 The macOS binary is signed ad hoc and not notarised. An archive downloaded in a browser is quarantined, and Gatekeeper then refuses the first run. Remove the mark after extracting with `xattr -dr com.apple.quarantine ./bactrian-<tag>-macos-arm64`. An archive fetched with `curl` carries no mark.
 
-Every pull request builds and checks the three archives without publishing them. A tag publishes them only if the tagged commit is on `main`, its CI run passed and `bactrian --version` equals the tag without its `v`. The release job waits for that CI run if it is still going. If the CI run fails, fix it on `main` and tag the fixed commit, and if it passes on a re-run, re-run the release workflow's failed jobs. A tag with a suffix, such as `v0.1.0-rc.1`, publishes a prerelease. All of this is described in [decision record 0016](docs/decisions/0016-release-binaries.md) describes.
+Every pull request builds and checks the three archives without publishing them. A tag publishes them only if the tagged commit is on `main`, its CI run passed and `bactrian --version` equals the tag without its `v`. The release job waits for that CI run if it is still going. Only a commit that CI ran on for a push can be tagged, which in practice is the head of `main` after a push. A commit in the middle of a multi-commit push has no such run, so the gate fails for it. If the CI run fails, fix it on `main` and tag the fixed commit, and if it passes on a re-run, re-run the release workflow's failed jobs. A tag with a suffix, such as `v0.1.0-rc.1`, publishes a prerelease. All of this is described in [decision record 0016](docs/decisions/0016-release-binaries.md).
 
 ## Building from source
 
