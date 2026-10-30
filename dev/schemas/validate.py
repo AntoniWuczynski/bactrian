@@ -57,7 +57,10 @@ VERSION_KEYS: dict[str, str] = {
 
 # Members whose value is any JSON, or a map with arbitrary keys over numbers: an
 # unknown field inside one is not an error.
-FREE_FORM = {"canonical", "arguments", "data", "match", "schema", "equals", "thresholds"}
+FREE_FORM = {"canonical", "arguments", "data", "match", "equals", "thresholds"}
+
+# The keywords of a tool_args schema whose value is any JSON.
+SCHEMA_FREE_FORM = {"enum", "title", "description"}
 
 UNKNOWN_FIELD = "bactrian_unknown_field"
 
@@ -288,10 +291,36 @@ def at(value: JSON, path: Path_) -> dict[str, JSON]:
     return node
 
 
+def open_in_schema(steps: Path_) -> bool:
+    """Whether the object at steps inside a tool_args schema may hold any key.
+
+    A schema object is closed, but its properties map has arbitrary keys, each
+    naming a schema again.
+    """
+    in_map = False
+    for step in steps:
+        if in_map:
+            in_map = False
+        elif step == "properties":
+            in_map = True
+        elif step in SCHEMA_FREE_FORM:
+            return True
+    return in_map
+
+
+def free_form(path: Path_) -> bool:
+    for index, step in enumerate(path):
+        if step == "schema":
+            return open_in_schema(path[index + 1 :])
+        if isinstance(step, str) and step in FREE_FORM:
+            return True
+    return False
+
+
 def mutations(document: Document) -> Iterator[tuple[str, Document]]:
     """Copies of the document that the schema must reject."""
     for path, _ in objects(document.value):
-        if any(isinstance(step, str) and step in FREE_FORM for step in path):
+        if free_form(path):
             continue
         copied = copy.deepcopy(document.value)
         at(copied, path)[UNKNOWN_FIELD] = 1
