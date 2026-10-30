@@ -50,9 +50,11 @@ let test_build_script () =
 
 let test_detection_order () =
   let names ~macos =
-    List.map
-      (function
-        | `Docker -> "docker" | `Podman -> "podman" | `Container -> "container")
+    List.filter_map
+      (fun r ->
+        List.find_map
+          (fun (n, r') -> if r' = r then Some n else None)
+          Bactrian_core.Experiment.sandbox_runtimes)
       (Vm_runtime.detection_order ~macos)
   in
   Alcotest.check strings "Linux"

@@ -25,21 +25,15 @@ let python_image =
 let quiet cmd = Sys.command (cmd ^ " > /dev/null 2>&1") = 0
 let runtime = vm_runtime_name
 
-let runtime_works =
+let detected =
   lazy
     ( Eio_main.run @@ fun env ->
-      Result.is_ok
+      Result.to_option
         (Vm_runtime.detect
            ~process_mgr:(Eio.Stdenv.process_mgr env)
            ~clock:(Eio.Stdenv.clock env) (Some vm_runtime)) )
 
-let podman_rootless () =
-  let ic =
-    Unix.open_process_in "podman info --format '{{.Host.Security.Rootless}}'"
-  in
-  let answer = In_channel.input_line ic in
-  ignore (Unix.close_process_in ic : Unix.process_status);
-  Option.equal String.equal answer (Some "true")
+let runtime_works = lazy (Option.is_some (Lazy.force detected))
 
 (* The runtime's own command for each thing the tests do beside bactrian. *)
 let image_present image =
@@ -122,10 +116,10 @@ let typescript =
 let python =
   (* A rootless Podman maps the user to a subordinate ID unless told to keep
      it, and a rootful one refuses [keep-id]. *)
-  let keep_user =
-    match vm_runtime with
-    | `Podman when podman_rootless () -> [ "--userns=keep-id" ]
-    | `Podman | `Docker | `Container -> []
+  let keep_user () =
+    match Lazy.force detected with
+    | Some t when Vm_runtime.rootless t -> [ "--userns=keep-id" ]
+    | Some _ | None -> []
   in
   {
     name = "python";
@@ -141,7 +135,7 @@ let python =
         run_or_fail
           (String.concat " "
              (List.map Filename.quote
-                (run_prefix @ [ "--rm" ] @ keep_user
+                (run_prefix @ [ "--rm" ] @ keep_user ()
                 @ [
                     "--user";
                     Printf.sprintf "%d:%d" (Unix.getuid ()) (Unix.getgid ());
