@@ -8,16 +8,16 @@ let dn cn =
 
 let ok = function Ok x -> x | Error (`Msg m) -> failwith ("fake_https: " ^ m)
 
-let span days =
+let span (from, until) =
   let now = Ptime_clock.now () in
   let shift d =
     Option.get (Ptime.add_span now (Ptime.Span.of_int_s (d * 86_400)))
   in
-  (shift (-1), shift days)
+  (shift from, shift until)
 
-let sign ~issuer ~issuer_dn ~subject_key ~subject ~extensions ~days =
+let sign ~issuer ~issuer_dn ~subject_key ~subject ~extensions ~valid =
   let csr = ok (X509.Signing_request.create subject subject_key) in
-  let valid_from, valid_until = span days in
+  let valid_from, valid_until = span valid in
   match
     X509.Signing_request.sign csr ~valid_from ~valid_until ~extensions issuer
       issuer_dn
@@ -38,7 +38,7 @@ let ca () =
   let name = dn "bactrian test CA" in
   let cert =
     sign ~issuer:signer ~issuer_dn:name ~subject_key:signer ~subject:name
-      ~extensions ~days:365
+      ~extensions ~valid:(-1, 365)
   in
   { signer; cert }
 
@@ -56,7 +56,7 @@ let connector ca =
 
 type name = Dns of string | Ip of string
 
-let leaf ca names =
+let leaf ?(valid = (-1, 7)) ca names =
   let signer = X509.Private_key.generate `P256 in
   let dns = List.filter_map (function Dns d -> Some d | Ip _ -> None) names
   and ips =
@@ -80,7 +80,7 @@ let leaf ca names =
   let cert =
     sign ~issuer:ca.signer
       ~issuer_dn:(X509.Certificate.subject ca.cert)
-      ~subject_key:signer ~subject:(dn cn) ~extensions ~days:7
+      ~subject_key:signer ~subject:(dn cn) ~extensions ~valid
   in
   ([ cert; ca.cert ], signer)
 

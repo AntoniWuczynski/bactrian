@@ -38,7 +38,7 @@ let call env connector url =
 
 (* A fake upstream behind a TLS front, for the length of [f]. *)
 let with_server ?record_size ?ending ?relay
-    ?(names = [ H.Dns "localhost"; H.Ip "127.0.0.1" ]) ?ca replies f =
+    ?(names = [ H.Dns "localhost"; H.Ip "127.0.0.1" ]) ?valid ?ca replies f =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
@@ -50,14 +50,14 @@ let with_server ?record_size ?ending ?relay
   in
   let front =
     H.start ~sw ~net:(Eio.Stdenv.net env) ?record_size ?ending ?relay
-      ~chain:(H.leaf ca names) ~backend:(F.port up) ()
+      ~chain:(H.leaf ?valid ca names) ~backend:(F.port up) ()
   in
   let r = f env ca (H.port front) in
   Eio.Switch.fail sw Exit;
   r
 
-let run_server ?record_size ?ending ?relay ?names ?ca replies f () =
-  match with_server ?record_size ?ending ?relay ?names ?ca replies f with
+let run_server ?record_size ?ending ?relay ?names ?valid ?ca replies f () =
+  match with_server ?record_size ?ending ?relay ?names ?valid ?ca replies f with
   | () -> ()
   | exception Exit -> ()
 
@@ -113,6 +113,36 @@ let wrong_host =
   ignore
     (connect_failed "an address not in the certificate"
        (call env (connector ca) (url port "127.0.0.1")))
+
+(* A host that is neither an address nor a host name is refused before any TLS
+   byte is sent. *)
+let not_a_host_name () =
+  Eio_main.run @@ fun _ ->
+  Mirage_crypto_rng_unix.use_default ();
+  Eio.Switch.run @@ fun sw ->
+  let ours, theirs = Eio_unix.Net.socketpair_stream ~sw () in
+  let authenticator =
+    X509.Authenticator.chain_of_trust
+      ~time:(fun () -> Some (Ptime_clock.now ()))
+      []
+  in
+  let https =
+    Bactrian_tls.Tls_connector.make ~trust:(fun () ->
+        Ok (authenticator, { roots = 0; extra = None }))
+  in
+  (match
+     https.wrap (Uri.of_string "https://a_b.test/v1") (ours :> Upstream.flow)
+   with
+  | Ok _ -> Alcotest.fail "a host with an underscore was wrapped"
+  | Error reason ->
+      Alcotest.(check bool)
+        ("names the host: " ^ reason)
+        true
+        (contains reason "not a host name"));
+  Eio.Flow.shutdown ours `Send;
+  Alcotest.(check string)
+    "nothing was sent" ""
+    (Eio.Buf_read.parse_exn Eio.Buf_read.take_all ~max_size:4096 theirs)
 
 let no_tls_without_connector =
   run_server [ json_reply [ "{}" ] ] @@ fun env _ port ->
@@ -263,6 +293,12 @@ let bad_extra () =
   refused "a missing extra file" ~says:[ "/nonexistent/ca.pem" ]
     (system_ready env)
 
+let not_pem () =
+  Eio_main.run @@ fun env ->
+  with_extra_file "not a certificate\n" @@ fun _ ->
+  refused "a file with no certificate" ~says:[ "no PEM certificate" ]
+    (system_ready env)
+
 (* A file another user could change is refused, by group or by others. *)
 let writable_extra perm () =
   let ca =
@@ -319,6 +355,26 @@ let system_with_extra () =
       | Ok { extra = None; _ } -> Alcotest.fail "the extra CA is not counted"
       | Error e -> Alcotest.fail e);
       ok (call env c (url port "localhost")))
+    ()
+
+(* The system connector checks the chain against the clock, so a leaf outside
+   its validity is refused. *)
+let out_of_date what valid () =
+  let ca =
+    Mirage_crypto_rng_unix.use_default ();
+    H.ca ()
+  in
+  with_extra_file (H.ca_pem ca) @@ fun _ ->
+  run_server ~valid ~ca
+    [ json_reply [ "{}" ] ]
+    (fun env _ port ->
+      let c =
+        Bactrian_tls.Tls_connector.system
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+      in
+      let reason = connect_failed what (call env c (url port "localhost")) in
+      Alcotest.(check bool)
+        ("names TLS: " ^ reason) true (contains reason "TLS"))
     ()
 
 (* The variables other tools read for their trust bundle do not reach
@@ -404,6 +460,8 @@ let () =
             trusted;
           Alcotest.test_case "a certificate from another CA" `Quick unknown_ca;
           Alcotest.test_case "a certificate for another host" `Quick wrong_host;
+          Alcotest.test_case "a host that is not a host name" `Quick
+            not_a_host_name;
           Alcotest.test_case "no connector refuses https" `Quick
             no_tls_without_connector;
           Alcotest.test_case "a cut-off chunked body, close_notify" `Quick
@@ -423,6 +481,7 @@ let () =
         [
           Alcotest.test_case "the system roots load" `Quick system_roots;
           Alcotest.test_case "a missing extra file" `Quick bad_extra;
+          Alcotest.test_case "an extra file with no certificate" `Quick not_pem;
           Alcotest.test_case "an extra file the group can write" `Quick
             (writable_extra 0o620);
           Alcotest.test_case "an extra file others can write" `Quick
@@ -431,6 +490,10 @@ let () =
             corrupt_block;
           Alcotest.test_case "the system connector with an extra CA" `Quick
             system_with_extra;
+          Alcotest.test_case "an expired certificate" `Quick
+            (out_of_date "an expired certificate" (-3, -1));
+          Alcotest.test_case "a certificate not valid yet" `Quick
+            (out_of_date "a certificate not valid yet" (1, 7));
           Alcotest.test_case "SSL_CERT_FILE and the others are ignored" `Quick
             foreign_variables_ignored;
         ] );

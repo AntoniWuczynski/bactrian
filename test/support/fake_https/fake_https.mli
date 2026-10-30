@@ -17,8 +17,9 @@ val connector : ca -> Bactrian_runtime.Upstream.connector
 
 type name = Dns of string | Ip of string
 
-val leaf : ca -> name list -> Tls.Config.certchain
-(** A server certificate for these names, signed by the CA. *)
+val leaf : ?valid:int * int -> ca -> name list -> Tls.Config.certchain
+(** A server certificate for these names, signed by the CA. [valid] is when it
+    is valid from and until, in days from now (default [(-1, 7)]). *)
 
 type t
 
