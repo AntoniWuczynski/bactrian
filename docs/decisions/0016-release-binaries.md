@@ -18,6 +18,8 @@ A workflow, `.github/workflows/release.yml`, builds three archives: `linux-x86_6
 
 **Tags.** `bactrian --version` prints `Version.current` from `lib/core/version.ml`, which is also written into cassette headers. On a tag the verify job requires the output to equal the tag without its `v`, so the version must be raised in a commit before the tag is pushed. A separate `gate` job requires the tagged commit to be an ancestor of `origin/main` and a passing run of `ci.yml` for that commit, as the tag build itself runs no tests. A tag pushed together with its commit finds that run still going, so the gate waits for the newest `ci.yml` run of the commit to finish. A failed CI run means a fix on `main` and a new tag. A CI run that passes on a re-run needs the release workflow's failed jobs re-run too. A tag with a suffix, such as `v0.1.0-rc.1`, publishes a prerelease.
 
+**Actions are pinned by commit.** The release jobs produce what users download, so every action is pinned to the commit of a release at least seven days old, with the release named in a comment. The main CI keeps its tags.
+
 **Releases use `--profile release`.** That drops warnings-as-errors for the shipped build only. The main CI keeps the dev profile and gates every change.
 
 ## Consequences
