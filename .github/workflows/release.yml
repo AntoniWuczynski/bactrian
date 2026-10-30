@@ -50,18 +50,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # Linux: a static binary needs musl, so build in Alpine.
+      # The opam root stays outside the checkout, as dune would read the dune
+      # executable in it as a dune file.
       - if: matrix.static
         uses: actions/cache@v5
         with:
-          path: opam-root
+          path: ${{ runner.temp }}/opam-root
           key: opam-musl-${{ matrix.target }}-${{ hashFiles('bactrian.opam.locked', 'dev/release/build-static.sh') }}-${{ env.ALPINE }}
       - if: matrix.static
         run: |
-          mkdir -p opam-root
-          docker run --rm -v "$PWD:/src" -v "$PWD/opam-root:/opam-root" -w /src \
+          mkdir -p "$RUNNER_TEMP/opam-root"
+          docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP/opam-root:/opam-root" -w /src \
             -e OPAMROOT=/opam-root "$ALPINE" sh dev/release/build-static.sh /src/bactrian
+      # The container ran as root. Hand its files back to the runner user, who
+      # saves the cache.
       - if: matrix.static
-        run: sudo chown "$USER" bactrian
+        run: sudo chown -R "$USER" bactrian "$RUNNER_TEMP/opam-root"
       # macOS: native, against the system libraries only.
       - if: ${{ !matrix.static }}
         uses: ocaml/setup-ocaml@v3
