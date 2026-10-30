@@ -97,6 +97,36 @@ let test_beat () =
     "touched" true
     ((Unix.stat file).st_mtime > Unix.gettimeofday () -. 60.)
 
+(* The touch is not behind the bridge's writes: with a relay that reads
+   nothing and 4 MiB waiting on the bridge's standard input, so that a write
+   blocks, the file's time still advances at every interval. *)
+let test_beat_while_blocked () =
+  Eio_main.run @@ fun env ->
+  let clock = Eio.Stdenv.clock env in
+  let file = Filename.temp_file "bactrian-beat" "" in
+  Fun.protect ~finally:(fun () -> Sys.remove file) @@ fun () ->
+  Unix.utimes file 1. 1.;
+  let seen = ref [] and finished = ref false and result = ref None in
+  Eio.Fiber.both
+    (fun () ->
+      while not !finished do
+        let m = (Unix.stat file).st_mtime in
+        if m > 1. && not (List.mem m !seen) then seen := m :: !seen;
+        Eio.Time.sleep clock 0.25
+      done)
+    (fun () ->
+      result :=
+        Some
+          (bridge env ~beat:file
+             ~stdin:(String.make (4 * 1024 * 1024) 'x')
+             [ "stuck"; "5.5" ]);
+      finished := true);
+  Alcotest.(check int)
+    "status" 0
+    (match !result with Some o -> code o | None -> Alcotest.fail "no result");
+  (* Touched at the start and every 2 seconds of the 5.5. *)
+  Alcotest.(check bool) "touched again and again" true (List.length !seen >= 3)
+
 (* No more connections at once than the relay's own limit. *)
 let test_channel_cap () =
   Eio_main.run @@ fun env ->
@@ -237,6 +267,8 @@ let () =
           Alcotest.test_case "log lines" `Quick test_log;
           Alcotest.test_case "heartbeat" `Quick test_heartbeat;
           Alcotest.test_case "heartbeat file" `Quick test_beat;
+          Alcotest.test_case "heartbeat file while a write is blocked" `Slow
+            test_beat_while_blocked;
           Alcotest.test_case "at most 64 connections" `Quick test_channel_cap;
           Alcotest.test_case "relay failures" `Quick test_failures;
           Alcotest.test_case "arguments" `Quick test_parse;
