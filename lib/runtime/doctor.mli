@@ -35,7 +35,8 @@ type target = {
           against [dir]). *)
   faketime : bool;
   faketime_requested : bool;
-      (** The experiment says [faketime: auto] by name ({!Bactrian_core.Experiment.t}). *)
+      (** The experiment says [faketime: auto] by name
+          ({!Bactrian_core.Experiment.t}). *)
   checkers : bool;  (** Some scenario of the experiment has checkers. *)
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
