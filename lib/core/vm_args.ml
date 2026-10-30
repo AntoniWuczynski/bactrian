@@ -34,6 +34,7 @@ type input = {
   runs_dir : string;
   state_dir : string;
   temp_dir : string;
+  allow_read : (string * Sandbox_policy.kind) list;
   allow_write : (string * Sandbox_policy.kind) list;
   read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
@@ -73,6 +74,8 @@ type error =
   | Root_user
   | Writable_mask_dir of { file : string; dir : string }
   | File_allow_write of string
+  | Root_allow_read
+  | File_allow_read of string
 
 let describe_error = function
   | Bad_path { what; path } ->
@@ -88,8 +91,9 @@ let describe_error = function
   | Empty_agent -> "no agent command"
   | Hidden_workdir d ->
       Printf.sprintf
-        "the agent's working directory %s is outside the project, its run and \
-         sandbox.allow_write, so the virtual machine does not show it"
+        "the agent's working directory %s is outside the project, its run, \
+         sandbox.allow_read and sandbox.allow_write, so the virtual machine \
+         does not show it"
         d
   | Mask_in_root f ->
       Printf.sprintf
@@ -118,6 +122,14 @@ let describe_error = function
   | File_allow_write path ->
       Printf.sprintf
         "sandbox.allow_write %s is a file, which container cannot mount (it \
+         mounts directories only). Fix: name its directory"
+        path
+  | Root_allow_read ->
+      "sandbox.allow_read / would replace the image's whole file system. Fix: \
+       name the directories the agent reads"
+  | File_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is a file, which container cannot mount (it \
          mounts directories only). Fix: name its directory"
         path
 
@@ -257,16 +269,29 @@ let plain_mounts i =
       dirs
   in
   let masked path = List.exists (String.equal path) (dirs @ files) in
+  (* One bind to a path, the first listed: a writable one wins over a
+     read-only one for the same path, and the project root is shown once. *)
+  let once binds =
+    List.fold_left
+      (fun kept b ->
+        if
+          List.exists (fun k -> String.equal (mount_path k) (mount_path b)) kept
+        then kept
+        else kept @ [ b ])
+      [] binds
+  in
   let binds =
-    (if masked i.project_root then []
-     else [ Bind { path = i.project_root; writable = false } ])
-    @ List.filter_map
-        (fun (own, writable, path) ->
-          if hidden ~own path || masked path then None
-          else Some (Bind { path; writable }))
-        (List.map (fun p -> (true, true, p)) [ i.state_dir; i.temp_dir ]
-        @ List.map (fun p -> (true, false, p)) i.read_only
-        @ List.map (fun (p, _) -> (false, true, p)) i.allow_write)
+    once
+      ((if masked i.project_root then []
+        else [ Bind { path = i.project_root; writable = false } ])
+      @ List.filter_map
+          (fun (own, writable, path) ->
+            if hidden ~own path || masked path then None
+            else Some (Bind { path; writable }))
+          (List.map (fun p -> (true, true, p)) [ i.state_dir; i.temp_dir ]
+          @ List.map (fun p -> (true, false, p)) i.read_only
+          @ List.map (fun (p, _) -> (false, true, p)) i.allow_write
+          @ List.map (fun (p, _) -> (false, false, p)) i.allow_read))
   in
   let masks =
     List.map (fun d -> Mask_dir d) dirs @ List.map (fun f -> Mask_file f) files
@@ -446,21 +471,35 @@ let argv i =
          ("the temporary directory", i.temp_dir);
          ("the staging directory", i.staging_dir);
        ]
+      @ List.map (fun (p, _) -> ("sandbox.allow_read", p)) i.allow_read
       @ List.map (fun (p, _) -> ("sandbox.allow_write", p)) i.allow_write
       @ List.map (fun p -> ("a read-only path", p)) i.read_only
       @ List.map (fun (p, _) -> ("the deny-list path", p)) i.deny)
+  in
+  let* () =
+    if List.exists (fun (p, _) -> String.equal p "/") i.allow_read then
+      Error Root_allow_read
+    else Ok ()
   in
   let* () =
     match i.kind with
     | `Docker -> Ok ()
     | `Container ->
         let* () = if i.uid = 0 then Error Root_user else Ok () in
+        let* () =
+          all
+            (fun (p, k) ->
+              match k with
+              | `File -> Error (File_allow_write p)
+              | `Dir | `Absent -> Ok ())
+            i.allow_write
+        in
         all
           (fun (p, k) ->
             match k with
-            | `File -> Error (File_allow_write p)
+            | `File -> Error (File_allow_read p)
             | `Dir | `Absent -> Ok ())
-          i.allow_write
+          i.allow_read
   in
   let* () = all check_port i.forwards in
   let* mounts, stages = mounts i in

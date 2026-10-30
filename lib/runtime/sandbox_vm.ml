@@ -30,6 +30,7 @@ let prepare ~env requested ~image =
 type layout = {
   project_root : string;
   bactrian_dir : string;
+  allow_read : string list;
   allow_write : string list;
   read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
@@ -93,9 +94,9 @@ let list_dir ~masked dir =
              { name; kind; identity; masked_file })
            (List.sort String.compare (Array.to_list names)))
 
-(* What is at each existing allow_write path: container mounts directories
-   only. *)
-let allow_write_kinds paths =
+(* What is at each existing allow_read or allow_write path: container mounts
+   directories only. *)
+let path_kinds paths =
   List.filter_map
     (fun p ->
       match (Unix.stat p).st_kind with
@@ -159,7 +160,8 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          runs_dir = Filename.concat layout.bactrian_dir "runs";
          state_dir;
          temp_dir;
-         allow_write = allow_write_kinds layout.allow_write;
+         allow_read = path_kinds layout.allow_read;
+         allow_write = path_kinds layout.allow_write;
          read_only = layout.read_only;
          deny = layout.deny;
          staging_dir = staging_dir ~run_dir;

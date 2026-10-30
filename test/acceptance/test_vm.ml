@@ -345,29 +345,27 @@ let seatbelt_control () =
    a tmpfs, where only the exact name of a neighbour is there. container's is a
    staging directory on the host, so a neighbour's other spellings read it. *)
 
-let neighbours_agent =
+(* Reads the files named in PROBES (a JSON list) and tries to create those
+   that start with "w:", and answers with what each gave. *)
+let probe_agent =
   {|import errno, json, os, sys
-world = os.environ["WORLD"]
 
-def read(name):
+def attempt(probe):
+    write = probe.startswith("w:")
+    path = probe[2:] if write else probe
     try:
-        with open(os.path.join(world, name)) as h:
+        if write:
+            with open(path, "w"):
+                return "written"
+        with open(path) as h:
             return h.read().strip()
-    except OSError as e:
-        return errno.errorcode.get(e.errno, str(e.errno))
-
-def write(name):
-    try:
-        with open(os.path.join(world, name), "w"):
-            return "written"
     except OSError as e:
         return errno.errorcode.get(e.errno, str(e.errno))
 
 for line in sys.stdin:
     m = json.loads(line)
     if m["type"] == "turn":
-        reply = {n: read(n) for n in (".env", ".ENV", ".Env", "sibling.txt", "SIBLING.TXT", "sub/inner.txt")}
-        reply["new.txt"] = write("new.txt")
+        reply = {p: attempt(p) for p in json.loads(os.environ["PROBES"])}
         sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
                                      "content": json.dumps(reply)}) + "\n")
         sys.stdout.flush()
@@ -375,23 +373,24 @@ for line in sys.stdin:
         break
 |}
 
-let neighbours () =
+(* What the probe agent saw, one answer per probe, in order. *)
+let probed ?(allow_read = []) name ~files probes =
   gate [ python_image ];
-  with_world ~vm:python_image "vm-neighbours" @@ fun w ->
-  let file name text =
-    Out_channel.with_open_bin (Filename.concat w.dir name) (fun oc ->
-        output_string oc text)
-  in
-  Unix.mkdir (Filename.concat w.dir "sub") 0o700;
-  file ".env" "OPENAI_API_KEY=sk-masked-file\n";
-  file "sibling.txt" "visible\n";
-  file "sub/inner.txt" "inner\n";
-  file "neighbours.py" neighbours_agent;
+  with_world ~vm:python_image ~allow_read name @@ fun w ->
+  List.iter
+    (fun (rel, text) ->
+      Out_channel.with_open_bin (Filename.concat w.dir rel) (fun oc ->
+          output_string oc text))
+    (("probe.py", probe_agent) :: files w);
   let r =
     w.execute
-      ~agent:
-        (Command [ "python3"; "-I"; Filename.concat w.dir "neighbours.py" ])
-      ~variant_env:[ ("WORLD", w.dir) ]
+      ~agent:(Command [ "python3"; "-I"; Filename.concat w.dir "probe.py" ])
+      ~variant_env:
+        [
+          ( "PROBES",
+            Yojson.Safe.to_string
+              (`List (List.map (fun p -> `String p) (probes w))) );
+        ]
       ()
   in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
@@ -406,23 +405,90 @@ let neighbours () =
                (Yojson.Safe.from_string (to_string (member "content" j)))))
     | _ -> Alcotest.fail "expected exactly one reply"
   in
-  Alcotest.(check (list (pair string string)))
+  no_container r;
+  (w, seen)
+
+let neighbours () =
+  let w, seen =
+    probed "vm-neighbours"
+      ~files:(fun w ->
+        Unix.mkdir (Filename.concat w.dir "sub") 0o700;
+        [
+          (".env", "OPENAI_API_KEY=sk-masked-file\n");
+          ("sibling.txt", "visible\n");
+          ("sub/inner.txt", "inner\n");
+        ])
+      (fun w ->
+        List.map (Filename.concat w.dir)
+          [
+            ".env";
+            ".ENV";
+            ".Env";
+            "sibling.txt";
+            "SIBLING.TXT";
+            "sub/inner.txt";
+          ]
+        @ [ "w:" ^ Filename.concat w.dir "new.txt" ])
+  in
+  Alcotest.(check (list string))
     "what the agent saw"
     [
-      (".env", "ENOENT");
-      (".ENV", "ENOENT");
-      (".Env", "ENOENT");
-      ("sibling.txt", "visible");
-      ( "SIBLING.TXT",
-        match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible" );
-      ("sub/inner.txt", "inner");
-      ("new.txt", "EROFS");
+      "ENOENT";
+      "ENOENT";
+      "ENOENT";
+      "visible";
+      (match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible");
+      "inner";
+      "EROFS";
     ]
-    seen;
+    (List.map snd seen);
   Alcotest.(check bool)
     "nothing written beside it" false
-    (Sys.file_exists (Filename.concat w.dir "new.txt"));
-  no_container r
+    (Sys.file_exists (Filename.concat w.dir "new.txt"))
+
+(* sandbox.allow_read: a directory outside the project is there, read-only,
+   with its own .env hidden as the project's is, and its neighbour that the
+   experiment does not name is not there at all. *)
+let readable () =
+  let dir = Filename.concat (Sys.getcwd ()) "tmp-vm-allow-read" in
+  let other = dir ^ "-other" in
+  let remove () =
+    ignore
+      (Sys.command
+         ("rm -rf " ^ Filename.quote dir ^ " " ^ Filename.quote other))
+  in
+  remove ();
+  Fun.protect ~finally:remove @@ fun () ->
+  List.iter
+    (fun d -> Unix.mkdir d 0o700)
+    [ dir; Filename.concat dir "sub"; other ];
+  List.iter
+    (fun (p, text) ->
+      Out_channel.with_open_bin p (fun oc -> output_string oc text))
+    [
+      (Filename.concat dir "data.txt", "shared\n");
+      (Filename.concat dir ".env", "OPENAI_API_KEY=sk-allowed-dir\n");
+      (Filename.concat dir "sub/inner.txt", "inner\n");
+      (Filename.concat other "data.txt", "not allowed\n");
+    ];
+  let _, seen =
+    probed ~allow_read:[ dir ] "vm-allow-read"
+      ~files:(fun _ -> [])
+      (fun _ ->
+        List.map (Filename.concat dir)
+          [ "data.txt"; "sub/inner.txt"; ".env"; ".ENV" ]
+        @ [
+            Filename.concat other "data.txt";
+            "w:" ^ Filename.concat dir "new.txt";
+          ])
+  in
+  Alcotest.(check (list string))
+    "what the agent saw"
+    [ "shared"; "inner"; "ENOENT"; "ENOENT"; "ENOENT"; "EROFS" ]
+    (List.map snd seen);
+  Alcotest.(check bool)
+    "nothing written there" false
+    (Sys.file_exists (Filename.concat dir "new.txt"))
 
 (* Teardown from outside: bactrian record, through the command line, with an
    agent that never answers. SIGINT ends it with 130, SIGKILL leaves the bridge
@@ -754,7 +820,10 @@ let () =
           (fun a -> Alcotest.test_case a.name `Slow (escapes a))
           [ typescript; python ] );
       ( "masks",
-        [ Alcotest.test_case "a hidden file's neighbours" `Slow neighbours ] );
+        [
+          Alcotest.test_case "a hidden file's neighbours" `Slow neighbours;
+          Alcotest.test_case "allow_read" `Slow readable;
+        ] );
       ( "host processes",
         [
           Alcotest.test_case "none visible in the virtual machine" `Slow

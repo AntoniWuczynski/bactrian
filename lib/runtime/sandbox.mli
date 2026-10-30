@@ -66,6 +66,7 @@ type settings = {
   backend : backend;
   image : string option;  (** The image of the [vm] backend. *)
   runtime : Bactrian_core.Experiment.sandbox_runtime option;
+  allow_read : string list;  (** [sandbox.allow_read], absolute. *)
   allow_write : string list;  (** [sandbox.allow_write], absolute. *)
   deny_read : string list;  (** [sandbox.deny_read], absolute. *)
   bactrian_exe : string;

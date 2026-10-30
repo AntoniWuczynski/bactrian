@@ -64,15 +64,17 @@ val check_sandboxed : world -> Run.result -> unit
 
 val with_world :
   ?vm:string ->
+  ?allow_read:string list ->
   ?deny_read:string list ->
   ?rounds:int ->
   string ->
   (world -> 'a) ->
   'a
-(** [deny_read] names directories to create in the world and deny to the agent.
-    The fake upstream answers [rounds] (default 1) times the two replies of the
-    weather conversation. With [vm] the agents run in the virtual machine
-    sandbox with that image, in the world's directory. *)
+(** [allow_read] names absolute paths the agent may also read. [deny_read] names
+    directories to create in the world and deny to the agent. The fake upstream
+    answers [rounds] (default 1) times the two replies of the weather
+    conversation. With [vm] the agents run in the virtual machine sandbox with
+    that image, in the world's directory. *)
 
 val strict : string -> Run.replay
 val contains : string -> string -> bool

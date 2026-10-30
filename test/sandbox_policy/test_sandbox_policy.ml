@@ -11,6 +11,7 @@ let base : P.input =
     bactrian_dir = "/work/proj/.bactrian";
     state_dir = Some (run_dir ^ "/state");
     temp_dir = run_dir ^ "/tmp";
+    allow_read = [];
     allow_write = [ "/work/proj/out" ];
     deny_read = [ "/work/proj/private" ];
     listeners =
@@ -298,6 +299,46 @@ let test_no_listeners () =
   let s = seatbelt { base with listeners = [] } in
   Alcotest.(check bool) "no network rule" false (contains s.profile "network")
 
+(* allow_read adds the .env files at the root of each allowed path to the
+   deny-list, on both platforms, and lists a path once. *)
+let test_allow_read () =
+  let with_read = { base with allow_read = [ "/data/shared" ] } in
+  let denied = P.deny_list with_read in
+  let has = List.mem in
+  Alcotest.(check bool)
+    "the .env of an allowed directory" true
+    (has "/data/shared/.env" denied && has "/data/shared/.env.production" denied);
+  Alcotest.(check bool)
+    "none for the allowed path's subdirectories" false
+    (List.exists
+       (fun d -> String.starts_with ~prefix:"/data/shared/sub" d)
+       denied);
+  Alcotest.(check bool)
+    "unchanged without allow_read" false
+    (has "/data/shared/.env" (P.deny_list base));
+  let s = seatbelt with_read in
+  Alcotest.(check bool)
+    "a Seatbelt parameter for it" true
+    (List.exists (fun (_, v) -> String.equal v "/data/shared/.env") s.params);
+  Alcotest.(check bool)
+    "reads are not otherwise restricted" true
+    (contains s.profile "(allow file-read*)");
+  let argv =
+    bwrap
+      ~exists:(function
+        | "/data/shared/.env" -> `File | "/data/shared" -> `Dir | _ -> `Absent)
+      { linux with allow_read = [ "/data/shared" ] }
+  in
+  let rec masks = function
+    | "--ro-bind" :: "/dev/null" :: "/data/shared/.env" :: _ -> true
+    | _ :: rest -> masks rest
+    | [] -> false
+  in
+  Alcotest.(check bool) "bubblewrap masks the file" true (masks argv);
+  Alcotest.(check bool)
+    "bubblewrap leaves the directory itself readable" false
+    (List.mem "/data/shared" argv)
+
 (* A checker: no run state, no listener, no extra writable path. *)
 let checker (i : P.input) : P.input =
   {
@@ -305,6 +346,7 @@ let checker (i : P.input) : P.input =
     state_dir = None;
     temp_dir = "/tmp/ck";
     listeners = [];
+    allow_read = [];
     allow_write = [];
     agent = [ "python3"; "check.py" ];
   }
@@ -474,6 +516,7 @@ let gen_input platform : P.input QCheck.Gen.t =
     else Some ("/zz9s" ^ state_suffix)
   in
   let* temp_dir = gen_path in
+  let* allow_read = list_size (int_range 0 2) gen_path in
   let* allow_write = list_size (int_range 0 3) gen_path in
   let* deny_read = list_size (int_range 0 3) gen_path in
   let* sockets = list_size (int_range 0 3) gen_path in
@@ -490,6 +533,7 @@ let gen_input platform : P.input QCheck.Gen.t =
       bactrian_dir;
       state_dir;
       temp_dir;
+      allow_read;
       allow_write;
       deny_read;
       listeners;
@@ -516,6 +560,7 @@ let map_paths f (i : P.input) : P.input =
     bactrian_dir = f i.bactrian_dir;
     state_dir = Option.map f i.state_dir;
     temp_dir = f i.temp_dir;
+    allow_read = List.map f i.allow_read;
     allow_write = List.map f i.allow_write;
     deny_read = List.map f i.deny_read;
     listeners =
@@ -682,6 +727,8 @@ let () =
       ( "cases",
         [
           Alcotest.test_case "absent entries skipped" `Quick test_absent_skipped;
+          Alcotest.test_case "allow_read hides .env files" `Quick
+            test_allow_read;
           Alcotest.test_case "the preload library is bound" `Quick
             test_preload_bound;
           Alcotest.test_case "another run stays hidden" `Quick

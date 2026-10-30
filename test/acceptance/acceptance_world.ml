@@ -147,7 +147,7 @@ let vm_runtime =
   | None -> failwith "BACTRIAN_VM_RUNTIME is neither docker nor container"
 
 (* With [vm], the virtual machine sandbox running that image. *)
-let sandbox ?vm ~env ~dir ~deny_read () =
+let sandbox ?vm ~env ~dir ~allow_read ~deny_read () =
   if Option.is_none vm && not sandbox_available then Sandbox.off
   else
     match
@@ -161,6 +161,7 @@ let sandbox ?vm ~env ~dir ~deny_read () =
             | None -> (Sandbox.host_backend () :> Sandbox.backend));
           image = vm;
           runtime = Option.map (fun (_ : string) -> vm_runtime) vm;
+          allow_read;
           allow_write = [];
           deny_read;
           bactrian_exe = executable "BACTRIAN_EXE";
@@ -204,7 +205,7 @@ let check_sandboxed w (r : Run.result) =
     | Some (Seatbelt_backend | Bubblewrap_backend) | None ->
         Alcotest.fail "the run was not in the virtual machine"
 
-let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
+let with_world ?vm ?(allow_read = []) ?(deny_read = []) ?(rounds = 1) name f =
   Eio_main.run @@ fun env ->
   let dir = Eio.Path.(Eio.Stdenv.cwd env / ("tmp-acceptance-" ^ name)) in
   Eio.Path.rmtree ~missing_ok:true dir;
@@ -239,7 +240,7 @@ let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
     (fun name -> Eio.Path.mkdirs ~perm:0o700 Eio.Path.(dir / name))
     deny_read;
   let sandbox =
-    sandbox ?vm ~env ~dir:abs_dir
+    sandbox ?vm ~env ~dir:abs_dir ~allow_read
       ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
       ()
   in

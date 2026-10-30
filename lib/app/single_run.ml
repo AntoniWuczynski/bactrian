@@ -156,6 +156,7 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                       backend = sandbox.backend;
                       image = sandbox.image;
                       runtime = sandbox.runtime;
+                      allow_read = [];
                       allow_write = [];
                       deny_read = [];
                       bactrian_exe;

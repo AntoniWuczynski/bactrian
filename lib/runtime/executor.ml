@@ -640,6 +640,7 @@ let run_experiment ?seatbelt_hint ?root
       backend = experiment.sandbox_backend;
       image = experiment.sandbox_image;
       runtime = experiment.sandbox_runtime;
+      allow_read = List.map in_dir experiment.sandbox_allow_read;
       allow_write = List.map in_dir experiment.sandbox_allow_write;
       deny_read = List.map in_dir experiment.sandbox_deny_read;
       bactrian_exe;

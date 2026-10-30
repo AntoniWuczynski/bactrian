@@ -5,18 +5,18 @@
 
     Every host path is mounted at the same absolute path inside, so the agent's
     command and the paths in its arguments and environment work unchanged: the
-    project root read-only, the run's state and temporary directories and the
-    [allow_write] paths read-write. The deny-list is masked where it is visible:
-    an empty tmpfs over a directory, and for a file a replacement of its
-    directory with every other entry of that directory there again, so the file
-    is not there under any spelling of its name (a bind over the file alone
-    covers one name, and a case-insensitive host has others). Docker's
-    replacement is an empty read-only tmpfs with each entry bound back.
-    container mounts directories only, so its replacement is a staging directory
-    ({!stage}) bound read-only, holding a hard link of each other file and an
-    empty directory for each mount beneath. Nothing outside those mounts is
-    there at all, so the deny-list entries under the user's home need no mask
-    unless a mount shows them. *)
+    project root and the [allow_read] paths read-only, the run's state and
+    temporary directories and the [allow_write] paths read-write. The deny-list
+    is masked where it is visible: an empty tmpfs over a directory, and for a
+    file a replacement of its directory with every other entry of that directory
+    there again, so the file is not there under any spelling of its name (a bind
+    over the file alone covers one name, and a case-insensitive host has
+    others). Docker's replacement is an empty read-only tmpfs with each entry
+    bound back. container mounts directories only, so its replacement is a
+    staging directory ({!stage}) bound read-only, holding a hard link of each
+    other file and an empty directory for each mount beneath. Nothing outside
+    those mounts is there at all, so the deny-list entries under the user's home
+    need no mask unless a mount shows them. *)
 
 type probe = {
   outside : string;  (** To create, outside every writable mount. *)
@@ -79,6 +79,10 @@ type input = {
           [temp_dir] visible, and no other mask does. *)
   state_dir : string;
   temp_dir : string;
+  allow_read : (string * Sandbox_policy.kind) list;
+      (** Existing paths only, each with what is at it. Shown read-only. A path
+          that is another mount's, or under a directory mask, is not mounted
+          again. *)
   allow_write : (string * Sandbox_policy.kind) list;
       (** Existing paths only, each with what is at it. *)
   read_only : string list;
@@ -120,6 +124,9 @@ type error =
           staging directory would make read-only. *)
   | File_allow_write of string
       (** container, with an [allow_write] path that is a file. *)
+  | Root_allow_read  (** An [allow_read] path of [/]. *)
+  | File_allow_read of string
+      (** container, with an [allow_read] path that is a file. *)
 
 val describe_error : error -> string
 

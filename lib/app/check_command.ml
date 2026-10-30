@@ -24,6 +24,7 @@ let checker_sandbox ~on_progress ~bactrian_exe ~env ~mode scenarios =
               backend = (Sandbox.host_backend () :> Sandbox.backend);
               image = None;
               runtime = None;
+              allow_read = [];
               allow_write = [];
               deny_read = [];
               bactrian_exe;

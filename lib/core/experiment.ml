@@ -54,6 +54,7 @@ type t = {
   sandbox_backend : sandbox_backend;
   sandbox_image : string option;
   sandbox_runtime : sandbox_runtime option;
+  sandbox_allow_read : string list;
   sandbox_allow_write : string list;
   sandbox_deny_read : string list;
   faketime : bool;
@@ -369,6 +370,7 @@ type sandbox_block = {
   backend : sandbox_backend;
   image : string option;
   runtime : sandbox_runtime option;
+  allow_read : string list;
   allow_write : string list;
   deny_read : string list;
 }
@@ -412,6 +414,7 @@ let default_sandbox =
     backend = `Auto;
     image = None;
     runtime = None;
+    allow_read = [];
     allow_write = [];
     deny_read = [];
   }
@@ -430,10 +433,19 @@ let sandbox ~path c =
                 (enum ~what:"sandbox backend" sandbox_backends)
             and+ image = optional r "image" image
             and+ runtime = optional r "runtime" sandbox_runtime
+            and+ allow_read = default r "allow_read" [] (list non_empty_string)
             and+ allow_write =
               default r "allow_write" [] (list non_empty_string)
             and+ deny_read = default r "deny_read" [] (list non_empty_string) in
-            { mode; backend; image; runtime; allow_write; deny_read })
+            {
+              mode;
+              backend;
+              image;
+              runtime;
+              allow_read;
+              allow_write;
+              deny_read;
+            })
       in
       match (block.backend, block.image) with
       | `Vm, None ->
@@ -444,7 +456,7 @@ let sandbox ~path c =
   | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ ->
       fail ~path
         "expected auto, strict, off or a mapping {mode, backend, image, \
-         runtime, allow_write, deny_read}"
+         runtime, allow_read, allow_write, deny_read}"
 
 let reserved_env =
   [
@@ -587,6 +599,7 @@ let decode c =
         sandbox_backend = sandbox_block.backend;
         sandbox_image = sandbox_block.image;
         sandbox_runtime = sandbox_block.runtime;
+        sandbox_allow_read = sandbox_block.allow_read;
         sandbox_allow_write = sandbox_block.allow_write;
         sandbox_deny_read = sandbox_block.deny_read;
         faketime;

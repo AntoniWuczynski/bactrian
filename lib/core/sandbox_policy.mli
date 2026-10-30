@@ -32,6 +32,10 @@ type input = {
           even [temp_dir]. *)
   temp_dir : string;
       (** The run's or the checker's temporary directory. Writable. *)
+  allow_read : string list;
+      (** More readable paths outside the project ([sandbox.allow_read]). The
+          virtual machine shows them read-only, and every backend hides the
+          [.env] files at the root of each, as it does the project's. *)
   allow_write : string list;
       (** More writable paths ([sandbox.allow_write]). *)
   deny_read : string list;  (** More unreadable paths ([sandbox.deny_read]). *)
@@ -71,11 +75,12 @@ val deny_list :
     list of design §5.3 expanded against [home], [project_root] and
     [bactrian_dir] (credential directories and files under [home], the project's
     [.env] files, [.bactrian/ca], [.bactrian/blobs], [.bactrian/experiments],
-    [.bactrian/ledger.jsonl] and [.bactrian/runs]), then [deny_read].
-    [credentials] (default: [input.platform]) is the platform whose credential
-    paths are listed: the virtual machine is Linux, but the home it might show
-    is the host's. A run's own state and temporary directories stay readable
-    even when they sit under [.bactrian/runs], except for paths in [deny_read].
+    [.bactrian/ledger.jsonl] and [.bactrian/runs]), the same [.env] files at the
+    root of each [allow_read] path, then [deny_read]. [credentials] (default:
+    [input.platform]) is the platform whose credential paths are listed: the
+    virtual machine is Linux, but the home it might show is the host's. A run's
+    own state and temporary directories stay readable even when they sit under
+    [.bactrian/runs], except for paths in [deny_read].
 
     [resolve] (default: the identity) gives a default path with its symbolic
     links resolved. Where that differs, the resolved path is denied, because

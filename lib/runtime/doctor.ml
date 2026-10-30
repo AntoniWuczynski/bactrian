@@ -212,6 +212,7 @@ let sandbox_probe ~env ~bactrian_exe (target : target option) () =
             backend;
             image;
             runtime;
+            allow_read = [];
             allow_write = [];
             deny_read = [];
             bactrian_exe;

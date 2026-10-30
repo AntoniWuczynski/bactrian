@@ -30,6 +30,8 @@ val prepare :
 type layout = {
   project_root : string;
   bactrian_dir : string;
+  allow_read : string list;
+      (** Resolved; those that do not exist are skipped. *)
   allow_write : string list;
       (** Resolved; those that do not exist are skipped. *)
   read_only : string list;
