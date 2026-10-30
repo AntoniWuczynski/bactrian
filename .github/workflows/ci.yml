@@ -31,6 +31,16 @@ jobs:
           pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
           uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py
           uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py
+      # The TLS stack (zarith under mirage-crypto-ec) needs GMP, and its conf-*
+      # packages find it with pkg-config.
+      - if: runner.os == 'macOS'
+        run: |
+          command -v pkg-config || brew install pkgconf
+          brew list gmp > /dev/null 2>&1 || brew install gmp
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgmp-dev pkg-config
       - run: opam install . --deps-only --with-test --locked
       # The sandbox tests need bubblewrap and unprivileged user namespaces,
       # which Ubuntu's AppArmor restriction blocks by default. The clock tests
