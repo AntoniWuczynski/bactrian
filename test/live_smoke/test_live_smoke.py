@@ -86,6 +86,12 @@ class LiveSmoke(unittest.TestCase):
         for entry in tails:
             self.assertEqual((entry["input_tokens"], entry["output_tokens"]), (200, 20))
 
+    def test_compares_a_replays_cost_with_its_spend(self) -> None:
+        done = self.smoke(FAKE_REPLAY_COST_ERROR="0.5")
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("python until-divergence: meta.json cost", done.stderr)
+        self.assertIn("typescript until-divergence: meta.json cost", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

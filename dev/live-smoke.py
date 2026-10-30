@@ -36,9 +36,10 @@ Python one (`uv sync --locked` in examples/agents/python):
 For each agent it records one short turn, replays it offline, and replays it
 with `--mode until-divergence`. It checks that every run exits 0, that the
 record made at least one exchange and no request was refused for using a key
-other than bactrian's placeholder, that the cost in `meta.json` matches the
-settled spend in `.bactrian/ledger.jsonl`, and that no run directory and none
-of bactrian's output holds the first 12 characters of the real key. The spend
+other than bactrian's placeholder, that the cost in `meta.json` of every run,
+replays included, matches its settled spend in `.bactrian/ledger.jsonl`, and
+that no run directory and none of bactrian's output holds the first 12
+characters of the real key. The spend
 of every bactrian call is read from the ledger and logged whatever the exit
 code.
 
@@ -262,6 +263,15 @@ class Session:
         return found
 
 
+def check_cost(label: str, call: Call, session: Session) -> float:
+    """Checks that the run's meta.json cost is its settled spend, and returns that."""
+    cost = None if call.run_dir is None else cost_of(call.run_dir)
+    settled = sum(s.usd for s in call.spends)
+    if cost is None or not math.isclose(cost, settled, rel_tol=1e-9, abs_tol=1e-12):
+        session.problems.append(f"{label}: meta.json cost {cost} differs from the ledger's {settled}")
+    return settled
+
+
 def check_record(name: str, call: Call, session: Session, model: str) -> str | None:
     """Checks the record and returns its run id, or None when it cannot be replayed."""
     if call.code != 0:
@@ -278,10 +288,7 @@ def check_record(name: str, call: Call, session: Session, model: str) -> str | N
     if any(s.model != model for s in call.spends):
         models = sorted({s.model for s in call.spends})
         session.problems.append(f"{name}: the ledger priced {models}, expected {model}")
-    cost = None if call.run_dir is None else cost_of(call.run_dir)
-    settled = sum(s.usd for s in call.spends)
-    if cost is None or not math.isclose(cost, settled, rel_tol=1e-9, abs_tol=1e-12):
-        session.problems.append(f"{name}: meta.json cost {cost} differs from the ledger's {settled}")
+    settled = check_cost(name, call, session)
     print(f"{name}: record cost {settled} over {len(call.spends)} calls")
     return str_at(call.report, "run_id")
 
@@ -295,8 +302,9 @@ def smoke(name: str, command: list[str], session: Session, model: str) -> None:
         replay = session.invoke(f"{name} {label}", "replay", [run_id, *extra], command)
         if replay.code != 0:
             session.problems.append(f"{name}: {label} exited {replay.code}")
+        settled = check_cost(f"{name} {label}", replay, session)
         if replay.spends:
-            print(f"{name}: {label} went live, cost {sum(s.usd for s in replay.spends)}")
+            print(f"{name}: {label} went live, cost {settled}")
 
 
 def main() -> None:
