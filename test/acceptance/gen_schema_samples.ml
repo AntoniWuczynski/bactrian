@@ -3,10 +3,10 @@
    upstream in a process of its own, and everything it leaves behind is kept in
    the directory named by the first argument. Nothing leaves this machine.
 
-   The second argument is the validator's fixtures directory. Each scenario and
-   experiment fixture goes through the binary's own decoders too, which must
-   reject exactly the invalid ones, so the schemas and the decoders cannot drift
-   apart unnoticed. *)
+   The second argument is the validator's fixtures directory. Each scenario,
+   experiment and price file fixture goes through the binary's own decoders too,
+   which must reject exactly the invalid ones, so the schemas and the decoders
+   cannot drift apart unnoticed. *)
 
 open Bactrian_core
 open Acceptance_world
@@ -106,36 +106,60 @@ let absolute d =
 let config_error = 64
 
 (* Fixtures are copied beside an empty fixtures/ directory, which the valid
-   scenario refers to, and run from there. *)
+   scenario refers to, and run from there. A price file is only read as an
+   experiment's pricing, and only [run] loads it, so it gets an experiment of
+   its own that names it and a scenario to find. That run stops at the missing
+   spend cap and agent, long before anything starts or costs. *)
+let price_experiment price_file =
+  Printf.sprintf
+    {|version: 1
+name: pricing
+agent: { protocol: command, command: ["x"] }
+scenarios: ["s.yaml"]
+variants: { a: {} }
+pricing: %S
+|}
+    price_file
+
 let check_fixtures_agree ~dir ~fixtures ~env =
   let copy = Filename.concat dir "agreement" in
   write (Filename.concat copy "valid/fixtures/basic/.keep") "";
+  List.iter
+    (fun verdict ->
+      write
+        (Filename.concat copy (verdict ^ "/s.yaml"))
+        "version: 1\nid: s\nturns: [{ user: hi }]\n")
+    [ "valid"; "invalid" ];
   List.iter
     (fun (verdict, should_reject) ->
       let from = Filename.concat fixtures verdict in
       Array.iter
         (fun name ->
-          let command =
+          let relative = Filename.concat verdict name in
+          let args =
             match String.split_on_char '.' name with
             | "experiment" :: _ ->
-                Some (fun f -> [ "doctor"; "--experiment"; f; "--json" ])
+                Some [ "doctor"; "--experiment"; relative; "--json" ]
             | "scenario" :: _ ->
-                Some (fun f -> [ "check"; f; "--json"; "--sandbox"; "off" ])
+                Some [ "check"; relative; "--json"; "--sandbox"; "off" ]
+            | "price-file" :: _ ->
+                let experiment = relative ^ ".experiment.yaml" in
+                write (Filename.concat copy experiment) (price_experiment name);
+                Some [ "run"; experiment; "--sandbox"; "off"; "--json" ]
             | _ -> None
           in
           Option.iter
             (fun args ->
-              let relative = Filename.concat verdict name in
               write
                 (Filename.concat copy relative)
                 (read (Filename.concat from name));
-              let code, _ = cli ~dir:copy ~env (args relative) in
+              let code, _ = cli ~dir:copy ~env args in
               if code = config_error <> should_reject then (
                 Printf.eprintf "%s: bactrian %s the file (exit %d)\n" relative
                   (if should_reject then "accepted" else "rejected")
                   code;
                 exit 1))
-            command)
+            args)
         (Sys.readdir from))
     [ ("valid", false); ("invalid", true) ]
 

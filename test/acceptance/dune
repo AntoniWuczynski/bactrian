@@ -99,7 +99,8 @@
 ; upstream, and dev/schemas/validate.py (a uv project, `uv sync --locked` first)
 ; validates everything they left behind, then the hand-written fixtures, then
 ; mutated copies that must be rejected. Needs python3 for the agent and uv.
-; Run it with `dune build @schemas`.
+; Run it with `dune build @schemas`. `uv run --locked` creates or syncs
+; dev/schemas/.venv in the source tree, outside _build, which is gitignored.
 
 (rule
  (alias schemas)
