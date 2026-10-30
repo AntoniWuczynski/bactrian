@@ -358,7 +358,7 @@ static void t_no_such_agent(void) {
 
 static void t_term_passes_on(void) {
   struct relay r;
-  char *argv[] = {"relay", "--", "sh", "-c", "echo up; sleep 20", NULL};
+  char *argv[] = {"relay", "--", "sh", "-c", "echo up; exec sleep 20", NULL};
   start_relay(&r, argv);
   struct fr f;
   CHECK(until_frame(&r, &f, K_DATA, 0, 10000));
@@ -372,7 +372,10 @@ static void t_term_passes_on(void) {
 
 static void t_int_passes_on(void) {
   struct relay r;
-  char *argv[] = {"relay", "--", "sh", "-c", "echo up; sleep 20", NULL};
+  /* sleep replaces the shell, so it is sleep that gets the signal. With a
+     foreground child instead, dash can hold a SIGINT that arrives while it
+     forks or waits and leave sleep running. */
+  char *argv[] = {"relay", "--", "sh", "-c", "echo up; exec sleep 20", NULL};
   start_relay(&r, argv);
   struct fr f;
   CHECK(until_frame(&r, &f, K_DATA, 0, 10000));
@@ -380,7 +383,6 @@ static void t_int_passes_on(void) {
   unsigned char data[8];
   size_t n;
   int eof;
-  /* sh -c with a foreground sleep dies of the signal it was sent. */
   int code = collect(&r, data, &n, &eof, 10000);
   CHECK(code == 128 + 2 || code == 130);
   CHECK(relay_exit(&r, 5000) == code);
