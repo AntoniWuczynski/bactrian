@@ -619,6 +619,54 @@ let test_no_length () =
     "admitted with an empty body, then the next request" [ 400; 200 ]
     (statuses (until_closed ~port (head (call_headers "echo") ^ last)))
 
+(* A body whose length cannot be told is not read, and a request with both
+   length headers ends the connection, so a request inside the body, or one
+   after it, is not answered. *)
+let test_bad_framing () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
+  let inner =
+    H.request ~port (call_headers "echo")
+      (H.body ~id:9 "tools/call" (call_params "echo"))
+  in
+  let outer headers body =
+    let head =
+      String.concat ""
+        (List.map
+           (fun (k, v) -> k ^ ": " ^ v ^ "\r\n")
+           (("Host", Printf.sprintf "127.0.0.1:%d" port) :: headers))
+    in
+    until_closed ~port ("POST /mcp HTTP/1.1\r\n" ^ head ^ "\r\n" ^ body)
+  in
+  let framings =
+    [
+      ("Transfer-Encoding gzip", [ ("Transfer-Encoding", "gzip") ]);
+      ("Content-Length abc", [ ("Content-Length", "abc") ]);
+    ]
+  in
+  List.iter
+    (fun (name, framing) ->
+      Alcotest.(check (list int))
+        (name ^ ", refused") [ 403 ]
+        (statuses
+           (outer
+              (framing
+              @ [
+                  ("Origin", "https://evil.example");
+                  ("Content-Type", "text/plain");
+                ])
+              inner));
+      Alcotest.(check (list int))
+        (name ^ ", admitted") [ 400 ]
+        (statuses (outer (framing @ call_headers "echo") inner)))
+    framings;
+  Alcotest.(check (list int))
+    "both length headers, then a request" [ 400 ]
+    (statuses
+       (outer
+          ([ ("Transfer-Encoding", "chunked"); ("Content-Length", "5") ]
+          @ call_headers "echo")
+          ("0\r\n\r\n" ^ inner)))
+
 (* A connection that sends refused requests and never reads the answers, until
    the server stops reading them: its writes stall, or it has closed the
    connection. *)
@@ -689,6 +737,7 @@ let () =
           Alcotest.test_case "hanging up after a request during a call" `Quick
             test_pipelined_hang_up;
           Alcotest.test_case "a POST without a length" `Quick test_no_length;
+          Alcotest.test_case "a body of unusable length" `Quick test_bad_framing;
           Alcotest.test_case "clients that never read" `Quick test_stalled;
         ] );
     ]

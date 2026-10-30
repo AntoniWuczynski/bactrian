@@ -109,6 +109,24 @@ let media_type v =
   | first :: _ -> String.lowercase_ascii (String.trim first)
   | [] -> ""
 
+let present request name =
+  Option.is_some (Http.Header.get (Http.Request.headers request) name)
+
+(* A length header cohttp cannot use: [Transfer-Encoding] whose last coding is
+   not [chunked], or a [Content-Length] that is not a number. The body is then
+   of unknown length, which RFC 9112 (section 6.3) makes an error rather than
+   an empty body. *)
+let unusable_framing request =
+  match Http.Request.has_body request with
+  | `Unknown ->
+      present request "transfer-encoding" || present request "content-length"
+  | `No | `Yes -> false
+
+(* Both length headers: the connection must end after the answer (RFC 9112,
+   section 6.1). *)
+let ambiguous_framing request =
+  present request "transfer-encoding" && present request "content-length"
+
 let admit config request =
   let get = Http.Header.get (Http.Request.headers request) in
   let* () =
@@ -184,10 +202,17 @@ let admit config request =
           "Unauthorized: send Authorization: Bearer with the token serve-mcp \
            printed or BACTRIAN_MCP_TOKEN"
   in
-  match Option.map media_type (get "content-type") with
-  | Some "application/json" -> Ok ()
-  | Some _ | None ->
-      refuse_text 415 "Unsupported Media Type: send application/json"
+  let* () =
+    match Option.map media_type (get "content-type") with
+    | Some "application/json" -> Ok ()
+    | Some _ | None ->
+        refuse_text 415 "Unsupported Media Type: send application/json"
+  in
+  if unusable_framing request then
+    refuse_rpc 400
+      "Invalid Request: Transfer-Encoding or Content-Length gives no usable \
+       length"
+  else Ok ()
 
 let header_value v =
   let visible =
@@ -514,20 +539,26 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
   (* A request with neither Content-Length nor Transfer-Encoding has no body
      (RFC 9112, section 6.3), where cohttp would read one until the client
-     closes the connection. *)
+     closes the connection. A body of unusable length is not read at all, and
+     the connection ends after the answer, as it does when the request has both
+     headers, so that no byte is parsed as a next request. *)
   let body =
     match Http.Request.has_body request with
     | `Unknown -> Eio.Flow.string_source ""
     | `No | `Yes -> body
   in
+  let ending =
+    if unusable_framing request || ambiguous_framing request then closing
+    else Fun.id
+  in
   with_cors config request
   @@
   match admit config request with
-  | Error r -> refused body r
+  | Error r -> ending (refused body r)
   | Ok () ->
       admitted guard;
       let response, write =
-        admitted_answer ~server ~handlers request (read_body body)
+        ending (admitted_answer ~server ~handlers request (read_body body))
       in
       ( response,
         fun ic oc ->

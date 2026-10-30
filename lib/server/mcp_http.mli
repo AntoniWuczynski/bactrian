@@ -1,5 +1,5 @@
 (** [bactrian serve-mcp --http]: the MCP server over Streamable HTTP (decision
-    record 0016), on [127.0.0.1] only, at the endpoint [/mcp].
+    record 0021), on [127.0.0.1] only, at the endpoint [/mcp].
 
     Each POST carries one JSON-RPC message and is answered on its own: there are
     no sessions. Before anything else a request must name this server in its
@@ -10,7 +10,10 @@
     read and dropped, so the next request on the connection is parsed from its
     own start, and one longer than 64 KiB ends the connection after the answer,
     as a 413 does. A request with neither [Content-Length] nor
-    [Transfer-Encoding] has no body (RFC 9112, section 6.3).
+    [Transfer-Encoding] has no body (RFC 9112, section 6.3). One whose
+    [Transfer-Encoding] does not end in [chunked], or whose [Content-Length] is
+    not a number, is 400 once it is past the checks above, and one with both
+    headers is answered as usual. Both end the connection after the answer.
 
     A request whose [_meta] names 2026-07-28 must repeat its protocol version in
     [MCP-Protocol-Version] and its method in [Mcp-Method], and a [tools/call]
