@@ -316,19 +316,38 @@ let read_body body =
   match Eio.Buf_read.(take_all (of_flow ~max_size:max_body body)) with
   | text -> Ok text
   | exception Eio.Buf_read.Buffer_limit_exceeded ->
-      refuse
-        ~headers:[ json; ("connection", "close") ]
-        413
+      refuse ~headers:[ json ] 413
         (unidentified (-32600)
            (Printf.sprintf "Invalid Request: longer than %d bytes" max_body))
+
+(* Ends a connection. *)
+exception Hang_up
+
+(* An answer after which the server ends the connection. *)
+let closing ((response, write) : answer) : answer =
+  ( {
+      response with
+      headers = Http.Header.replace response.headers "connection" "close";
+    },
+    fun ic oc ->
+      write ic oc;
+      raise Hang_up )
+
+(* A refused request's body is read and dropped, so that the next request on
+   the connection starts where it should: unread, the body would be parsed as
+   one, which no check of this request's head would have seen. A longer body
+   ends the connection instead. *)
+let max_refused_body = 64 * 1024
+
+let refused body r =
+  match Eio.Buf_read.(take_all (of_flow ~max_size:max_refused_body body)) with
+  | (_ : string) -> of_rejection r
+  | exception Eio.Buf_read.Buffer_limit_exceeded -> closing (of_rejection r)
 
 let max_connections = 64
 
 (* cohttp buffers a request's head whole until it parses. *)
 let max_head = 64 * 1024
-
-(* Ends a connection. *)
-exception Hang_up
 
 (* The socket as the server reads it: by a deadline until a request is
    admitted, so a client that sends nothing, or a head byte by byte, holds no
@@ -365,7 +384,7 @@ let guarded = Eio.Flow.Pi.source (module Guarded)
 
 let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
   match read with
-  | Error r -> of_rejection r
+  | Error r -> closing (of_rejection r)
   | Ok text -> (
       match Mcp_msg.decode text with
       | Error e -> message ~status:400 (Mcp_dispatch.undecodable e)
@@ -402,7 +421,7 @@ let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
 let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
   match admit config request with
-  | Error r -> of_rejection r
+  | Error r -> refused body r
   | Ok () ->
       admitted guard;
       let response, write =
@@ -412,6 +431,23 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
         fun ic oc ->
           write ic oc;
           waiting guard )
+
+(* Closing with bytes unread would reset the connection, which can destroy the
+   answer before the client reads it, so the server stops sending and drops
+   what still comes, for a while. *)
+let linger ~clock flow =
+  Eio.Flow.shutdown flow `Send;
+  let rest = Eio.Buf_read.of_flow ~max_size:max_head flow in
+  let rec drop () =
+    Eio.Buf_read.ensure rest 1;
+    Eio.Buf_read.consume rest (Eio.Buf_read.buffered_bytes rest);
+    drop ()
+  in
+  match
+    Eio.Time.with_timeout clock 2. (fun () ->
+        match drop () with () -> Ok () | exception End_of_file -> Ok ())
+  with
+  | Ok () | Error `Timeout -> ()
 
 let serve ~server ~handlers ~stop ~log ~clock ?(head_timeout = 30.) config
     socket =
@@ -435,12 +471,16 @@ let serve ~server ~handlers ~stop ~log ~clock ?(head_timeout = 30.) config
     let callback _conn request body =
       answer ~server ~handlers ~guard:g config request body
     in
-    Eio.Buf_write.with_flow flow @@ fun output ->
-    Cohttp_eio.Server.callback
-      (Cohttp_eio.Server.make_expert ~callback ())
-      (sw, peer)
-      (Eio.Buf_read.of_flow ~max_size:max_head (Eio.Resource.T (g, guarded)))
-      output
+    match
+      Eio.Buf_write.with_flow flow @@ fun output ->
+      Cohttp_eio.Server.callback
+        (Cohttp_eio.Server.make_expert ~callback ())
+        (sw, peer)
+        (Eio.Buf_read.of_flow ~max_size:max_head (Eio.Resource.T (g, guarded)))
+        output
+    with
+    | () -> ()
+    | exception Hang_up -> linger ~clock flow
   in
   match
     Interrupt.run ~stop (fun () ->

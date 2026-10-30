@@ -6,7 +6,10 @@
     [Host] header, come from no [Origin] or an allowed one (403 otherwise, so a
     page in a browser cannot drive the server through DNS rebinding), be a POST
     to [/mcp] (404, and 405 for another method), carry the bearer token (401)
-    and JSON (415) of at most 16 MiB (413).
+    and JSON (415) of at most 16 MiB (413). The body of a refused request is
+    read and dropped, so the next request on the connection is parsed from its
+    own start, and one longer than 64 KiB ends the connection after the answer,
+    as a 413 does.
 
     A request whose [_meta] names 2026-07-28 must repeat its protocol version in
     [MCP-Protocol-Version] and its method in [Mcp-Method], and a [tools/call]

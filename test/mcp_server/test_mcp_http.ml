@@ -365,6 +365,7 @@ let until_closed ~port text =
       | exception Unix.Unix_error ((ECONNRESET | EPIPE), _, _) -> "")
 
 let statuses got = List.map (fun (r : H.response) -> r.status) (H.answers got)
+let status_list = List.map (fun (r : H.response) -> r.status)
 
 (* A connection gets bounded time until its request is admitted, and
    an admitted one gets what it needs. *)
@@ -393,6 +394,72 @@ let test_bounds () =
          H.send ~port (call_headers "echo") (H.body ~id:2 "tools/call" padded)))
       .status
 
+let answer_id (r : H.response) =
+  let int : Mcp_msg.id -> int option = function
+    | Int_id i -> Some i
+    | String_id _ -> None
+  in
+  match H.message r with
+  | Response { id; _ } -> int id
+  | Error_response { id; _ } -> Option.bind id int
+  | Request _ | Notification _ -> None
+
+(* The body of a refused request is dropped, never parsed as the next request,
+   which no check of the refused head saw. *)
+let test_refused_body () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  let echo id =
+    H.request ~close:false ~port (call_headers "echo")
+      (H.body ~id "tools/call" (call_params "echo"))
+  in
+  let smuggling =
+    H.request ~close:false ~port
+      [
+        ("Host", "evil.example");
+        ("Origin", "http://evil.example");
+        ("Content-Type", "text/plain");
+      ]
+      (echo 7)
+  in
+  let last =
+    H.request ~port (call_headers "echo")
+      (H.body ~id:8 "tools/call" (call_params "echo"))
+  in
+  let got = H.answers (until_closed ~port (smuggling ^ last)) in
+  Alcotest.(check (list int))
+    "the refusal, then the next request" [ 403; 200 ] (status_list got);
+  Alcotest.(check (list (option int)))
+    "the smuggled request is not run" [ None; Some 8 ] (List.map answer_id got);
+  let long =
+    H.request ~close:false ~port
+      (List.filter
+         (fun (k, _) -> not (String.equal k "Authorization"))
+         (call_headers "echo"))
+      (String.make 100_000 'x')
+  in
+  let got = H.answers (until_closed ~port (long ^ last)) in
+  Alcotest.(check (list int))
+    "a long refused body ends the connection" [ 401 ] (status_list got);
+  Alcotest.(check (list (option string)))
+    "and says so" [ Some "close" ]
+    (List.map (fun r -> H.header r "connection") got)
+
+let test_too_long () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  let got =
+    H.answers
+      (until_closed ~port
+         (H.request ~close:false ~port (call_headers "echo")
+            (String.make ((16 * 1024 * 1024) + 1) ' ')
+         ^ H.request ~port (call_headers "echo")
+             (H.body ~id:1 "tools/call" (call_params "echo"))))
+  in
+  Alcotest.(check (list int))
+    "413, and the connection ends" [ 413 ] (status_list got);
+  Alcotest.(check (list (option string)))
+    "as it says" [ Some "close" ]
+    (List.map (fun r -> H.header r "connection") got)
+
 let test_endless_head () =
   with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
   let pad =
@@ -419,5 +486,7 @@ let () =
           Alcotest.test_case "hanging up cancels" `Quick test_hang_up;
           Alcotest.test_case "bounds before admission" `Quick test_bounds;
           Alcotest.test_case "an endless head" `Quick test_endless_head;
+          Alcotest.test_case "a refused body" `Quick test_refused_body;
+          Alcotest.test_case "a body too long" `Quick test_too_long;
         ] );
     ]
