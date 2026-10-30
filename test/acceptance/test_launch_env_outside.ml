@@ -6,9 +6,8 @@
    The real binary is started as [bactrian replay] with the sentinel in its
    environment, which covers bactrian itself, the agent and, on Linux, the
    forwarder. An MCP stdio server and a checker are started by bactrian only in
-   a live run, which this build cannot make without the TLS connector, so they
-   come from a run through the library in this process, as in the other
-   acceptance tests. A positive control shows that the method does see a
+   a live run, so they come from a run through the library in this process, as
+   in the other acceptance tests. A positive control shows that the method does see a
    sentinel in a process started with it. *)
 
 open Bactrian_core
