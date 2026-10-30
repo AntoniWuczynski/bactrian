@@ -94,6 +94,9 @@ let test_stale () =
     Unix.mkdir staging 0o700;
     Unix.mkdir (Filename.concat staging "0") 0o755;
     write (Filename.concat staging "owner") text;
+    let heartbeat = Filename.concat (Filename.concat runs run) "heartbeat" in
+    Unix.mkdir heartbeat 0o755;
+    write (Filename.concat heartbeat "beat") "";
     staging
   in
   let gone = owned "gone" (Printf.sprintf "%d\t%s\n" dead host)
@@ -107,7 +110,14 @@ let test_stale () =
     (Sandbox_vm.remove_stale_staging ~runs_dir:runs);
   Alcotest.(check (list bool))
     "what is left" [ false; true; true ]
-    (List.map Sys.file_exists [ gone; live; elsewhere ])
+    (List.map Sys.file_exists [ gone; live; elsewhere ]);
+  (* The heartbeat directory of a run whose staging goes goes with it. *)
+  let heartbeat run = Filename.concat (Filename.concat runs run) "heartbeat" in
+  Alcotest.(check (list bool))
+    "heartbeat directories left" [ false; true; true ]
+    (List.map
+       (fun run -> Sys.file_exists (heartbeat run))
+       [ "gone"; "live"; "elsewhere" ])
 
 (* Just before the container is created, the entries bound again beside a
    hidden file are looked at once more: one swapped since it was listed stops

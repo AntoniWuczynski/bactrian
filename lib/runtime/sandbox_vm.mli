@@ -59,7 +59,8 @@ val remove_stale_staging : runs_dir:string -> string list
 (** Removes the staging directory of each run under [runs_dir] whose bactrian,
     as the directory records it, is of this host and no longer alive
     ({!Vm_runtime.owner_gone}): one a bactrian killed with SIGKILL left behind.
-    Gives the directories removed. *)
+    The run's heartbeat directory goes with it. Gives the staging directories
+    removed. *)
 
 val make_stages :
   run_dir:string -> Bactrian_core.Vm_args.stage list -> (unit, string) result

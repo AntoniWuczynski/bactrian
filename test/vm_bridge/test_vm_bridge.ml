@@ -234,6 +234,10 @@ let test_parse () =
          "run";
        ]);
   Alcotest.(check (result string string))
+    "a heartbeat file in the wrong directory"
+    (Error {|unexpected argument "heartbeat=/p/notes/beat"|})
+    (parsed [ "heartbeat=/p/notes/beat"; "container=c"; "--"; "docker" ]);
+  Alcotest.(check (result string string))
     "a heartbeat file that is not one"
     (Error {|unexpected argument "heartbeat=/p/notes"|})
     (parsed [ "heartbeat=/p/notes"; "container=c"; "--"; "docker" ]);

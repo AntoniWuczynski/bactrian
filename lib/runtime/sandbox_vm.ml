@@ -111,15 +111,18 @@ let heartbeat_dir ~run_dir = Filename.concat run_dir "heartbeat"
 let heartbeat_file ~run_dir = Filename.concat (heartbeat_dir ~run_dir) "beat"
 
 let make_heartbeat ~run_dir =
+  let failed why =
+    Error
+      (Printf.sprintf "the heartbeat file %s cannot be made: %s"
+         (heartbeat_file ~run_dir) why)
+  in
   match
     Unix.mkdir (heartbeat_dir ~run_dir) 0o755;
     write_file ~perm:0o644 (heartbeat_file ~run_dir) ""
   with
   | () -> Ok ()
-  | exception (Unix.Unix_error _ | Sys_error _) ->
-      Error
-        (Printf.sprintf "the heartbeat file %s cannot be made"
-           (heartbeat_file ~run_dir))
+  | exception Unix.Unix_error (e, _, _) -> failed (Unix.error_message e)
+  | exception Sys_error m -> failed m
 
 (* Who made a staging directory, "PID\tHOST", in a file beside the numbered
    directories, which no mount shows. *)
@@ -140,7 +143,10 @@ let remove_stale_staging ~runs_dir =
               match String.split_on_char '\t' (String.trim text) with
               | [ pid; host ] when Vm_runtime.owner_gone ~pid ~host -> (
                   match Proc_util.remove_tree (staging_dir ~run_dir) with
-                  | () -> Some (staging_dir ~run_dir)
+                  | () ->
+                      (try Proc_util.remove_tree (heartbeat_dir ~run_dir)
+                       with Unix.Unix_error _ | Sys_error _ -> ());
+                      Some (staging_dir ~run_dir)
                   | exception (Unix.Unix_error _ | Sys_error _) -> None)
               | _ -> None))
         (Array.to_list runs)

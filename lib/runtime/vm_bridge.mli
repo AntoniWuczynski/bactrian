@@ -67,8 +67,9 @@ type config = {
       (** The run's staging directory (an absolute path ending in [staging]),
           removed with the container when bactrian has gone. *)
   heartbeat : string option;
-      (** The run's heartbeat file (an absolute path ending in [beat]), passed
-          to {!run} as [beat]. *)
+      (** The run's heartbeat file (an absolute path ending in
+          [heartbeat/beat]), passed to {!run} as [beat]. Its directory is
+          removed with the container when bactrian has gone. *)
   argv : string list;  (** The runtime's [run] command. Non-empty. *)
 }
 
@@ -93,4 +94,5 @@ val main :
     with [kill_signals] the bridge sends them to the container), and the bridge
     relays until the agent has gone. When its parent dies (bactrian killed with
     SIGKILL) it stops the container with [rm -f], which the runtime's client
-    alone would leave running, and removes [staging]. *)
+    alone would leave running, and removes [staging] and the directory of the
+    heartbeat file. *)

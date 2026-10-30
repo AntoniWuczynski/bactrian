@@ -321,10 +321,14 @@ let parse args =
           when (not (Filename.is_relative dir))
                && String.equal (Filename.basename dir) "staging" ->
             go { c with staging = Some dir } rest
-        (* Only a run's heartbeat file, which the bridge touches. *)
+        (* Only a run's heartbeat file, which the bridge touches and, with the
+           directory it is in, removes. *)
         | None, None, None, Some file
           when (not (Filename.is_relative file))
-               && String.equal (Filename.basename file) "beat" ->
+               && String.equal (Filename.basename file) "beat"
+               && String.equal
+                    (Filename.basename (Filename.dirname file))
+                    "heartbeat" ->
             go { c with heartbeat = Some file } rest
         | None, (Some _ | None), (Some _ | None), (Some _ | None) ->
             Error (Printf.sprintf "unexpected argument %S" a))
@@ -437,9 +441,10 @@ let main ~env ~log config =
   | `Done (Error e) -> Error (describe_error e)
   | `Orphaned ->
       let (_ : bool) = to_container [ "rm"; "-f" ] in
-      Option.iter
+      List.iter
         (fun dir ->
           try Proc_util.remove_tree dir
           with Unix.Unix_error _ | Sys_error _ -> ())
-        config.staging;
+        (Option.to_list config.staging
+        @ Option.to_list (Option.map Filename.dirname config.heartbeat));
       Error "bactrian has gone, so the container was removed"
