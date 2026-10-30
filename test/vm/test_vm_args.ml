@@ -66,6 +66,13 @@ let kinds =
   List.map (fun p ->
       (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
 
+let read_kinds =
+  List.map (fun p ->
+      ( p,
+        if String.ends_with ~suffix:".sock" p then `Special
+        else if String.ends_with ~suffix:".txt" p then `File
+        else `Dir ))
+
 let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
     ?(read_only = []) ?faketime ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
@@ -92,7 +99,7 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
     runs_dir = "/p/.bactrian/runs";
     state_dir = "/p/.bactrian/runs/r1/state";
     temp_dir = "/p/.bactrian/runs/r1/tmp";
-    allow_read = kinds allow_read;
+    allow_read = read_kinds allow_read;
     allow_write = kinds allow_write;
     read_only;
     deny;
@@ -819,6 +826,20 @@ let test_readable_paths () =
        (fun s -> contains s "source=/p/lib,")
        (mounts (input ~read_only:[ "/p/lib" ] ~allow_write:[ "/p/lib" ] ())))
 
+(* A host backend keeps an allow_read under an allow_write path writable, so the
+   virtual machine does not make it read-only. *)
+let test_readable_under_writable () =
+  Alcotest.(check (list string))
+    "no read-only bind over a writable one"
+    [ "type=bind,source=/w,target=/w" ]
+    (List.filter
+       (fun s -> contains s "source=/w")
+       (mounts (input ~allow_read:[ "/w/ref" ] ~allow_write:[ "/w" ] ())));
+  Alcotest.(check bool)
+    "a sibling stays read-only" true
+    (List.mem "type=bind,source=/w2/ref,target=/w2/ref,readonly"
+       (mounts (input ~allow_read:[ "/w2/ref" ] ~allow_write:[ "/w" ] ())))
+
 let test_readable_workdir () =
   Alcotest.(check bool)
     "an agent may work in a directory it can read" true
@@ -868,6 +889,15 @@ let test_readable_errors () =
     "sandbox.allow_read /r/notes.txt is a file, which container cannot mount \
      (it mounts directories only). Fix: name its directory"
     (error (input ~kind:`Container ~allow_read:[ "/r/notes.txt" ] ()));
+  List.iter
+    (fun kind ->
+      Alcotest.(check string)
+        "a socket"
+        "sandbox.allow_read /r/daemon.sock is a socket, a pipe or a device, \
+         and a read-only mount does not stop connect() on a socket. Fix: name \
+         a directory of files"
+        (error (input ~kind ~allow_read:[ "/r/daemon.sock" ] ())))
+    [ `Docker; `Container ];
   Alcotest.(check bool)
     "Docker mounts a file" true
     (List.mem "type=bind,source=/r/notes.txt,target=/r/notes.txt,readonly"
@@ -941,6 +971,8 @@ let () =
           Alcotest.test_case "readable paths" `Quick test_readable_paths;
           Alcotest.test_case "readable working directory" `Quick
             test_readable_workdir;
+          Alcotest.test_case "readable under writable" `Quick
+            test_readable_under_writable;
           Alcotest.test_case "readable refusals" `Quick test_readable_errors;
           Alcotest.test_case "masks over mounts" `Quick test_masks_over_mounts;
           Alcotest.test_case "nested masks" `Quick test_nested_masks;

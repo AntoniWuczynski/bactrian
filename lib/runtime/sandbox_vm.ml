@@ -117,12 +117,13 @@ let list_dir ~masked dir =
 
 (* What is at each existing allow_read or allow_write path: container mounts
    directories only. *)
-let path_kinds paths =
+let path_kinds ~special paths =
   List.filter_map
     (fun p ->
       match (Unix.stat p).st_kind with
       | S_DIR -> Some (p, `Dir)
-      | S_REG | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> Some (p, `File)
+      | S_REG | S_LNK -> Some (p, `File)
+      | S_CHR | S_BLK | S_FIFO | S_SOCK -> Some (p, special)
       | exception Unix.Unix_error _ -> None)
     paths
 
@@ -181,8 +182,8 @@ let invocation t layout ~run_id ~name ~run_dir ~env_file ~state_dir ~temp_dir
          runs_dir = Filename.concat layout.bactrian_dir "runs";
          state_dir;
          temp_dir;
-         allow_read = path_kinds layout.allow_read;
-         allow_write = path_kinds layout.allow_write;
+         allow_read = path_kinds ~special:`Special layout.allow_read;
+         allow_write = path_kinds ~special:`File layout.allow_write;
          read_only = layout.read_only;
          deny = layout.deny;
          staging_dir = staging_dir ~run_dir;

@@ -19,6 +19,8 @@ type entry = {
   masked_file : bool;
 }
 
+type read_kind = [ Sandbox_policy.kind | `Special ]
+
 type input = {
   kind : Experiment.sandbox_runtime;
   runtime : string;
@@ -35,7 +37,7 @@ type input = {
   runs_dir : string;
   state_dir : string;
   temp_dir : string;
-  allow_read : (string * Sandbox_policy.kind) list;
+  allow_read : (string * read_kind) list;
   allow_write : (string * Sandbox_policy.kind) list;
   read_only : string list;
   deny : (string * Sandbox_policy.kind) list;
@@ -78,6 +80,7 @@ type error =
   | File_allow_write of string
   | Root_allow_read
   | File_allow_read of string
+  | Special_allow_read of string
   | System_allow_read of string
   | Bactrian_allow_read of string
 
@@ -140,6 +143,12 @@ let describe_error = function
       Printf.sprintf
         "sandbox.allow_read %s is a file, which container cannot mount (it \
          mounts directories only). Fix: name its directory"
+        path
+  | Special_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is a socket, a pipe or a device, and a \
+         read-only mount does not stop connect() on a socket. Fix: name a \
+         directory of files"
         path
   | System_allow_read path ->
       Printf.sprintf
@@ -329,7 +338,17 @@ let plain_mounts i =
           (List.map (fun p -> (true, true, p)) [ i.state_dir; i.temp_dir ]
           @ List.map (fun p -> (true, false, p)) i.read_only
           @ List.map (fun (p, _) -> (false, true, p)) i.allow_write
-          @ List.map (fun (p, _) -> (false, false, p)) i.allow_read))
+          @ List.filter_map
+              (fun (p, _) ->
+                (* On Seatbelt and bubblewrap an allow_read under a writable
+                   path stays writable, so it is not made read-only here. *)
+                if
+                  List.exists
+                    (fun w -> (not (String.equal w p)) && within ~dir:w p)
+                    (i.state_dir :: i.temp_dir :: List.map fst i.allow_write)
+                then None
+                else Some (false, false, p))
+              i.allow_read))
   in
   let masks =
     List.map (fun d -> Mask_dir d) dirs @ List.map (fun f -> Mask_file f) files
@@ -519,12 +538,15 @@ let argv i =
   in
   let* () =
     all
-      (fun (p, _) ->
+      (fun (p, k) ->
         if String.equal p "/" then Error Root_allow_read
         else if List.exists (fun d -> within ~dir:d p) system_dirs then
           Error (System_allow_read p)
         else if within ~dir:i.bactrian_dir p then Error (Bactrian_allow_read p)
-        else Ok ())
+        else
+          match k with
+          | `Special -> Error (Special_allow_read p)
+          | `Dir | `File | `Absent -> Ok ())
       i.allow_read
   in
   let* () =
@@ -544,7 +566,7 @@ let argv i =
           (fun (p, k) ->
             match k with
             | `File -> Error (File_allow_read p)
-            | `Dir | `Absent -> Ok ())
+            | `Dir | `Absent | `Special -> Ok ())
           i.allow_read
   in
   let* () = all check_port i.forwards in

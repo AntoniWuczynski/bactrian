@@ -66,6 +66,10 @@ type entry = {
 }
 (** An entry of a directory that holds a masked file. *)
 
+type read_kind = [ Sandbox_policy.kind | `Special ]
+(** What is at an [allow_read] path: a socket, a pipe or a device is [`Special].
+*)
+
 type input = {
   kind : Experiment.sandbox_runtime;
   runtime : string;  (** The runtime's executable, such as [docker]. *)
@@ -92,10 +96,11 @@ type input = {
           [temp_dir] visible, and no other mask does. *)
   state_dir : string;
   temp_dir : string;
-  allow_read : (string * Sandbox_policy.kind) list;
+  allow_read : (string * read_kind) list;
       (** Existing paths only, each with what is at it. Shown read-only. A path
-          that is another mount's, or under a directory mask, is not mounted
-          again. *)
+          that is another mount's, under a directory mask or under a writable
+          path ([allow_write], the run's own directories) is not mounted again.
+      *)
   allow_write : (string * Sandbox_policy.kind) list;
       (** Existing paths only, each with what is at it. *)
   read_only : string list;
@@ -110,7 +115,7 @@ type input = {
   forwards : int list;  (** Ports the relay listens on, from 1 to 65535. *)
   faketime : faketime option;
       (** For an [Agent]: the relay starts its clock at [epoch], with the
-          library of the image's C library (decision 0021). Docker mounts [dir]
+          library of the image's C library (decision 0025). Docker mounts [dir]
           read-only at [/bactrian/faketime]. container shows it through the
           mount of the relay's directory, so [dir] must lie beside the relay. *)
   command : command;
@@ -145,6 +150,8 @@ type error =
   | Root_allow_read  (** An [allow_read] path of [/]. *)
   | File_allow_read of string
       (** container, with an [allow_read] path that is a file. *)
+  | Special_allow_read of string
+      (** An [allow_read] path that is a socket, a pipe or a device. *)
   | System_allow_read of string
       (** An [allow_read] path at or under [/run], [/var/run], [/tmp], [/proc],
           [/sys] or [/dev]: a read-only bind does not stop [connect()] on a
