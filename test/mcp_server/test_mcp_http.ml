@@ -621,7 +621,8 @@ let test_no_length () =
 
 (* A body whose length cannot be told is not read, and a request with both
    length headers ends the connection, so a request inside the body, or one
-   after it, is not answered. *)
+   after it, is not answered. A Content-Length that is not plain digits, or
+   that repeats with another value, has no usable length either. *)
 let test_bad_framing () =
   with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
   let inner =
@@ -637,10 +638,22 @@ let test_bad_framing () =
     in
     until_closed ~port ("POST /mcp HTTP/1.1\r\n" ^ head ^ "\r\n" ^ body)
   in
+  let inner_length = string_of_int (String.length inner) in
   let framings =
     [
       ("Transfer-Encoding gzip", [ ("Transfer-Encoding", "gzip") ]);
       ("Content-Length abc", [ ("Content-Length", "abc") ]);
+      ("Content-Length -5", [ ("Content-Length", "-5") ]);
+      ("Content-Length -1", [ ("Content-Length", "-1") ]);
+      ("Content-Length +5", [ ("Content-Length", "+5") ]);
+      ("Content-Length 0x10", [ ("Content-Length", "0x10") ]);
+      ("Content-Length 1_0", [ ("Content-Length", "1_0") ]);
+      ("Content-Length 5, 5", [ ("Content-Length", "5, 5") ]);
+      ("Content-Length empty", [ ("Content-Length", "") ]);
+      ( "Content-Length twice, then 0",
+        [ ("Content-Length", inner_length); ("Content-Length", "0") ] );
+      ( "Content-Length 0, then twice",
+        [ ("Content-Length", "0"); ("Content-Length", inner_length) ] );
     ]
   in
   List.iter
@@ -665,7 +678,20 @@ let test_bad_framing () =
        (outer
           ([ ("Transfer-Encoding", "chunked"); ("Content-Length", "5") ]
           @ call_headers "echo")
-          ("0\r\n\r\n" ^ inner)))
+          ("0\r\n\r\n" ^ inner)));
+  let call = H.body ~id:10 "tools/call" (call_params "echo") in
+  let length = string_of_int (String.length call) in
+  Alcotest.(check (list int))
+    "the same Content-Length twice is one length" [ 200 ]
+    (statuses
+       (outer
+          (call_headers "echo"
+          @ [
+              ("Content-Length", length);
+              ("Content-Length", length);
+              ("Connection", "close");
+            ])
+          call))
 
 (* A connection that sends refused requests and never reads the answers, until
    the server stops reading them: its writes stall, or it has closed the

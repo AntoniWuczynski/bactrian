@@ -112,11 +112,29 @@ let media_type v =
 let present request name =
   Option.is_some (Http.Header.get (Http.Request.headers request) name)
 
+(* A [Content-Length] that is not one run of digits, with no sign, space or
+   radix prefix, or that appears more than once with differing values. cohttp
+   reads one of the repeats, so a proxy or a hidden request could be framed by
+   another. RFC 9112 (section 6.3) lets a recipient refuse a comma-separated
+   list, which is refused here as not a number. *)
+let invalid_length request =
+  match
+    Http.Header.get_multi (Http.Request.headers request) "content-length"
+  with
+  | [] -> false
+  | first :: rest ->
+      not
+        ((not (String.equal first ""))
+        && String.for_all (fun c -> c >= '0' && c <= '9') first
+        && List.for_all (String.equal first) rest)
+
 (* A length header cohttp cannot use: [Transfer-Encoding] whose last coding is
-   not [chunked], or a [Content-Length] that is not a number. The body is then
-   of unknown length, which RFC 9112 (section 6.3) makes an error rather than
-   an empty body. *)
+   not [chunked], or a [Content-Length] that [invalid_length] refuses. The body
+   is then of unknown length, which RFC 9112 (section 6.3) makes an error
+   rather than an empty body. *)
 let unusable_framing request =
+  invalid_length request
+  ||
   match Http.Request.has_body request with
   | `Unknown ->
       present request "transfer-encoding" || present request "content-length"
@@ -536,9 +554,11 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
      the connection ends after the answer, as it does when the request has both
      headers, so that no byte is parsed as a next request. *)
   let body =
-    match Http.Request.has_body request with
-    | `Unknown -> Eio.Flow.string_source ""
-    | `No | `Yes -> body
+    if invalid_length request then Eio.Flow.string_source ""
+    else
+      match Http.Request.has_body request with
+      | `Unknown -> Eio.Flow.string_source ""
+      | `No | `Yes -> body
   in
   let ending =
     if unusable_framing request || ambiguous_framing request then closing
