@@ -11,12 +11,10 @@ let linux_bundles =
     "/etc/ssl/cert.pem";
   ]
 
-let macos_keychains =
-  [
-    "/System/Library/Keychains/SystemRootCertificates.keychain";
-    "/Library/Keychains/System.keychain";
-  ]
+let macos_roots_keychain =
+  "/System/Library/Keychains/SystemRootCertificates.keychain"
 
+let macos_admin_keychain = "/Library/Keychains/System.keychain"
 let security = "/usr/bin/security"
 
 (* Every macOS has this file, and Linux does not. *)
@@ -43,32 +41,43 @@ let keychain ~process_mgr path =
   | text -> Ok text
   | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
 
-let system ~process_mgr =
-  let macos = macos () in
-  let roots =
-    if macos then
-      List.concat_map
-        (fun path ->
-          Result.fold ~ok:decode
-            ~error:(fun (_ : string) -> [])
-            (keychain ~process_mgr path))
-        macos_keychains
-    else
-      Option.value ~default:[]
-        (List.find_map
-           (fun path ->
-             match Result.map decode (read_file path) with
-             | Ok (_ :: _ as roots) -> Some roots
-             | Ok [] | Error _ -> None)
-           linux_bundles)
-  in
-  match roots with
-  | [] ->
+let none_found paths =
+  Error
+    (Printf.sprintf "no trusted root certificates were found in %s"
+       (String.concat ", " paths))
+
+(* The admin keychain may hold no certificate, which [security] reports as a
+   failure, so only the system roots keychain must be read. *)
+let macos_roots ~process_mgr =
+  match keychain ~process_mgr macos_roots_keychain with
+  | Error reason ->
       Error
-        (Printf.sprintf "no trusted root certificates were found in %s"
-           (String.concat ", "
-              (if macos then macos_keychains else linux_bundles)))
-  | _ :: _ -> Ok roots
+        (Printf.sprintf "%s cannot be read with %s: %s" macos_roots_keychain
+           security reason)
+  | Ok text -> (
+      match decode text with
+      | [] -> none_found [ macos_roots_keychain ]
+      | _ :: _ as roots ->
+          Ok
+            (roots
+            @ Result.fold ~ok:decode
+                ~error:(fun (_ : string) -> [])
+                (keychain ~process_mgr macos_admin_keychain)))
+
+let linux_roots () =
+  match
+    List.find_map
+      (fun path ->
+        match Result.map decode (read_file path) with
+        | Ok (_ :: _ as roots) -> Some roots
+        | Ok [] | Error _ -> None)
+      linux_bundles
+  with
+  | Some roots -> Ok roots
+  | None -> none_found linux_bundles
+
+let system ~process_mgr =
+  if macos () then macos_roots ~process_mgr else linux_roots ()
 
 let extra () =
   match Sys.getenv_opt extra_variable with

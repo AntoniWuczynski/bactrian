@@ -19,8 +19,12 @@ val extra_variable : string
 val linux_bundles : string list
 (** The bundle paths tried on Linux, in order. *)
 
-val macos_keychains : string list
-(** The keychains read on macOS. *)
+val macos_roots_keychain : string
+(** The system roots keychain, read on macOS. It must give a certificate. *)
+
+val macos_admin_keychain : string
+(** The keychain of certificates an administrator added, also read on macOS.
+    Nothing is taken from it when [security] cannot read it. *)
 
 type t = {
   system : X509.Certificate.t list;  (** The system's root certificates. *)
@@ -31,5 +35,6 @@ type t = {
 val load : process_mgr:_ Eio.Process.mgr -> (t, string) result
 (** The system's root certificates and those of {!extra_variable}. Certificates
     that do not decode are skipped. [Error] when no system root certificate is
-    found, or when {!extra_variable} names a file that cannot be read or holds
-    no certificate. *)
+    found, when the macOS system roots keychain cannot be read, or when
+    {!extra_variable} names a file that cannot be read or holds no certificate.
+*)
