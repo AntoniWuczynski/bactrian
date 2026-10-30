@@ -71,6 +71,7 @@ let test_targets_stay_on_the_tunnel =
     "the absolute form of the tunnel's own host"
     (200, {|{"path":"/abs","query":"x=1","body":""}|})
     (absolute.status, absolute.body);
+  Alcotest.(check bool) "a whole body ends" true absolute.ended;
   let fronted = on_localhost ~host_header:"127.0.0.1" "/fronted" in
   Alcotest.(check int) "another Host header is answered" 200 fronted.status;
   let host_seen =
@@ -182,6 +183,121 @@ let test_past_sim_now =
   Alcotest.(check int) "answered" 200 a.status;
   ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
 
+let has text = Re.execp (Re.compile (Re.str text))
+let noted (f : Model_proxy.findings) text = List.exists (has text) f.errors
+
+(* Refused inside the tunnel, before the host is called. *)
+let test_refusals =
+  with_world ~max_body:64 "refusals" @@ fun w ->
+  let _ =
+    register w ~token:token_a (Some (policy [ ("127.0.0.1", Passthrough) ]))
+  in
+  let big =
+    through ~creds:(creds token_a) w ~meth:"POST" ~path:"/big"
+      ~body:(String.make 100 'x') ()
+  in
+  Alcotest.(check int) "too large: 413" 413 big.status;
+  Alcotest.(check bool)
+    "bactrian_payload_too_large" true
+    (has "bactrian_payload_too_large" big.body);
+  let ws =
+    through ~creds:(creds token_a) w ~meth:"GET" ~path:"/ws"
+      ~headers:[ ("Upgrade", "websocket") ]
+      ()
+  in
+  Alcotest.(check int) "an upgrade: 501" 501 ws.status;
+  Alcotest.(check bool)
+    "bactrian_unsupported" true
+    (has "bactrian_unsupported" ws.body);
+  Alcotest.(check int)
+    "nothing reached the server" 0
+    (List.length (F.requests w.up));
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "413 noted" true (noted f "request body too large");
+  Alcotest.(check bool) "501 noted" true (noted f "WebSocket");
+  Alcotest.check call "both are calls"
+    [
+      (("POST", "127.0.0.1"), ("/big", 413));
+      (("GET", "127.0.0.1"), ("/ws", 501));
+    ]
+    (flat (calls f))
+
+let cut_short (r : F.request) : F.reply =
+  if String.equal r.path "/cut" then
+    {
+      status = 200;
+      headers = [ ("content-type", "text/plain") ];
+      chunks = [ "partial" ];
+      ending = Drop;
+    }
+  else backend r
+
+(* A host that drops its answer, and one that cannot be reached. *)
+let test_upstream_failures =
+  with_world ~handler:cut_short "upstream-failures" @@ fun w ->
+  let p = policy [ ("127.0.0.1", Record) ] in
+  let run = register w ~token:token_a (Some p) in
+  let cut = through ~creds:(creds token_a) w ~meth:"GET" ~path:"/cut" () in
+  Alcotest.(check int) "the head is passed on" 200 cut.status;
+  Alcotest.(check (pair string bool))
+    "and the body, unfinished" ("partial", false) (cut.body, cut.ended);
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "noted" true (noted f "egress to 127.0.0.1");
+  Alcotest.(check (list bool))
+    "recorded as incomplete" [ false ]
+    (List.map
+       (fun (e : Bactrian_core.Cassette.exchange) ->
+         match e.outcome with
+         | Response { body = Whole { complete; _ } | Stream { complete; _ }; _ }
+           ->
+             complete
+         | Transport_error _ -> true)
+       (recording w.ctx run).exchanges);
+  (* The plain connector refuses https: nothing is sent. *)
+  let unreachable =
+    register w ~connector:Upstream.plain ~token:token_b (Some p)
+  in
+  let a = through ~creds:(creds token_b) w ~meth:"GET" ~path:"/x" () in
+  Alcotest.(check int) "unreachable: 502" 502 a.status;
+  Alcotest.(check bool)
+    "bactrian_upstream_error" true
+    (has "bactrian_upstream_error" a.body);
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_b);
+  Alcotest.(check (list bool))
+    "recorded as a transport error" [ true ]
+    (List.map
+       (fun (e : Bactrian_core.Cassette.exchange) ->
+         match e.outcome with Transport_error _ -> true | Response _ -> false)
+       (recording w.ctx unreachable).exchanges)
+
+(* TLS that never starts: an agent that does not trust the project CA, and a
+   CONNECT host that no certificate can name. *)
+let test_tls_refused =
+  with_world "tls-refused" @@ fun w ->
+  let _ =
+    register w ~token:token_a (Some { default = Passthrough; hosts = [] })
+  in
+  let other =
+    load (Eio.Path.native_exn Eio.Path.(w.ctx.dir / "other-ca"))
+    |> fst |> ca_cert
+  in
+  (match
+     through ~anchors:[ other ] ~creds:(creds token_a) w ~meth:"GET" ~path:"/x"
+       ()
+   with
+  | exception Tls_eio.Tls_failure _ -> ()
+  | _ -> Alcotest.fail "an agent that does not trust the CA fails");
+  let status, _ = connect_status ~creds:(creds token_a) w ~host:"not_a_host" in
+  Alcotest.(check int) "the CONNECT itself is answered" 200 status;
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "the agent's alert is noted" true (noted f "TLS");
+  Alcotest.(check bool)
+    "the bad name is noted" true
+    (noted f "is not a host name");
+  Alcotest.(check int)
+    "nothing reached the server" 0
+    (List.length (F.requests w.up))
+
 let () =
   Alcotest.run "egress requests"
     [
@@ -194,6 +310,13 @@ let () =
       ( "framing",
         [ Alcotest.test_case "HEAD and 204 have no body" `Quick test_bodiless ]
       );
+      ( "failures",
+        [
+          Alcotest.test_case "413 and 501" `Quick test_refusals;
+          Alcotest.test_case "a dropped and an unreachable host" `Quick
+            test_upstream_failures;
+          Alcotest.test_case "TLS that never starts" `Quick test_tls_refused;
+        ] );
       ( "clock",
         [ Alcotest.test_case "a SIM_NOW a month back" `Quick test_past_sim_now ]
       );

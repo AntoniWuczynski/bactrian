@@ -205,6 +205,54 @@ let test_unenforced_in_meta =
     (List.map J.to_string
        J.(to_list (member "unenforced" (json r "meta.json"))))
 
+(* The weather agent, opening a tunnel to a host no policy lists before its
+   first model call. The host is blocked before any TLS, and the attempt is
+   still a call that no_egress sees. *)
+let egress_agent =
+  let connect =
+    {|
+import base64, socket, urllib.parse
+def connect():
+    u = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
+    s = socket.create_connection((u.hostname, u.port))
+    cred = base64.b64encode((u.username + ":" + u.password).encode()).decode()
+    s.sendall(("CONNECT api.weather.example:443 HTTP/1.1\r\nHost: api.weather.example:443\r\nProxy-Authorization: Basic " + cred + "\r\n\r\n").encode())
+    s.recv(4096)
+    s.close()
+|}
+  in
+  let script =
+    Re.replace_string ~all:false
+      (Re.compile (Re.str "msg = chat(messages)\n"))
+      ~by:"connect(); msg = chat(messages)\n" python_agent
+  in
+  [ "python3"; "-I"; "-c"; "import os\n" ^ connect ^ script ]
+
+let test_no_egress_fails =
+  with_ctx "no-egress" @@ fun ctx ->
+  let r =
+    ok
+      (execute ~interception:Egress_stub.interception ctx
+         {
+           (config ~agent:egress_agent ()) with
+           egress = Some Bactrian_core.Egress.block_all;
+           checks =
+             checks
+               ~assertions:
+                 [
+                   No_egress [ "api.weather.example" ];
+                   No_egress [ "other.example" ];
+                 ]
+               ();
+         })
+  in
+  Alcotest.(check string) "kind" "failed" (Run.outcome_kind r.outcome);
+  Alcotest.check strs "only the host it called fails" [ "fail"; "pass" ]
+    (verdict_names r);
+  Alcotest.(check bool)
+    "the attempt is in the trace" true
+    (List.mem "http_call" (trace_types r))
+
 let () =
   Alcotest.run "run_checks"
     [
@@ -216,6 +264,8 @@ let () =
             test_checker_fail_is_failed;
           Alcotest.test_case "a failed run still has verdicts" `Slow
             test_failed_run_has_verdicts;
+          Alcotest.test_case "an egress call fails no_egress" `Slow
+            test_no_egress_fails;
         ] );
       ( "files",
         [

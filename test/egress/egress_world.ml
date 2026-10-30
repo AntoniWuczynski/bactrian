@@ -85,8 +85,8 @@ let raw_backend ctx answer =
   | `Unix _ -> Alcotest.fail "a TCP listener"
 
 (* [handler] answers behind the fake HTTPS front, or [raw] does when given. *)
-let with_world ?(handler = backend) ?raw name f =
-  with_ctx name @@ fun ctx ->
+let with_world ?(handler = backend) ?raw ?max_body name f =
+  with_ctx ?max_body name @@ fun ctx ->
   let up = fake ctx (F.Handler handler) in
   let test_ca = Fake_https.ca () in
   let https =
@@ -125,6 +125,7 @@ type answer = {
   status : int;
   head : string;  (** The status line and headers, lowercased. *)
   body : string;
+  ended : bool;  (** A chunked body had its terminal chunk. *)
 }
 
 (* A flow that sends the CONNECT head with its first write and skips the
@@ -206,34 +207,39 @@ let split_response text =
     | _ -> 0
   in
   match Re.exec_opt (Re.compile (Re.str "\r\n\r\n")) text with
-  | None -> { status; head = String.lowercase_ascii text; body = "" }
+  | None ->
+      { status; head = String.lowercase_ascii text; body = ""; ended = false }
   | Some g ->
       let stop = Re.Group.stop g 0 in
       let head = String.lowercase_ascii (String.sub text 0 stop) in
       let rest = String.sub text stop (String.length text - stop) in
+      let chunked = Re.execp (Re.compile (Re.str "chunked")) head in
       {
         status;
         head;
-        body =
-          (if Re.execp (Re.compile (Re.str "chunked")) head then dechunk rest
-           else rest);
+        body = (if chunked then dechunk rest else rest);
+        ended = (not chunked) || String.ends_with ~suffix:"\r\n0\r\n\r\n" rest;
       }
 
-let request_text ?(host = "127.0.0.1") ~meth ~path ?(body = "") () =
+let request_text ?(host = "127.0.0.1") ?(headers = []) ~meth ~path ?(body = "")
+    () =
   Printf.sprintf
     "%s %s HTTP/1.1\r\n\
      Host: %s\r\n\
      Content-Type: application/json\r\n\
      Content-Length: %d\r\n\
      Connection: close\r\n\
-     \r\n\
+     %s\r\n\
      %s"
-    meth path host (String.length body) body
+    meth path host (String.length body)
+    (String.concat ""
+       (List.map (fun (k, v) -> Printf.sprintf "%s: %s\r\n" k v) headers))
+    body
 
 (* An agent's HTTPS call through the proxy. [creds] is the Proxy-Authorization
    user and password, none when [None]. *)
 let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
-    ?host_header ?(at = now) w ~meth ~path ?body () =
+    ?host_header ?headers ?(at = now) ?anchors w ~meth ~path ?body () =
   let net = Eio.Stdenv.net w.ctx.env in
   Eio.Switch.run @@ fun sw ->
   let socket =
@@ -257,7 +263,7 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
          ~authenticator:
            (X509.Authenticator.chain_of_trust
               ~time:(fun () -> Some (at ()))
-              [ ca_cert w.project_ca ])
+              (Option.value anchors ~default:[ ca_cert w.project_ca ]))
          ())
   in
   let ip = Ipaddr.of_string_exn "127.0.0.1" in
@@ -287,7 +293,7 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
         Ok (pipe ~head:None ~skipped:true))
   in
   match flow with
-  | Error status -> { status; head = ""; body = "" }
+  | Error status -> { status; head = ""; body = ""; ended = false }
   | Ok flow ->
       let tls =
         match Ipaddr.of_string target_host with
@@ -299,7 +305,7 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
               flow
       in
       Eio.Flow.copy_string
-        (request_text ?host:host_header ~meth ~path ?body ())
+        (request_text ?host:host_header ?headers ~meth ~path ?body ())
         tls;
       let text =
         try Eio.Buf_read.take_all (Eio.Buf_read.of_flow ~max_size:1_000_000 tls)
