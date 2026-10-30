@@ -12,8 +12,15 @@ val plain : connector
 
 type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
 
+type extra_trust = { variable : string; count : int }
+(** Certificates trusted for every host on top of the system's, and the variable
+    that named them. *)
+
+type trust = { roots : int; extra : extra_trust option }
+(** What a connector trusts: [roots] certificates in all, [extra]'s included. *)
+
 type https = {
-  ready : unit -> (unit, string) result;
+  ready : unit -> (trust, string) result;
       (** Loads what the connector needs before its first connection (the
           trusted root certificates), once. [Error] says why HTTPS cannot work.
       *)
@@ -29,7 +36,7 @@ type https = {
 
 val of_https : https -> connector
 
-val tls_ready : connector -> (unit, string) result
+val tls_ready : connector -> (trust, string) result
 (** The connector's [ready], or [Error] for {!plain}. *)
 
 val is_https : Uri.t -> bool

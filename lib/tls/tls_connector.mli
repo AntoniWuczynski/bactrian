@@ -9,10 +9,12 @@
     tells a cut-off body from a finished one, reads every response. *)
 
 val make :
-  authenticator:(unit -> (X509.Authenticator.t, string) result) ->
+  trust:
+    (unit ->
+    (X509.Authenticator.t * Bactrian_runtime.Upstream.trust, string) result) ->
   Bactrian_runtime.Upstream.https
-(** [authenticator] is called by [ready] and before each handshake, and should
-    be memoised by the caller. *)
+(** [trust] gives the authenticator and what it trusts. It is called by [ready]
+    and before each handshake, and should be memoised by the caller. *)
 
 val system :
   process_mgr:_ Eio.Process.mgr -> Bactrian_runtime.Upstream.connector

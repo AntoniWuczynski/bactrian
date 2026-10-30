@@ -188,35 +188,33 @@ let read_manifest path =
 
 let funded = Live_preflight.funded
 
-(* An HTTP agent at an https URL needs the connector, like an https upstream. *)
-let agent_preflight ~connector : Run.agent -> (unit, error) result = function
-  | Command _ -> Ok ()
-  | Http { url; _ } -> (
-      if not (Upstream.is_https (Uri.of_string url)) then Ok ()
-      else
-        match Upstream.tls_ready connector with
-        | Ok () -> Ok ()
-        | Error reason ->
-            Error
-              (Environment
-                 (Printf.sprintf
-                    "%s, so bactrian cannot call the agent at %s over HTTPS"
-                    reason url)))
+(* What a run calls over HTTPS besides the providers: an HTTP agent at an
+   https URL and the live https MCP servers. *)
+let https_needs ~mcp : Run.agent -> string list = function
+  | Command _ -> mcp
+  | Http { url; _ } ->
+      if Upstream.is_https (Uri.of_string url) then
+        ("the agent at " ^ url) :: mcp
+      else mcp
 
-let preflight ~caps ~keys ~upstream ~connector ~warn =
+let preflight ~caps ~keys ~upstream ~tls ~needs ~warn =
   match
-    Live_preflight.problem ~caps
-      ~has_key:(fun p -> List.mem_assoc p keys)
-      ~upstream
-      ~tls:(fun () -> Upstream.tls_ready connector)
+    ( Live_preflight.https_refusal ~tls needs,
+      Live_preflight.problem ~caps
+        ~has_key:(fun p -> List.mem_assoc p keys)
+        ~upstream ~tls )
   with
-  | Some problem ->
+  | Some m, _ -> Error (Environment m)
+  | None, Some problem ->
       Error
         (Environment
            (Live_preflight.describe ~set_caps:"caps_usd in the experiment"
               problem))
-  | None ->
+  | None, None ->
       List.iter warn (Live_preflight.cleartext caps upstream);
+      Option.iter warn
+        (Live_preflight.trust_warning ~tls
+           (needs @ Live_preflight.https_funded caps upstream));
       Ok ()
 
 (* Loading *)
@@ -622,9 +620,13 @@ let run_experiment ?seatbelt_hint ?root
   let* experiment_id, initial =
     start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume l planned
   in
-  let* () = agent_preflight ~connector l.agent in
   let* () =
-    preflight ~caps:experiment.caps_usd ~keys ~upstream ~connector ~warn
+    preflight ~caps:experiment.caps_usd ~keys ~upstream
+      ~tls:(fun () -> Upstream.tls_ready connector)
+      ~needs:
+        (https_needs l.agent
+           ~mcp:(Live_preflight.mcp_https ~replaying:false (mcp_configs ~fs l)))
+      ~warn
   in
   let in_dir path =
     if Filename.is_relative path then Filename.concat l.dir path else path

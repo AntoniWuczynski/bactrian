@@ -98,6 +98,69 @@ let test_cleartext () =
       ("no cap, no call", [ ("openai", 0.) ], "http://10.0.0.5");
     ]
 
+(* The https MCP servers a run calls live, and what TLS says about them. *)
+let test_mcp_https () =
+  let server ?(url = "https://mcp.example/mcp") name policy : Mcp_proxy.config =
+    { name; server = Http { url = Uri.of_string url }; policy }
+  in
+  let configs : Mcp_proxy.config list =
+    [
+      server "pass" Passthrough;
+      server "rec" Record;
+      server "rep" Replay;
+      server "blk" Block;
+      server ~url:"http://127.0.0.1:9/mcp" "plain" Passthrough;
+      {
+        name = "stdio";
+        server = Stdio { argv = [ "x" ]; env = []; cwd = None };
+        policy = Record;
+      };
+    ]
+  in
+  let named =
+    List.map (fun n -> "the MCP server " ^ n ^ " at https://mcp.example/mcp")
+  in
+  Alcotest.(check (list string))
+    "recording"
+    (named [ "pass"; "rec" ])
+    (Live_preflight.mcp_https ~replaying:false configs);
+  Alcotest.(check (list string))
+    "replaying" (named [ "pass" ])
+    (Live_preflight.mcp_https ~replaying:true configs);
+  let calls = ref 0 in
+  let tls result () =
+    incr calls;
+    result
+  in
+  let fails = tls (Error "no roots") in
+  Alcotest.(check (option string))
+    "nothing over HTTPS: tls is not asked" None
+    (Live_preflight.https_refusal ~tls:fails []);
+  Alcotest.(check int) "not called" 0 !calls;
+  Alcotest.(check (option string))
+    "refused"
+    (Some
+       "no roots, so bactrian cannot call the MCP server a, the agent at u \
+        over HTTPS")
+    (Live_preflight.https_refusal ~tls:fails
+       [ "the MCP server a"; "the agent at u" ]);
+  let extra = { Upstream.variable = "BACTRIAN_EXTRA_CA_CERTS"; count = 1 } in
+  let trusts e = tls (Ok { Upstream.roots = 3; extra = e }) in
+  Alcotest.(check (option string))
+    "extra certificates are named"
+    (Some
+       "BACTRIAN_EXTRA_CA_CERTS adds 1 certificate trusted for every HTTPS \
+        host, the providers included")
+    (Live_preflight.trust_warning ~tls:(trusts (Some extra)) [ "openai" ]);
+  Alcotest.(check (option string))
+    "none without extra certificates" None
+    (Live_preflight.trust_warning ~tls:(trusts None) [ "openai" ]);
+  calls := 0;
+  Alcotest.(check (option string))
+    "none when nothing goes over HTTPS" None
+    (Live_preflight.trust_warning ~tls:(trusts (Some extra)) []);
+  Alcotest.(check int) "and tls is not asked" 0 !calls
+
 let test_loopback () =
   List.iter
     (fun (url, expected) ->
@@ -197,5 +260,6 @@ let () =
           Alcotest.test_case "read" `Quick test_read;
           Alcotest.test_case "this machine" `Quick test_loopback;
           Alcotest.test_case "a key in clear text" `Quick test_cleartext;
+          Alcotest.test_case "https MCP servers and trust" `Quick test_mcp_https;
         ] );
     ]

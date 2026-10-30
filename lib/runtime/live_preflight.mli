@@ -21,7 +21,7 @@ val problem :
   caps:(string * float) list ->
   has_key:(Model_proxy.provider -> bool) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
-  tls:(unit -> (unit, string) result) ->
+  tls:(unit -> (Upstream.trust, string) result) ->
   problem option
 (** The first problem, in the order of the constructors. [tls] (usually
     {!Upstream.tls_ready}) is called only when a provider with a cap has an
@@ -40,3 +40,28 @@ val cleartext :
   (string * float) list -> (Model_proxy.provider -> Uri.t) -> string list
 (** A warning for each provider with a cap whose upstream is plain [http] to a
     host that is not {!is_loopback}: the real key would travel unencrypted. *)
+
+val https_funded :
+  (string * float) list -> (Model_proxy.provider -> Uri.t) -> string list
+(** The names of the providers with a cap whose upstream is [https]. *)
+
+val mcp_https : replaying:bool -> Mcp_proxy.config list -> string list
+(** ["the MCP server NAME at URL"] for each Streamable HTTP server at an [https]
+    URL that a run calls live: [Passthrough] always, and [Record] unless the run
+    is [replaying]. *)
+
+val https_refusal :
+  tls:(unit -> (Upstream.trust, string) result) -> string list -> string option
+(** For what a command calls over HTTPS besides the providers
+    (["the agent at URL"], {!mcp_https}): the exit 69 message when the list is
+    not empty and [tls] fails, naming them and [tls]'s reason. [tls] is called
+    only for a non-empty list. *)
+
+val extra_trust : Upstream.extra_trust -> string
+(** Says that the variable's certificates are trusted for every HTTPS host, the
+    providers included, and how many there are. *)
+
+val trust_warning :
+  tls:(unit -> (Upstream.trust, string) result) -> string list -> string option
+(** {!extra_trust} when [tls] succeeds with extra certificates and the list of
+    what is called over HTTPS is not empty. [tls] is called only then. *)

@@ -16,6 +16,13 @@ let runs j =
   | None -> Alcotest.failf "no runs in %s" (Canon.to_string j)
 
 let statuses j = List.map (string_field "status") (runs j)
+let reasons j = List.filter_map (Canon.str_member "reason") (runs j)
+
+let check_named name j =
+  List.find_opt
+    (fun c -> String.equal (string_field "name" c) name)
+    (get "checks" (Canon.list_member "checks" j))
+
 let all_passed = List.init 4 (fun _ -> "passed")
 
 let meta_of project run =
@@ -109,7 +116,54 @@ let https_is_refused_without_roots () =
   Alcotest.(check int) "record: 69" 69 code;
   Alcotest.(check bool)
     "record: names the variable" true
-    (contains (string_field "error" printed) "BACTRIAN_EXTRA_CA_CERTS")
+    (contains (string_field "error" printed) "BACTRIAN_EXTRA_CA_CERTS");
+  (* A live https MCP server needs the roots too, with an http upstream. *)
+  let calls = upstream_requests up in
+  write_experiment project (agent.argv ())
+    ~extra:
+      {|, "mcp": {"search": {"url": "https://mcp.invalid/mcp", "policy": "passthrough"}}|};
+  let names_the_server what printed =
+    Alcotest.(check bool)
+      (what ^ ": names the MCP server")
+      true
+      (contains (string_field "error" printed) "the MCP server search")
+  in
+  let code, printed = cli ~dir:project ~env:(no_roots :: env_of up) run_flags in
+  Alcotest.(check int) "an https MCP server: 69" 69 code;
+  names_the_server "run" printed;
+  let code, printed =
+    cli ~dir:project ~env:(no_roots :: env_of up)
+      [ "doctor"; "--json"; "--experiment"; "exp.json" ]
+  in
+  Alcotest.(check int) "doctor: 69" 69 code;
+  (match check_named "tls" printed with
+  | Some c ->
+      Alcotest.(check string)
+        "doctor: tls fails" "fail" (string_field "status" c);
+      Alcotest.(check bool)
+        "doctor: names the MCP server" true
+        (contains (string_field "message" c) "the MCP server search")
+  | None -> Alcotest.fail "no tls check");
+  let code, printed =
+    cli ~dir:project
+      ~env:(("BACTRIAN_CAP_OPENAI", "1") :: no_roots :: env_of up)
+      [
+        "record";
+        "--json";
+        "--turn";
+        "hi";
+        "--sandbox";
+        "off";
+        "--mcp-http";
+        "search=https://mcp.invalid/mcp";
+        "--";
+        "true";
+      ]
+  in
+  Alcotest.(check int) "record with an https MCP server: 69" 69 code;
+  names_the_server "record" printed;
+  Alcotest.(check (list string))
+    "no model call after a refusal" calls (upstream_requests up)
 
 (* An https upstream: the fake upstream behind TLS, with a CA minted for the
    test and trusted through BACTRIAN_EXTRA_CA_CERTS. *)
@@ -242,11 +296,6 @@ let invalid_values_are_usage_errors () =
 
 (* doctor *)
 
-let check_named name j =
-  List.find_opt
-    (fun c -> String.equal (string_field "name" c) name)
-    (get "checks" (Canon.list_member "checks" j))
-
 let doctor_shows_the_override () =
   let agent = List.hd agents in
   with_project "override-doctor" @@ fun ~parent:_ ~project ->
@@ -295,8 +344,6 @@ let zero =
   match Canon.float 0. with
   | Ok c -> c
   | Error e -> Alcotest.failf "float: %a" Canon.pp_error e
-
-let reasons j = List.filter_map (Canon.str_member "reason") (runs j)
 
 let key_is_still_required () =
   let agent = List.hd agents in

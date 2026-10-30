@@ -48,6 +48,7 @@ type target = {
   runtime : Experiment.sandbox_runtime option;
   faketime : bool;
   funded : (P.provider * string) list;
+  mcp_https : string list;
 }
 
 let target ~dir (e : Experiment.t) =
@@ -60,6 +61,22 @@ let target ~dir (e : Experiment.t) =
     runtime = e.sandbox_runtime;
     faketime = e.faketime;
     funded = Live_preflight.funded e.caps_usd;
+    mcp_https =
+      (if List.mem `Mcp e.intercept then
+         Live_preflight.mcp_https ~replaying:false
+           (List.filter_map
+              (fun (name, (s : Experiment.mcp_server)) ->
+                match s.transport with
+                | Mcp_http { url } ->
+                    Some
+                      {
+                        Mcp_proxy.name;
+                        server = Http { url = Uri.of_string url };
+                        policy = s.policy;
+                      }
+                | Mcp_stdio _ -> None)
+              e.mcp)
+       else []);
   }
 
 let check name status message = { name; status; message }
@@ -391,19 +408,26 @@ let tls_check ~tls ~upstream target =
   let needed =
     match target with
     | None -> []
-    | Some t -> (
+    | Some t ->
         List.filter_map
           (fun (p, name) ->
             if Upstream.is_https (upstream p) then Some name else None)
           t.funded
-        @
-        match t.agent with
-        | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
-            [ "the agent at " ^ url ]
-        | Http _ | Command _ -> [])
+        @ (match t.agent with
+          | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
+              [ "the agent at " ^ url ]
+          | Http _ | Command _ -> [])
+        @ t.mcp_https
   in
   match (tls (), needed) with
-  | Ok (), _ -> check "tls" Pass "HTTPS works: the root certificates are loaded"
+  | Ok ({ roots; extra } : Upstream.trust), _ -> (
+      let loaded =
+        Printf.sprintf "the trusted root certificates load (%d)" roots
+      in
+      match extra with
+      | None -> check "tls" Pass loaded
+      | Some e -> check "tls" Warn (loaded ^ ": " ^ Live_preflight.extra_trust e)
+      )
   | Error reason, [] -> check "tls" Warn (reason ^ ", so HTTPS will not work")
   | Error reason, _ :: _ ->
       check "tls" Fail

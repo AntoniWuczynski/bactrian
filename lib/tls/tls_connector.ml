@@ -45,9 +45,9 @@ let handshake config peer flow =
   | exception (Tls_eio.Tls_alert _ as e) ->
       Error (Option.value (failure e) ~default:"TLS alert")
 
-let make ~authenticator : Upstream.https =
+let make ~trust : Upstream.https =
   let wrap url flow =
-    let* authenticator = authenticator () in
+    let* authenticator, _ = trust () in
     let* peer = peer url in
     let* config =
       Result.map_error
@@ -56,18 +56,31 @@ let make ~authenticator : Upstream.https =
     in
     handshake config peer flow
   in
-  { ready = (fun () -> Result.map ignore (authenticator ())); wrap; failure }
+  { ready = (fun () -> Result.map snd (trust ())); wrap; failure }
 
 let system ~process_mgr =
   let roots =
     Eio.Lazy.from_fun ~cancel:`Restart (fun () -> Trust.load ~process_mgr)
   in
-  let authenticator () =
+  let trust () =
     Result.map
-      (fun roots ->
-        X509.Authenticator.chain_of_trust
-          ~time:(fun () -> Some (Ptime_clock.now ()))
-          roots)
+      (fun ({ system; extra } : Trust.t) ->
+        let roots = system @ extra in
+        ( X509.Authenticator.chain_of_trust
+            ~time:(fun () -> Some (Ptime_clock.now ()))
+            roots,
+          {
+            Upstream.roots = List.length roots;
+            extra =
+              (match extra with
+              | [] -> None
+              | _ :: _ ->
+                  Some
+                    {
+                      variable = Trust.extra_variable;
+                      count = List.length extra;
+                    });
+          } ))
       (Eio.Lazy.force roots)
   in
-  Upstream.of_https (make ~authenticator)
+  Upstream.of_https (make ~trust)

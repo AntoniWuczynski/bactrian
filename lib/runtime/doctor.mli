@@ -33,6 +33,9 @@ type target = {
   faketime : bool;
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
+  mcp_https : string list;
+      (** The [https] MCP servers it calls live ({!Live_preflight.mcp_https}).
+      *)
 }
 (** What an experiment says that the checks depend on. *)
 
@@ -117,14 +120,16 @@ val clock_check :
     all. Contract-only on macOS is expected, so it is [Pass]. *)
 
 val tls_check :
-  tls:(unit -> (unit, string) result) ->
+  tls:(unit -> (Upstream.trust, string) result) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
   target option ->
   check
-(** [Pass] when [tls] (usually {!Upstream.tls_ready}) succeeds. Otherwise [Fail]
-    when the experiment calls a provider whose [upstream] is an [https] URL, or
-    an agent at one, and [Warn] when it does not. An [http] upstream does not
-    count. *)
+(** [Pass] when [tls] (usually {!Upstream.tls_ready}) succeeds, with the number
+    of trusted certificates, and [Warn] when some of them come from
+    {!type:Upstream.extra_trust}, naming its variable. When [tls] fails, [Fail]
+    if the experiment calls a provider whose [upstream] is an [https] URL, an
+    agent at one or an [https] MCP server ([mcp_https]), and [Warn] if it does
+    not. An [http] upstream does not count. *)
 
 val egress_checks : check list
 (** The CA and the Node version, which only matter once egress is intercepted:
@@ -133,7 +138,7 @@ val egress_checks : check list
 val run :
   env:Eio_unix.Stdenv.base ->
   bactrian_exe:string ->
-  tls:(unit -> (unit, string) result) ->
+  tls:(unit -> (Upstream.trust, string) result) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
   keys:(Model_proxy.provider * string) list ->
   path:string option ->

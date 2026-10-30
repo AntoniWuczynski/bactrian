@@ -35,8 +35,18 @@ let http url : Experiment.agent =
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
-    ?(funded = []) ~dir agent : Doctor.target =
-  { agent; dir; sandbox; backend; image; runtime = None; faketime; funded }
+    ?(funded = []) ?(mcp_https = []) ~dir agent : Doctor.target =
+  {
+    agent;
+    dir;
+    sandbox;
+    backend;
+    image;
+    runtime = None;
+    faketime;
+    funded;
+    mcp_https;
+  }
 
 (* Keys *)
 
@@ -221,9 +231,11 @@ let test_clock () =
 (* TLS and egress *)
 
 let test_tls () =
-  let tls ?(available = false) ?(upstream = P.default_upstream) t =
+  let tls ?(available = false) ?extra ?(upstream = P.default_upstream) t =
     Doctor.tls_check
-      ~tls:(fun () -> if available then Ok () else Error "no roots")
+      ~tls:(fun () ->
+        if available then Ok { Upstream.roots = 140; extra }
+        else Error "no roots")
       ~upstream t
   in
   let funded = [ (P.Openai, "openai") ] in
@@ -246,6 +258,27 @@ let test_tls () =
     (tls (Some (target ~dir:"." (http "https://a.example/x"))));
   check_status "an http agent" Warn
     (tls (Some (target ~dir:"." (http "http://127.0.0.1:1/x"))));
+  let mcp = [ "the MCP server docs at https://mcp.example/mcp" ] in
+  let c = tls (Some (target ~mcp_https:mcp ~dir:"." (command ()))) in
+  check_status "an https MCP server" Fail c;
+  Alcotest.(check bool)
+    ("names the MCP server: " ^ c.message)
+    true
+    (contains ~sub:"the MCP server docs" c.message);
+  let c = tls ~available:true None in
+  Alcotest.(check string)
+    "the count" "the trusted root certificates load (140)" c.message;
+  let c =
+    tls ~available:true
+      ~extra:{ variable = "BACTRIAN_EXTRA_CA_CERTS"; count = 2 }
+      None
+  in
+  check_status "extra certificates" Warn c;
+  Alcotest.(check string)
+    "names the variable and the count"
+    "the trusted root certificates load (140): BACTRIAN_EXTRA_CA_CERTS adds 2 \
+     certificates trusted for every HTTPS host, the providers included"
+    c.message;
   Alcotest.check pairs "egress is not built"
     [ ("ca", "skip"); ("node", "skip") ]
     (statuses Doctor.egress_checks)
@@ -317,7 +350,7 @@ let test_no_key_value_in_output () =
   let report t =
     Doctor.report
       (Doctor.run ~env ~bactrian_exe:"/nonexistent"
-         ~tls:(fun () -> Ok ())
+         ~tls:(fun () -> Ok { Upstream.roots = 1; extra = None })
          ~upstream:P.default_upstream ~keys:sentinels
          ~path:(Some "/usr/bin:/bin") t)
   in

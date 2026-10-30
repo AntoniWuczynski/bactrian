@@ -2,13 +2,14 @@
     and to HTTP-mode agents (decision record 0017).
 
     The sources follow the [ca-certs] library: on macOS the system root and
-    system keychains, read with [/usr/bin/security], on Linux the first bundle
-    that exists of the usual distribution paths. Unlike [ca-certs], bactrian
-    starts [security] with an empty environment, because its own environment
-    holds the provider keys (decision record 0010), and it never reads
-    [SSL_CERT_FILE], [NIX_SSL_CERT_FILE] or [OCAML_EXTRA_CA_CERTS]: those are
-    the variables bactrian gives agents, which name its own interception CA and
-    must not replace its upstream trust. *)
+    system keychains, read with [/usr/bin/security], on Linux the first of the
+    usual distribution bundles that holds a certificate. Unlike [ca-certs],
+    bactrian starts [security] with an empty environment, because its own
+    environment holds the provider keys (decision record 0010), and it never
+    reads [SSL_CERT_FILE], [NIX_SSL_CERT_FILE] or [OCAML_EXTRA_CA_CERTS]: a user
+    may have them set for other tools, and once egress is intercepted bactrian
+    will give agents [SSL_CERT_FILE] naming its own interception CA, which must
+    not replace its upstream trust. *)
 
 val extra_variable : string
 (** [BACTRIAN_EXTRA_CA_CERTS]: a file of PEM certificates trusted in addition to
@@ -21,8 +22,13 @@ val linux_bundles : string list
 val macos_keychains : string list
 (** The keychains read on macOS. *)
 
-val load :
-  process_mgr:_ Eio.Process.mgr -> (X509.Certificate.t list, string) result
+type t = {
+  system : X509.Certificate.t list;  (** The system's root certificates. *)
+  extra : X509.Certificate.t list;
+      (** Those of {!extra_variable}, trusted for every host. *)
+}
+
+val load : process_mgr:_ Eio.Process.mgr -> (t, string) result
 (** The system's root certificates and those of {!extra_variable}. Certificates
     that do not decode are skipped. [Error] when no system root certificate is
     found, or when {!extra_variable} names a file that cannot be read or holds

@@ -44,10 +44,15 @@ let ca () =
 
 let ca_pem ca = X509.Certificate.encode_pem ca.cert
 
-let authenticator ca =
-  X509.Authenticator.chain_of_trust
-    ~time:(fun () -> Some (Ptime_clock.now ()))
-    [ ca.cert ]
+let connector ca =
+  let authenticator =
+    X509.Authenticator.chain_of_trust
+      ~time:(fun () -> Some (Ptime_clock.now ()))
+      [ ca.cert ]
+  in
+  Bactrian_runtime.Upstream.of_https
+    (Bactrian_tls.Tls_connector.make ~trust:(fun () ->
+         Ok (authenticator, { roots = 1; extra = None })))
 
 type name = Dns of string | Ip of string
 
@@ -87,10 +92,31 @@ let rec pieces size s =
     String.sub s 0 size
     :: pieces size (String.sub s size (String.length s - size))
 
-let relay ~net ~record_size ~close_notify ~config ~backend socket =
+type ending = Close_notify | Tcp_close | Bad_record
+
+(* An application-data record whose authentication tag cannot match. *)
+let bad_record = "\x17\x03\x03\x00\x20" ^ String.make 32 '\x00'
+
+let finish ending ~tls socket =
+  try
+    match ending with
+    | Close_notify -> Eio.Flow.shutdown tls `Send
+    | Tcp_close -> ()
+    | Bad_record ->
+        (* The pause before it lets the client read the earlier records on
+           their own, since the data that shares a read with a bad record is
+           dropped with it. The one after it lets the client send its fatal
+           alert before the close, or it fails with a broken pipe instead. *)
+        Eio_unix.sleep 0.05;
+        Eio.Flow.copy_string bad_record socket;
+        Eio_unix.sleep 0.2
+  with Eio.Io _ -> ()
+
+let relay_connection ~net ~record_size ~ending ~relay ~config ~backend socket =
   match Tls_eio.server_of_flow config socket with
   | exception (End_of_file | Tls_eio.Tls_failure _ | Tls_eio.Tls_alert _) -> ()
   | exception Eio.Io _ -> ()
+  | tls when not relay -> finish ending ~tls socket
   | tls ->
       Eio.Switch.run @@ fun sw ->
       let up =
@@ -124,10 +150,10 @@ let relay ~net ~record_size ~close_notify ~config ~backend socket =
             | exception (End_of_file | Eio.Io _) -> ()
           in
           (try loop () with Eio.Io _ -> ());
-          try if close_notify then Eio.Flow.shutdown tls `Send
-          with Eio.Io _ -> ())
+          finish ending ~tls socket)
 
-let start ~sw ~net ?record_size ?(close_notify = true) ~chain ~backend () =
+let start ~sw ~net ?record_size ?(ending = Close_notify) ?(relay = true) ~chain
+    ~backend () =
   let config =
     ok
       (Tls.Config.server ~certificates:(`Single chain)
@@ -146,7 +172,8 @@ let start ~sw ~net ?record_size ?(close_notify = true) ~chain ~backend () =
       Eio.Net.run_server listener
         ~on_error:(fun _ -> ())
         (fun socket _ ->
-          relay ~net ~record_size ~close_notify ~config ~backend socket));
+          relay_connection ~net ~record_size ~ending ~relay ~config ~backend
+            socket));
   { port }
 
 let port t = t.port

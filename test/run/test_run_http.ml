@@ -211,18 +211,18 @@ let test_https_agent =
   let url =
     Printf.sprintf "https://localhost:%d/agent" (Fake_https.port front)
   in
-  let trusting ca =
-    Upstream.of_https
-      (Bactrian_tls.Tls_connector.make ~authenticator:(fun () ->
-           Ok (Fake_https.authenticator ca)))
+  let r =
+    ok (execute ~connector:(Fake_https.connector ca) ctx (http_config url))
   in
-  let r = ok (execute ~connector:(trusting ca) ctx (http_config url)) in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
   Alcotest.(check int) "exchanges" 1 r.findings.exchanges;
   Alcotest.(check string)
     "the server saw the run" r.run_id (List.hd (H.sessions agent)).run_id;
   let r =
-    ok (execute ~connector:(trusting (Fake_https.ca ())) ctx (http_config url))
+    ok
+      (execute
+         ~connector:(Fake_https.connector (Fake_https.ca ()))
+         ctx (http_config url))
   in
   Alcotest.(check bool)
     ("an untrusted certificate fails the run: " ^ outcome_name r)

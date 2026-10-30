@@ -19,6 +19,10 @@ let macos_keychains =
 
 let security = "/usr/bin/security"
 
+(* Every macOS has this file, and Linux does not. *)
+let macos () =
+  Sys.file_exists "/System/Library/CoreServices/SystemVersion.plist"
+
 let read_file path =
   match In_channel.with_open_bin path In_channel.input_all with
   | text -> Ok text
@@ -40,25 +44,31 @@ let keychain ~process_mgr path =
   | exception (Eio.Io _ as e) -> Error (Printexc.to_string e)
 
 let system ~process_mgr =
-  let pems =
-    if Sys.file_exists security then
-      List.filter_map
-        (fun path -> Result.to_option (keychain ~process_mgr path))
+  let macos = macos () in
+  let roots =
+    if macos then
+      List.concat_map
+        (fun path ->
+          Result.fold ~ok:decode
+            ~error:(fun (_ : string) -> [])
+            (keychain ~process_mgr path))
         macos_keychains
     else
-      Option.to_list
+      Option.value ~default:[]
         (List.find_map
-           (fun path -> Result.to_option (read_file path))
+           (fun path ->
+             match Result.map decode (read_file path) with
+             | Ok (_ :: _ as roots) -> Some roots
+             | Ok [] | Error _ -> None)
            linux_bundles)
   in
-  match List.concat_map decode pems with
+  match roots with
   | [] ->
       Error
         (Printf.sprintf "no trusted root certificates were found in %s"
            (String.concat ", "
-              (if Sys.file_exists security then macos_keychains
-               else linux_bundles)))
-  | roots -> Ok roots
+              (if macos then macos_keychains else linux_bundles)))
+  | _ :: _ -> Ok roots
 
 let extra () =
   match Sys.getenv_opt extra_variable with
@@ -75,7 +85,9 @@ let extra () =
                    extra_variable)
           | certs -> Ok certs))
 
+type t = { system : X509.Certificate.t list; extra : X509.Certificate.t list }
+
 let load ~process_mgr =
-  let* roots = system ~process_mgr in
+  let* system = system ~process_mgr in
   let* extra = extra () in
-  Ok (roots @ extra)
+  Ok { system; extra }

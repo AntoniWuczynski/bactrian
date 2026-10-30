@@ -5,10 +5,7 @@ open Bactrian_runtime
 module H = Fake_https
 module F = Fake_upstream
 
-let connector ca =
-  Upstream.of_https
-    (Bactrian_tls.Tls_connector.make ~authenticator:(fun () ->
-         Ok (H.authenticator ca)))
+let connector = H.connector
 
 let json_reply ?(ending = F.Complete) chunks : F.reply =
   {
@@ -40,7 +37,7 @@ let call env connector url =
   { result; status = !status; body = Buffer.contents body; reads = !reads }
 
 (* A fake upstream behind a TLS front, for the length of [f]. *)
-let with_server ?record_size ?close_notify
+let with_server ?record_size ?ending ?relay
     ?(names = [ H.Dns "localhost"; H.Ip "127.0.0.1" ]) ?ca replies f =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
@@ -52,15 +49,15 @@ let with_server ?record_size ?close_notify
     | Error e -> Alcotest.failf "fake upstream: %a" F.pp_error e
   in
   let front =
-    H.start ~sw ~net:(Eio.Stdenv.net env) ?record_size ?close_notify
+    H.start ~sw ~net:(Eio.Stdenv.net env) ?record_size ?ending ?relay
       ~chain:(H.leaf ca names) ~backend:(F.port up) ()
   in
   let r = f env ca (H.port front) in
   Eio.Switch.fail sw Exit;
   r
 
-let run_server ?record_size ?close_notify ?names ?ca replies f () =
-  match with_server ?record_size ?close_notify ?names ?ca replies f with
+let run_server ?record_size ?ending ?relay ?names ?ca replies f () =
+  match with_server ?record_size ?ending ?relay ?names ?ca replies f with
   | () -> ()
   | exception Exit -> ()
 
@@ -125,8 +122,8 @@ let no_tls_without_connector =
     "plain is not ready" true
     (Result.is_error (Upstream.tls_ready Upstream.plain))
 
-let cut_off close_notify =
-  run_server ~close_notify [ json_reply ~ending:F.Drop [ {|{"a":|}; {|1|} ] ]
+let cut_off ending =
+  run_server ~ending [ json_reply ~ending:F.Drop [ {|{"a":|}; {|1|} ] ]
   @@ fun env ca port ->
   match (call env (connector ca) (url port "localhost")).result with
   | Error (Truncated { bytes; _ }) ->
@@ -187,10 +184,11 @@ let system_roots () =
   Eio_main.run @@ fun env ->
   with_extra "" @@ fun () ->
   match Bactrian_tls.Trust.load ~process_mgr:(Eio.Stdenv.process_mgr env) with
-  | Ok roots ->
+  | Ok { system; extra } ->
       Alcotest.(check bool)
         "this host has root certificates" true
-        (List.length roots > 10)
+        (List.length system > 10);
+      Alcotest.(check int) "no extra certificates" 0 (List.length extra)
   | Error e -> Alcotest.fail e
 
 let bad_extra () =
@@ -200,7 +198,7 @@ let bad_extra () =
     Bactrian_tls.Tls_connector.system ~process_mgr:(Eio.Stdenv.process_mgr env)
   in
   match Upstream.tls_ready c with
-  | Ok () -> Alcotest.fail "a missing extra file was accepted"
+  | Ok (_ : Upstream.trust) -> Alcotest.fail "a missing extra file was accepted"
   | Error e ->
       Alcotest.(check bool)
         ("names the variable: " ^ e)
@@ -223,8 +221,14 @@ let system_with_extra () =
         Bactrian_tls.Tls_connector.system
           ~process_mgr:(Eio.Stdenv.process_mgr env)
       in
-      Alcotest.(check (result unit string))
-        "ready" (Ok ()) (Upstream.tls_ready c);
+      (match Upstream.tls_ready c with
+      | Ok { extra = Some { variable; count }; roots } ->
+          Alcotest.(check string)
+            "the variable" Bactrian_tls.Trust.extra_variable variable;
+          Alcotest.(check int) "one extra certificate" 1 count;
+          Alcotest.(check bool) "the system's too" true (roots > count)
+      | Ok { extra = None; _ } -> Alcotest.fail "the extra CA is not counted"
+      | Error e -> Alcotest.fail e);
       ok (call env c (url port "localhost")))
     ()
 
@@ -279,9 +283,9 @@ let () =
           Alcotest.test_case "no connector refuses https" `Quick
             no_tls_without_connector;
           Alcotest.test_case "a cut-off chunked body, close_notify" `Quick
-            (cut_off true);
+            (cut_off H.Close_notify);
           Alcotest.test_case "a cut-off chunked body, TCP close" `Quick
-            (cut_off false);
+            (cut_off H.Tcp_close);
           Alcotest.test_case "a stream split across records" `Quick
             split_records;
           Alcotest.test_case "an http URL stays plain" `Quick http_stays_plain;
