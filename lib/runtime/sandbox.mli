@@ -248,12 +248,16 @@ val vm_clock :
   env:Eio_unix.Stdenv.base ->
   wanted:bool ->
   t ->
-  run ->
+  run_id:string ->
+  run_dir:string ->
+  state_dir:string ->
+  temp_dir:string ->
+  cwd:string ->
   string list ->
   Agent_clock.vm option
 (** [Some] what decides the agent's clock when the agent runs in the virtual
-    machine ({!Sandbox_vm.clock}), run before {!start} with the same [run]
-    (without [faketime]). [None] for every other backend. *)
+    machine ({!Sandbox_vm.clock}), run before {!start} with the same directories
+    as its [run]. [None] for every other backend. *)
 
 val preload_hidden : t -> string -> bool
 (** [preload_hidden t library] is whether the library, a resolved absolute path,

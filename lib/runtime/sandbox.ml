@@ -808,13 +808,13 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
   | Unsandboxed _, _ ->
       None
 
-let vm_clock ~env ~wanted t (run : run) agent =
+let vm_clock ~env ~wanted t ~run_id ~run_dir ~state_dir ~temp_dir ~cwd agent =
   match t with
   | Sandboxed { host = { engine = Vm vm; _ } as host; _ } ->
       Some
-        (Sandbox_vm.clock ~env ~wanted vm (vm_layout host) ~run_id:run.run_id
-           ~run_dir:run.run_dir ~state_dir:(resolved run.state_dir)
-           ~temp_dir:(resolved run.temp_dir) ~cwd:(resolved run.cwd) agent)
+        (Sandbox_vm.clock ~env ~wanted vm (vm_layout host) ~run_id ~run_dir
+           ~state_dir:(resolved state_dir) ~temp_dir:(resolved temp_dir)
+           ~cwd:(resolved cwd) agent)
   | Sandboxed { host = { engine = Seatbelt | Bubblewrap _; _ }; _ }
   | Unsandboxed _ ->
       None
