@@ -26,11 +26,13 @@ jobs:
       - run: pnpm install --frozen-lockfile --dir examples/agents/typescript
       - run: pnpm --dir examples/agents/typescript build
       - run: uv sync --locked --project examples/agents/python
-      - name: Type-check the sandbox escape agents and the live smoke script (never run)
+      # The live smoke script never reaches a provider in CI. @acceptance runs it
+      # against a fake bactrian (test/live_smoke).
+      - name: Type-check the sandbox escape agents, the live smoke script and its test
         run: |
           pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
-          uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py dev/live-smoke.py
-          uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py dev/live-smoke.py
+          uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py dev/live-smoke.py test/live_smoke
+          uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py dev/live-smoke.py test/live_smoke
       # The TLS stack (zarith under mirage-crypto-ec) needs GMP, and its conf-*
       # packages find it with pkg-config. On Linux the sandbox tests also need
       # bubblewrap and unprivileged user namespaces, which Ubuntu's AppArmor

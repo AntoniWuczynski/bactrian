@@ -22,6 +22,10 @@ variable below is set explicitly:
                                 dev/capture: date, provider, model,
                                 input_tokens, output_tokens, usd
 
+It also refuses to start when BACTRIAN_UPSTREAM_OPENAI is set. The smoke would
+then pass without reaching OpenAI, and over an http override bactrian would
+send the real key in cleartext.
+
 Usage, from the repository root with `bactrian` on PATH, after building the
 TypeScript agent (`pnpm build` in examples/agents/typescript) and syncing the
 Python one (`uv sync --locked` in examples/agents/python):
@@ -293,6 +297,11 @@ def smoke(name: str, command: list[str], session: Session, model: str) -> None:
 def main() -> None:
     if os.environ.get("BACTRIAN_LIVE_SMOKE") != "1":
         sys.exit("live-smoke: set BACTRIAN_LIVE_SMOKE=1 to spend real money")
+    upstream = os.environ.get("BACTRIAN_UPSTREAM_OPENAI", "")
+    if upstream:
+        sys.exit(
+            f"live-smoke: unset BACTRIAN_UPSTREAM_OPENAI ({upstream}), the smoke must reach OpenAI"
+        )
     key = require_env("OPENAI_API_KEY")
     cap_from_env()
     model = require_env("BACTRIAN_SMOKE_MODEL")

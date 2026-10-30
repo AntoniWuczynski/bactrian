@@ -1,0 +1,14 @@
+; dev/live-smoke.py against a fake bactrian on PATH. Not part of `dune test`:
+; it needs uv and the Python agent's environment (`uv sync --locked` in
+; examples/agents/python). Run it with `dune build @acceptance`.
+
+(rule
+ (alias acceptance)
+ (deps
+  ../../dev/live-smoke.py
+  fake_bactrian.py
+  test_live_smoke.py
+  ../../examples/agents/python/uv.lock)
+ (action
+  (system
+   "uv run --no-sync --project \"$DUNE_SOURCEROOT/examples/agents/python\" python -I %{dep:test_live_smoke.py}")))
