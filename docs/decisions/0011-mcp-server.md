@@ -2,6 +2,8 @@
 
 Date: 2026-10-13
 
+Superseded in part by decision 0016, which adds serving over Streamable HTTP and the Tasks extension beside the jobs, and makes job IDs 128 random bits.
+
 ## Context
 
 Coding agents such as Claude Code, Codex and Cursor drive local tools through the Model Context Protocol (MCP). bactrian already speaks MCP as a proxy between an agent and its tool servers (decision 0006), and every command's work and `--json` output live in the command library (`bactrian.app`). `bactrian serve-mcp` puts those commands behind MCP tools, so a coding agent can record, replay, run experiments, compare variants and read divergences without parsing terminal output.
@@ -14,7 +16,7 @@ Two protocol eras are in use. Revision 2026-07-28 has no handshake. Every reques
 
 ### Transport
 
-stdio only. Decision 0016 later added Streamable HTTP as an option. The client starts `bactrian serve-mcp` as a subprocess and exchanges one JSON-RPC message per line with it [4]. Streamable HTTP would add Origin validation, the header rules of 2026-07-28 and a listener that a page in a browser could reach, for no client that needs it now.
+stdio only. The client starts `bactrian serve-mcp` as a subprocess and exchanges one JSON-RPC message per line with it [4]. Streamable HTTP would add Origin validation, the header rules of 2026-07-28 and a listener that a page in a browser could reach, for no client that needs it now.
 
 stdout carries nothing but MCP messages, and never a request [4]. Before anything else the server moves its protocol channel to descriptors of its own, puts `/dev/null` on descriptor 0 and standard error on descriptor 1. A child process that inherits the standard descriptors (a sandbox probe, `log show`) or a stray print therefore cannot read the client's messages or write between the replies. Replies go through one writer under a mutex, one encoded message per line. Warnings and progress go to standard error, which the client may show or ignore [4].
 
@@ -45,11 +47,11 @@ Each tool carries all four `ToolAnnotations` hints, whose names and defaults wer
 
 ### Jobs, not Tasks
 
-`run_start`, `record_start` and `replay_start` start a job and return `{"job_id"}` at once. `job_status` returns its state (`running`, `succeeded`, `failed` or `cancelled`), its progress in runs and, once it has finished, its exit status and either `result` (the command's `--json` output) or `error`. MCP has no sessions in 2026-07-28, and the tools page recommends explicit handles in tool arguments for state that spans calls [3]. Job IDs are 64 random bits (128 since decision 0016). At most four jobs run at once, or the number `serve-mcp --max-jobs` gives, and a fifth is refused with a tool error until one ends, as the tools page asks servers to rate-limit tool invocations [3]. The job table lives in the server process, in its Eio switch. A finished job stays queryable for an hour, and only the newest hundred finished jobs are kept, because a coding agent's session keeps its server for hours and a replay's result holds every divergence. The descriptions of the three tools that start jobs say so, as the tools page asks of a tool that creates state, and asks that a handle have a bounded lifetime [3]. Results stay on disk under `.bactrian/`.
+`run_start`, `record_start` and `replay_start` start a job and return `{"job_id"}` at once. `job_status` returns its state (`running`, `succeeded`, `failed` or `cancelled`), its progress in runs and, once it has finished, its exit status and either `result` (the command's `--json` output) or `error`. MCP has no sessions in 2026-07-28, and the tools page recommends explicit handles in tool arguments for state that spans calls [3]. Job IDs are 64 random bits. At most four jobs run at once, or the number `serve-mcp --max-jobs` gives, and a fifth is refused with a tool error until one ends, as the tools page asks servers to rate-limit tool invocations [3]. The job table lives in the server process, in its Eio switch. A finished job stays queryable for an hour, and only the newest hundred finished jobs are kept, because a coding agent's session keeps its server for hours and a replay's result holds every divergence. The descriptions of the three tools that start jobs say so, as the tools page asks of a tool that creates state, and asks that a handle have a bounded lifetime [3]. Results stay on disk under `.bactrian/`.
 
 An exception other than cancellation from a job or a tool call, which is a fault of bactrian's, fails that job or call with an internal error and logs its backtrace to standard error. It does not end the server and the other jobs, as it would end a command on the command line.
 
-The Tasks extension (`io.modelcontextprotocol/tasks`) is not used. Its field names beyond the overview are not verified, Codex does not support it, Claude Code's support is not confirmed, and start-and-poll works with every client. Decision 0016 later offered it beside the jobs, for clients that declare it.
+The Tasks extension (`io.modelcontextprotocol/tasks`) is not used. Its field names beyond the overview are not verified, Codex does not support it, Claude Code's support is not confirmed, and start-and-poll works with every client.
 
 `job_cancel` ends a job as SIGINT ends the command. On the command line a signal handler fires a stop trigger, and in the server each job has a trigger of its own, so cancelling one job touches no signal handler and no other job. Either way the command's fibre is cancelled: agents are killed with their process groups, unfinished cassettes stay partial, an experiment's manifest marks the runs in flight as interrupted, and `job_cancel` returns only once all of that has happened. A cancelled experiment's error holds its `experiment_id`, and `run_start` with `resume` continues it.
 
@@ -95,7 +97,7 @@ A client polls a job. It gets no progress notification and no Tasks handle, and 
 
 A call in flight when the input closes gets no reply, because the client has said it is done.
 
-Serving over Streamable HTTP and the Tasks extension are left for later. Decision 0016 adds both.
+Serving over Streamable HTTP and the Tasks extension are left for later.
 
 ## Sources
 

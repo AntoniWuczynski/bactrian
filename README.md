@@ -352,7 +352,7 @@ The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the
 
 ### Over Streamable HTTP
 
-`bactrian serve-mcp --http PORT` serves the same tools at `http://127.0.0.1:PORT/mcp` instead (`--http 0` picks a free port), until SIGINT or SIGTERM, and takes the same flags. It listens on the loopback interface only. Every request must carry `Authorization: Bearer TOKEN`, where the token is the value of `BACTRIAN_MCP_TOKEN` (at least 32 characters) or, when that is not set, one the server makes and prints on standard error at start. A request whose `Host` is not `127.0.0.1:PORT` or `localhost:PORT`, or that carries an `Origin` other than those two, is refused with status 403, so a web page you visit cannot drive the server, even through DNS rebinding. `--http-allow-origin ORIGIN` accepts one more origin, for a client that runs in a browser. For Claude Code:
+`bactrian serve-mcp --http PORT` serves the same tools at `http://127.0.0.1:PORT/mcp` instead (`--http 0` picks a free port), until SIGINT or SIGTERM, and takes the same flags. It listens on the loopback interface only. Every request must carry `Authorization: Bearer TOKEN`, where the token is the value of `BACTRIAN_MCP_TOKEN` (at least 32 characters) or, when that is not set, one the server makes and prints on standard error at start. A request whose `Host` is not `127.0.0.1:PORT` or `localhost:PORT`, or that carries an `Origin` other than those two, is refused with status 403, so a web page you visit cannot drive the server, even through DNS rebinding. `--http-allow-origin ORIGIN` accepts one more origin (`scheme://host` with an optional `:port`, such as `http://localhost:5173`), for a client that runs in a browser: the server answers the browser's preflight and lets a page from that origin read its answers, and the page still needs the token. For Claude Code:
 
 ```sh
 export BACTRIAN_MCP_TOKEN=$(openssl rand -hex 32)
@@ -361,7 +361,7 @@ claude mcp add --transport http bactrian http://127.0.0.1:8931/mcp \
   --header "Authorization: Bearer $BACTRIAN_MCP_TOKEN"
 ```
 
-Each POST carries one message and there are no sessions. A 2026-07-28 request must repeat its protocol version, method and tool or task in the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, or it is refused with status 400 and error -32020. A tool call is answered with an event stream when the request accepts one, and with JSON otherwise, and a client that closes the connection before the answer cancels the call. Jobs and tasks belong to the server, not to a connection, and SIGINT or SIGTERM cancels the running ones as the end of input does over stdio. The reasoning is in [`docs/decisions/0016-mcp-http-and-tasks.md`](docs/decisions/0016-mcp-http-and-tasks.md).
+Each POST carries one message and there are no sessions. A 2026-07-28 request must repeat its protocol version, method and tool or task in the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, or it is refused with status 400 and error -32020. A tool call is answered with an event stream when the request accepts one, and with JSON otherwise, and a client that closes the connection before the answer cancels the call. The server keeps at most 64 connections, and closes one that has no request admitted within 30 seconds. Jobs and tasks belong to the server, not to a connection, and SIGINT or SIGTERM cancels the running ones as the end of input does over stdio. The reasoning is in [`docs/decisions/0016-mcp-http-and-tasks.md`](docs/decisions/0016-mcp-http-and-tasks.md).
 
 ## Building from source
 

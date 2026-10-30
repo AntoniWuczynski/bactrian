@@ -18,13 +18,19 @@ stdio stays the default. `serve-mcp --http PORT` serves Streamable HTTP at `http
 
 It listens on `127.0.0.1` only, with no option to listen elsewhere. The transport is plain HTTP, since bactrian has no Transport Layer Security (TLS) stack yet, so on any other interface the bearer token would cross the network in the clear. A remote client can reach the server through a tunnel that ends on the machine.
 
-Every request is checked in this order, before its body is read:
+Every request is checked in this order, before its message is read:
 
 1. `Host` must be `127.0.0.1:PORT` or `localhost:PORT`, or the answer is 403. A page that rebinds its own name to `127.0.0.1` still sends that name in `Host`.
 2. `Origin` must be absent, `http://127.0.0.1:PORT`, `http://localhost:PORT` or an origin given with `--http-allow-origin`, or the answer is 403 with a JSON-RPC error that has no id [1]. A browser sends `Origin` on every POST, so a page you visit cannot reach the server. This check comes before the token, so a page learns nothing about it.
-3. The path must be `/mcp` (404) and the method POST. GET and DELETE, the stream and session ending of earlier revisions, are 405 [1][5], with `Allow: POST`.
+3. The path must be `/mcp` (404) and the method POST. GET and DELETE, the stream and session ending of earlier revisions, are 405 [1][5], with `Allow: POST`. `OPTIONS` from an allowed origin is a browser's preflight, answered as below.
 4. `Authorization: Bearer TOKEN` must hold the server's token, compared in constant time, or the answer is 401 with `WWW-Authenticate: Bearer` [4]. The token is the value of `BACTRIAN_MCP_TOKEN`, which must be at least 32 visible ASCII characters, or 32 random bytes in hex that the server makes and prints once on standard error. A static token, not the OAuth flow of the authorization page, because a local server for one user has no authorisation server to send a client to, and the page leaves authorization optional [4]. The variable reaches no agent: the launch environment is scrubbed as for stdio (decision 0010), and jobs pass no variable without `--trust-project`.
 5. `Content-Type` must be `application/json` (415) and the body at most 16 MiB (413), the limit of a stdio line.
+
+The body of a refused request is still read and dropped, up to 64 KiB. Left unread on a kept-alive connection, it would be parsed as the next request, one whose `Host` and `Origin` no check had seen, so a page could hide a request with the right `Host` and no `Origin` inside a refused one. A longer refused body, and a 413, end the connection after the answer instead. The server then stops sending and drops what still arrives for up to two seconds before it closes, since closing with bytes unread resets the connection, which can destroy the answer before the client reads it.
+
+A page from an allowed origin is served as Cross-Origin Resource Sharing (CORS) asks [11]. Its POST carries `Authorization` and JSON, so the browser first sends a preflight `OPTIONS` request, which needs neither token nor JSON. It is answered with 204, `Access-Control-Allow-Methods: POST` and the headers it asks for in `Access-Control-Allow-Headers`, since the `Mcp-Param-*` names vary from tool to tool, cached for ten minutes. Every answer to a request from an allowed origin, refusals included, carries that origin in `Access-Control-Allow-Origin` with `Vary: Origin`, so the page can read it. An origin given with `--http-allow-origin` must be `http` or `https`, `://` and a host with an optional port and no path, as `Origin` carries one, and is compared in lower case. Anything else, such as a trailing slash or `*`, is a usage error rather than an origin that never matches.
+
+Before the token is checked, a local process of any user can connect, so connections are bounded: at most 64 are open at once, a request's head holds at most 64 KiB, and a connection that has no request admitted within 30 seconds of its start, or of the answer to its last admitted request, is closed without an answer. A refusal does not restart that time.
 
 ### Messages and eras
 
@@ -32,7 +38,7 @@ A POST holds one JSON-RPC message, answered on its own. A notification is accept
 
 There is no connection, so each request carries its own era, and the server never mints an `Mcp-Session-Id` [1].
 
-- A request whose `_meta` names a protocol version is 2026-07-28. Its headers must match its body: `MCP-Protocol-Version` its version, `Mcp-Method` its method, and `Mcp-Name` the `name` of a `tools/call` or the `taskId` of a task method, as the extension asks [9]. A value in the form `=?base64?...?=` is decoded first, and one that holds a byte outside visible ASCII, space and tab is invalid [1]. No tool marks a parameter with `x-mcp-header`, so no `Mcp-Param-*` header is recognised, and unrecognised ones are ignored [1]. A failure is -32020 with status 400, carrying the request's id as the page's example does [1].
+- A request whose `_meta` names a protocol version is 2026-07-28. Its headers must match its body: `MCP-Protocol-Version` its version, `Mcp-Method` its method, and `Mcp-Name` the `name` of a `tools/call` or the `taskId` of a task method, as the extension asks [9]. An `Mcp-Name` in the form `=?base64?...?=` is decoded first, since the page allows that form for `Mcp-Name` and `Mcp-Param-*` only, and a value that holds a byte outside visible ASCII, space and tab is invalid [1]. No tool marks a parameter with `x-mcp-header`, so no `Mcp-Param-*` header is recognised, and unrecognised ones are ignored [1]. A failure is -32020 with status 400, carrying the request's id as the page's example does [1].
 - `initialize` opens the legacy era as over stdio, and the answer is the same.
 - Any other request follows its `MCP-Protocol-Version`: a legacy revision is that revision, 2026-07-28 is the modern era (where the missing `_meta` is -32602), an unknown value is 400, and no header is 2025-03-26, which a server that supports clients before 2025-06-18 may assume [1][5].
 
@@ -53,13 +59,13 @@ The task ID is the job ID, so `job_status` and `job_cancel` work on a task too. 
 - A command that stopped with an error is `completed` too, with `isError: true` and the error as `--json` prints it, because `failed` is only for a JSON-RPC error during execution, and a tool's errors are results [9]. No task is ever `failed`: a fault of bactrian's in a job is already a tool error (decision 0011).
 - A cancelled job is `cancelled`, with the error's message, which for an experiment names the ID to resume, in `statusMessage`.
 
-`createdAt` is when the job started and `lastUpdatedAt` when it started, a run of it finished or it ended, both in UTC to the second. `ttlMs` is `null` while the job runs, since a running job is never dropped, and once it has ended the time from its start until the table forgets it, an hour after it ended (decision 0011). The value may change over the life of a task [9]. `pollIntervalMs` is 1000.
+`createdAt` is when the job started, and `lastUpdatedAt` when it started, when it ended, or when a poll first saw that another of its runs had finished, both in UTC to the second. The runs are counted only when a client asks, so a finished run moves `lastUpdatedAt` at the next poll, not at the moment it finished. `ttlMs` is `null` while the job runs, since a running job is never dropped, and once it has ended the time from its start until the table forgets it, an hour after it ended (decision 0011). The value may change over the life of a task [9]. `pollIntervalMs` is 1000.
 
 `tasks/get` gives the task with `resultType: "complete"`, and the `result` once completed. `tasks/cancel` asks the job to stop and acknowledges at once with an empty result, which the extension allows, cancellation being cooperative [9]. The job then unwinds as on `job_cancel`. `tasks/update` is acknowledged and changes nothing, because no job asks for input. An unknown or forgotten task is -32602 for all three, and a request that does not declare the extension is -32021 with the extension in `data.requiredCapabilities` [9][3]. Task status notifications through `subscriptions/listen` are optional and not offered, so clients poll [9].
 
 ## Consequences
 
-A client that cannot start a subprocess, or runs elsewhere on the machine, can drive bactrian over HTTP with the token, and a page in a browser cannot. The token in `BACTRIAN_MCP_TOKEN` or on the terminal is the only secret: whoever has it can call every tool the policy allows, as a client over stdio can.
+A client that cannot start a subprocess, or runs elsewhere on the machine, can drive bactrian over HTTP with the token, and a page in a browser cannot unless the user allowed its origin and it has the token. The token in `BACTRIAN_MCP_TOKEN` or on the terminal is the only secret: whoever has it can call every tool the policy allows, as a client over stdio can.
 
 Until bactrian speaks TLS, nothing on another machine can reach the listener.
 
@@ -81,3 +87,4 @@ Checked on 2026-10-30, from the raw pages of modelcontextprotocol.io and the ext
 8. Extension support matrix: <https://modelcontextprotocol.io/extensions/client-matrix>. No client marked for Tasks.
 9. Tasks specification, 2026-07-28: <https://github.com/modelcontextprotocol/ext-tasks/blob/main/specification/2026-07-28/tasks.md>. `CreateTaskResult`, the task fields and states, `completed` for a tool error and `failed` only for a JSON-RPC one, durable creation, `tasks/get`, `tasks/update` and `tasks/cancel` with their acknowledgements, -32602 and -32021, `Mcp-Name` as the task ID over HTTP, and unguessable task IDs.
 10. Tasks schema, 2026-07-28: <https://github.com/modelcontextprotocol/ext-tasks/blob/main/schema/2026-07-28/schema.ts>. The TypeScript types of the above.
+11. Cross-Origin Resource Sharing, MDN: <https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS>. A JSON `Content-Type` or an `Authorization` header makes a request preflighted, the preflight answer's `Access-Control-Allow-Methods`, `-Allow-Headers` and `-Max-Age`, `Access-Control-Allow-Origin` on the answer a page reads, and `Vary: Origin` when that origin comes from an allowlist.
