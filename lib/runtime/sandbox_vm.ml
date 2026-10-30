@@ -54,43 +54,42 @@ let identity path =
   | st -> Some (st.st_dev, st.st_ino)
   | exception Unix.Unix_error _ -> None
 
-(* The entries of a directory holding a masked file, each with what it is and
-   whether it leads to one of [masked] (device and inode) under another name. *)
+(* An entry of a directory holding a masked file: what it is, and whether it
+   leads to one of [masked] (device and inode) under another name. *)
+let describe ~masked dir name : Vm_args.entry =
+  let path = Filename.concat dir name in
+  let kind : Vm_args.entry_kind =
+    match (Unix.lstat path).st_kind with
+    | S_LNK -> (
+        match (Unix.stat path).st_kind with
+        | S_REG -> (
+            match Unix.realpath path with
+            | target -> Link_to_file target
+            | exception Unix.Unix_error _ -> Other_link)
+        | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK -> Other_link
+        | exception Unix.Unix_error _ -> Other_link)
+    | S_REG -> File
+    | S_DIR -> Dir
+    | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
+    | exception Unix.Unix_error _ -> Other_link
+  in
+  let identity = identity path in
+  let masked_file =
+    match identity with
+    | Some id ->
+        List.exists
+          (fun (dev, ino) -> Int.equal dev (fst id) && Int.equal ino (snd id))
+          masked
+    | None -> false
+  in
+  { name; kind; identity; masked_file }
+
 let list_dir ~masked dir =
   match Sys.readdir dir with
   | exception Sys_error m -> Error m
   | names ->
       Ok
-        (List.map
-           (fun name : Vm_args.entry ->
-             let path = Filename.concat dir name in
-             let kind : Vm_args.entry_kind =
-               match (Unix.lstat path).st_kind with
-               | S_LNK -> (
-                   match (Unix.stat path).st_kind with
-                   | S_REG -> (
-                       match Unix.realpath path with
-                       | target -> Link_to_file target
-                       | exception Unix.Unix_error _ -> Other_link)
-                   | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK ->
-                       Other_link
-                   | exception Unix.Unix_error _ -> Other_link)
-               | S_REG -> File
-               | S_DIR -> Dir
-               | S_CHR | S_BLK | S_FIFO | S_SOCK -> Special
-               | exception Unix.Unix_error _ -> Other_link
-             in
-             let identity = identity path in
-             let masked_file =
-               match identity with
-               | Some id ->
-                   List.exists
-                     (fun (dev, ino) ->
-                       Int.equal dev (fst id) && Int.equal ino (snd id))
-                     masked
-               | None -> false
-             in
-             { name; kind; identity; masked_file })
+        (List.map (describe ~masked dir)
            (List.sort String.compare (Array.to_list names)))
 
 (* What is at each existing allow_write path: container mounts directories
@@ -146,14 +145,47 @@ let remove_stale_staging ~runs_dir =
               | _ -> None))
         (Array.to_list runs)
 
+let masked_identities deny =
+  List.filter_map
+    (fun (p, k) -> match k with `File -> identity p | `Dir | `Absent -> None)
+    deny
+
+let kind_tag : Vm_args.entry_kind -> string = function
+  | File -> "file"
+  | Dir -> "directory"
+  | Special -> "special"
+  | Link_to_file target -> "link to " ^ target
+  | Other_link -> "other link"
+
+let recheck ~deny rebound =
+  let masked = masked_identities deny in
+  let same_identity a b =
+    match (a, b) with
+    | Some (d, i), Some (d', i') -> Int.equal d d' && Int.equal i i'
+    | None, None -> true
+    | Some _, None | None, Some _ -> false
+  in
+  List.fold_left
+    (fun acc (path, (listed : Vm_args.entry)) ->
+      let* () = acc in
+      let dir = Filename.dirname path in
+      let now = describe ~masked dir listed.name in
+      if
+        String.equal (kind_tag now.kind) (kind_tag listed.kind)
+        && same_identity now.identity listed.identity
+        && not now.masked_file
+      then Ok ()
+      else
+        Error
+          (Printf.sprintf
+             "%s, beside a hidden file in %s, changed after it was listed, so \
+              the run stops rather than show what it is now"
+             path dir))
+    (Ok ()) rebound
+
 let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
     ~forwards command =
-  let masked =
-    List.filter_map
-      (fun (p, k) ->
-        match k with `File -> identity p | `Dir | `Absent -> None)
-      layout.deny
-  in
+  let masked = masked_identities layout.deny in
   Result.map_error Vm_args.describe_error
     (Vm_args.argv
        {
@@ -264,13 +296,19 @@ let remove t name =
 (* The command the bridge runs. Docker's [run] is it. For container the
    staging directories are made, the container created, and its image checked
    against the one [prepare] saw, so a reference moved since cannot change what
-   the agent runs in. *)
-let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
+   the agent runs in. The entries bound again beside a hidden file are looked
+   at once more first, as late as this process can: the runtime resolves their
+   paths itself, so a swap after this check is not seen. *)
+let launch t layout ~run_dir ~name (invocation : Vm_args.invocation) =
+  let recheck () = recheck ~deny:layout.deny invocation.rebound in
   match Vm_runtime.kind t.runtime with
-  | `Docker -> Ok invocation.argv
+  | `Docker ->
+      let* () = recheck () in
+      Ok invocation.argv
   | `Container ->
       let process_mgr = t.process_mgr and clock = t.clock in
       let* () = make_stages ~run_dir invocation.stages in
+      let* () = recheck () in
       let* () =
         Vm_runtime.create ~process_mgr ~clock t.runtime invocation.argv
       in
@@ -341,7 +379,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
     invocation t layout ~run_id:id ~run_dir:dir ~env_file ~state_dir ~temp_dir
       ~cwd:state_dir ~forwards:[ port ] (Probe paths)
   in
-  let* argv = launch t ~run_dir:dir ~name invocation in
+  let* argv = launch t layout ~run_dir:dir ~name invocation in
   let out = Buffer.create 256 and err = Buffer.create 256 in
   let* code =
     match
@@ -424,7 +462,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
     invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
       ~forwards:[ port ] (Agent agent)
   in
-  let* runtime_argv = launch t ~run_dir ~name invocation in
+  let* runtime_argv = launch t layout ~run_dir ~name invocation in
   Ok
     {
       argv =

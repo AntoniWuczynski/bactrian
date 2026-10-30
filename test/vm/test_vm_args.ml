@@ -400,6 +400,41 @@ let test_every_file_mask () =
     ]
     m
 
+(* The entries bound again by path, which the caller looks at once more just
+   before the container is created: Docker's files, container's directories
+   (its files are hard links, checked when made), and none for a masked file's
+   other names. *)
+let test_rebound () =
+  let listing =
+    [
+      ( "/p",
+        [
+          plain ".env";
+          plain "agent.js";
+          dir "src";
+          ( plain "env-copy" |> fun (e : Vm_args.entry) ->
+            { e with masked_file = true } );
+        ] );
+    ]
+  in
+  let rebound kind =
+    List.map fst
+      (invocation (input ~kind ~deny:[ ("/p/.env", `File) ] ~listing ()))
+        .rebound
+  in
+  Alcotest.check strings "docker binds files and directories"
+    [ "/p/agent.js"; "/p/src" ]
+    (rebound `Docker);
+  Alcotest.check strings "container binds directories, links files" [ "/p/src" ]
+    (rebound `Container);
+  let entry =
+    List.assoc "/p/src"
+      (invocation (input ~deny:[ ("/p/.env", `File) ] ~listing ())).rebound
+  in
+  Alcotest.(check bool)
+    "with the entry the listing gave" true
+    (entry = dir "src")
+
 (* In the virtual machine all of .bactrian is masked: the run's own
    directories and allow_write paths come back, except in another run or the
    CA. *)
@@ -794,6 +829,7 @@ let () =
           Alcotest.test_case "nested masks" `Quick test_nested_masks;
           Alcotest.test_case ".bactrian masked" `Quick test_bactrian_masked;
           Alcotest.test_case "every file mask" `Quick test_every_file_mask;
+          Alcotest.test_case "entries bound again" `Quick test_rebound;
         ] );
       ( "container",
         [

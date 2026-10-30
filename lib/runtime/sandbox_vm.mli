@@ -69,6 +69,17 @@ val make_stages :
     inode), or the staging stops with [Error] and that link is removed. The
     caller removes the rest. *)
 
+val recheck :
+  deny:(string * Bactrian_core.Sandbox_policy.kind) list ->
+  (string * Bactrian_core.Vm_args.entry) list ->
+  (unit, string) result
+(** Looks again at the entries that {!Bactrian_core.Vm_args.invocation} binds
+    again beside a hidden file, by path: each must still be what it was listed
+    as (the same kind and the same device and inode) and not a name of a file of
+    [deny]. [Error] names the first that changed. Run just before the container
+    is created, which is as late as this process can: the runtime then resolves
+    the paths itself, and a swap between this check and that is not seen. *)
+
 type session = {
   argv : string list;
       (** [bactrian __vm-bridge forward=PORT container=NAME heartbeat=FILE --
@@ -96,11 +107,12 @@ val start :
     [agent.env] in [run_dir] (mode 0600), and gives the command that runs the
     agent in a container named [bactrian-RUN_ID] with [port] forwarded to the
     host's loopback. For container it first makes the staging directories
-    ({!Bactrian_core.Vm_args.stage}) under [run_dir], creates the container and
-    checks its image ({!image_id}). The heartbeat file ([heartbeat/beat] in
-    [run_dir]) is made for the bridge to touch and the relay to watch. When [sw]
-    ends the container is removed, even if the bridge was killed, and so are
-    [agent.env] and the staging directories. If bactrian is killed instead, the
-    bridge removes the container and the staging directories, and if the bridge
-    is killed too, the next preflight does ({!Vm_runtime.remove_stale},
-    {!remove_stale_staging}). *)
+    ({!Bactrian_core.Vm_args.stage}) under [run_dir], looks once more at the
+    entries bound again ({!recheck}), creates the container and checks its image
+    ({!image_id}); Docker only does the look. The heartbeat file
+    ([heartbeat/beat] in [run_dir]) is made for the bridge to touch and the
+    relay to watch. When [sw] ends the container is removed, even if the bridge
+    was killed, and so are [agent.env] and the staging directories. If bactrian
+    is killed instead, the bridge removes the container and the staging
+    directories, and if the bridge is killed too, the next preflight does
+    ({!Vm_runtime.remove_stale}, {!remove_stale_staging}). *)

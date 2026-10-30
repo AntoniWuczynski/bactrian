@@ -160,6 +160,12 @@ type stage = {
 type invocation = {
   argv : string list;
   stages : stage list;  (** Empty for Docker. *)
+  rebound : (string * entry) list;
+      (** The entries beside a masked file that the command binds again by their
+          path (Docker's files and directories, container's directories), each
+          with the entry {!input.list_dir} gave. The runtime resolves the path
+          itself when it creates the container, so the caller checks them once
+          more just before ([Sandbox_vm.recheck]). *)
 }
 
 val argv : input -> (invocation, error) result

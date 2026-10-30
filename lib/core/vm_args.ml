@@ -53,7 +53,11 @@ type stage = {
   mount_points : string list;
 }
 
-type invocation = { argv : string list; stages : stage list }
+type invocation = {
+  argv : string list;
+  stages : stage list;
+  rebound : (string * entry) list;
+}
 
 (* Each entry beside a masked file is one more --mount of about twice its path:
    1000 of them at 300 bytes is 0.3 MiB of arguments, well under the 1 MiB
@@ -303,7 +307,7 @@ let rec map_all f = function
 
 (* What goes back into a masked file's directory: mounts and, in container's
    staging directory, hard links. *)
-type item = Mount of mount | Link of link
+type item = Mount of mount * entry | Link of link
 
 (* The entries of a masked file's directory, back as the plain mounts showed
    them. One that is a masked file under any name (a hard link, a link to it)
@@ -333,7 +337,7 @@ let entries_of i plain ~parents ~files dir =
           let path = Filename.concat dir e.name in
           let bind writable =
             let* () = check_path "an entry beside a hidden file" path in
-            Ok (Some (Mount (Bind { path; writable })))
+            Ok (Some (Mount (Bind { path; writable }, e)))
           and link source =
             (* Without the identity the listing saw, a link could not be
                checked, so the entry is left out. *)
@@ -401,7 +405,7 @@ let mounts i =
       (List.filter (fun m -> not (replaced m)) plain
       @ List.map (fun d -> Mask_parent d) parents
       @ List.filter_map
-          (function Mount m -> Some m | Link _ -> None)
+          (function Mount (m, _) -> Some m | Link _ -> None)
           (List.concat entries))
   in
   (* In container, a staging directory for each masked file's directory: its
@@ -433,7 +437,12 @@ let mounts i =
             })
           (List.combine parents entries)
   in
-  Ok (all_mounts, stages)
+  let rebound =
+    List.filter_map
+      (function Mount (m, e) -> Some (mount_path m, e) | Link _ -> None)
+      (List.concat entries)
+  in
+  Ok (all_mounts, stages, rebound)
 
 let check_port p = if p >= 1 && p <= 65535 then Ok () else Error (Bad_port p)
 
@@ -467,7 +476,7 @@ let argv i =
           i.allow_write
   in
   let* () = all check_port i.forwards in
-  let* mounts, stages = mounts i in
+  let* mounts, stages, rebound = mounts i in
   let* () =
     match shows (plain_mounts i) i.workdir with
     | Some _ -> Ok ()
@@ -552,6 +561,7 @@ let argv i =
         @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
         @ tail;
       stages;
+      rebound;
     }
 
 (* docker/cli reads the file with a bufio.Scanner, whose token limit is 64 KiB,
