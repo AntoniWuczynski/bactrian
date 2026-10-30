@@ -234,6 +234,7 @@ type vm_host = {
       (** The runtime's name and architecture, or why it does not work. *)
   image_present : string -> (unit, string) result;
   relay_cached : unit -> (bool, string) result;
+  faketime_cached : Vm_exec_probe.libc -> (bool, string) result;
 }
 
 let no_runtime_fix =
@@ -324,6 +325,10 @@ let vm_host ~env runtime : vm_host =
             Result.map ignore (Vm_runtime.image_id ~process_mgr ~clock r image)));
     relay_cached =
       (fun () -> Result.bind (Lazy.force runtime) Vm_runtime.relay_cached);
+    faketime_cached =
+      (fun libc ->
+        Result.bind (Lazy.force runtime) (fun r ->
+            Vm_runtime.faketime_cached r libc));
   }
 
 (* The clock *)
@@ -332,9 +337,9 @@ let vm_host ~env runtime : vm_host =
 let any_sim_now = "2000-01-01T00:00:00Z"
 
 let reason_status : Clock_label.reason -> status = function
-  | Macos | Vm -> Pass
+  | Macos -> Pass
   | Faketime_off | Http_mode -> Skip
-  | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
+  | Vm | Library_not_found | Library_hidden | Setuid_sandbox | Invalid_sim_now
   | Static_binary | Go_binary | Unreadable_executable ->
       Warn
 
@@ -353,9 +358,39 @@ let reason_text : Clock_label.reason -> string = function
       "the agent's executable is missing, unreadable or not a little-endian \
        ELF file"
   | Http_mode -> "bactrian does not start an HTTP-mode agent"
-  | Vm -> "the agent runs in the virtual machine sandbox"
+  | Vm ->
+      "the virtual machine could not look at the image or build libfaketime \
+       for it"
 
-let clock_check ~linux ~library_override ~path target =
+(* In the virtual machine the relay starts the clock with a libfaketime built
+   for the image's C library, so the check is whether those are built. The
+   executable and the image are looked at by each run. *)
+let vm_clock_check ~(vm : vm_host) ~faketime =
+  if not faketime then
+    check "clock" Skip
+      "contract-only (faketime-off): the experiment turns faketime off"
+  else
+    let built =
+      List.filter_map
+        (fun libc ->
+          match vm.faketime_cached libc with
+          | Ok true -> Some (Vm_exec_probe.libc_name libc)
+          | Ok false | Error _ -> None)
+        [ Vm_exec_probe.Musl; Glibc ]
+    in
+    check "clock" Pass
+      (Printf.sprintf
+         "enforced for an executable that takes a preload (libfaketime is \
+          built for %s%s; each run looks at the image and the agent)"
+         (match built with
+         | [] -> "no C library yet"
+         | _ :: _ -> String.concat " and " built)
+         (if List.length built = 2 then ""
+          else
+            ", and for the image's own on first use, which needs the network \
+             once"))
+
+let clock_check ~vm ~linux ~library_override ~path target =
   let contract_only reason =
     check "clock" (reason_status reason)
       (Printf.sprintf "contract-only (%s): %s"
@@ -364,12 +399,13 @@ let clock_check ~linux ~library_override ~path target =
   in
   match target with
   | Some { agent = Http _; _ } -> contract_only Http_mode
-  | Some ({ agent = Command { argv; _ }; dir; faketime; _ } as t) -> (
+  | Some ({ agent = Command _; faketime; _ } as t)
+    when uses_vm ~macos:(not linux) t ->
+      vm_clock_check ~vm ~faketime
+  | Some { agent = Command { argv; _ }; dir; faketime; _ } -> (
       let label =
         Agent_clock.label
-          (Agent_clock.decide
-             ~vm:(uses_vm ~macos:(not linux) t)
-             ~linux ~faketime ~library_override
+          (Agent_clock.decide ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
@@ -461,7 +497,7 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       sandbox_check ~mode ~http_agent ~relay_pending
         ~probe:(sandbox_probe ~env ~bactrian_exe target);
       vm_check ~host:vm target;
-      clock_check ~linux:(Agent_clock.linux ())
+      clock_check ~vm ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;
       tls_check ~available:tls_available ~upstream target;

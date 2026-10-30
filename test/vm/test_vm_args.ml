@@ -67,7 +67,7 @@ let kinds =
       (p, if String.ends_with ~suffix:".txt" p then `File else `Dir))
 
 let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
-    ?(deny = []) ?(listing = default_listing)
+    ?faketime ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -98,6 +98,7 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_read = []) ?(allow_write = [])
     deny;
     staging_dir = "/p/.bactrian/runs/r1/staging";
     forwards = [ 4242 ];
+    faketime;
     command;
     list_dir =
       (fun dir ->
@@ -837,6 +838,55 @@ let test_readable_errors () =
     (List.mem "type=bind,source=/r/notes.txt,target=/r/notes.txt,readonly"
        (mounts (input ~allow_read:[ "/r/notes.txt" ] ())))
 
+let test_faketime () =
+  let f : Vm_args.faketime =
+    { epoch = 1773577800; dir = "/c/faketime-1a2b-arm64" }
+  in
+  let tail n a = List.filteri (fun i _ -> i >= List.length a - n) a in
+  Alcotest.check strings "Docker mounts the libraries and tells the relay"
+    [
+      "--forward";
+      "4242";
+      "--faketime";
+      "1773577800";
+      "/bactrian/faketime";
+      "--";
+      "node";
+      "agent.js";
+    ]
+    (tail 8 (argv (input ~faketime:f ())));
+  Alcotest.(check bool)
+    "read-only" true
+    (List.mem
+       "type=bind,source=/c/faketime-1a2b-arm64,target=/bactrian/faketime,readonly"
+       (mounts (input ~faketime:f ())));
+  Alcotest.check strings "container reaches them through the relay's directory"
+    [
+      "--forward";
+      "4242";
+      "--faketime";
+      "1773577800";
+      "/bactrian/faketime-1a2b-arm64";
+      "--";
+      "node";
+      "agent.js";
+    ]
+    (tail 8 (argv (input ~kind:`Container ~faketime:f ())));
+  Alcotest.(check bool)
+    "container mounts nothing more" false
+    (List.exists
+       (fun m -> contains m "faketime")
+       (mounts (input ~kind:`Container ~faketime:f ())));
+  Alcotest.check strings "no clock, no flag"
+    [ "--forward"; "4242"; "--"; "node"; "agent.js" ]
+    (tail 5 (argv (input ())));
+  Alcotest.(check bool)
+    "the probes get no clock" false
+    (List.mem "--faketime"
+       (argv (input ~faketime:f ~command:(Probe_exec "node") ())));
+  Alcotest.check strings "the executable probe" [ "--probe-exec"; "node" ]
+    (tail 2 (argv (input ~command:(Probe_exec "node") ~faketime:f ())))
+
 let () =
   Alcotest.run "vm_args"
     [
@@ -844,6 +894,7 @@ let () =
         [
           Alcotest.test_case "flags" `Quick test_command_line;
           Alcotest.test_case "probe" `Quick test_probe;
+          Alcotest.test_case "faketime" `Quick test_faketime;
           Alcotest.test_case "errors" `Quick test_errors;
         ] );
       ( "mounts",

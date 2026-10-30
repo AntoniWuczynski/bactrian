@@ -137,6 +137,7 @@ let test_vm () =
       detect = (fun () -> runtime);
       image_present = (fun (_ : string) -> image);
       relay_cached = (fun () -> cached);
+      faketime_cached = (fun (_ : Vm_exec_probe.libc) -> cached);
     }
   in
   let vm_target ?(sandbox = `Strict) ?(backend = `Auto) ?image () =
@@ -182,6 +183,44 @@ let test_vm () =
 
 (* The clock *)
 
+let no_vm : Doctor.vm_host =
+  {
+    macos = false;
+    detect = (fun () -> Error "no runtime");
+    image_present = (fun (_ : string) -> Error "no runtime");
+    relay_cached = (fun () -> Ok false);
+    faketime_cached = (fun (_ : Vm_exec_probe.libc) -> Ok false);
+  }
+
+(* An agent in the virtual machine: the relay starts the clock, so the host's
+   library does not matter, and the check says which are built. *)
+let test_vm_clock () =
+  let vm_target ?(faketime = true) () =
+    target ~sandbox:`Strict ~backend:`Vm ~image:"i" ~faketime ~dir:"."
+      (command ())
+  in
+  let check_with cached =
+    Doctor.clock_check
+      ~vm:{ no_vm with faketime_cached = (fun libc -> cached libc) }
+      ~linux:false ~library_override:None ~path:None
+  in
+  let both = check_with (fun (_ : Vm_exec_probe.libc) -> Ok true) in
+  let c = both (Some (vm_target ())) in
+  check_status "built" Pass c;
+  Alcotest.(check bool)
+    "names both libraries" true
+    (contains ~sub:"musl and glibc" c.message);
+  let c =
+    check_with
+      (function Vm_exec_probe.Musl -> Ok true | Glibc -> Ok false)
+      (Some (vm_target ()))
+  in
+  check_status "one built" Pass c;
+  Alcotest.(check bool)
+    "the rest on first use" true
+    (contains ~sub:"first use" c.message && contains ~sub:"musl" c.message);
+  check_status "faketime off" Skip (both (Some (vm_target ~faketime:false ())))
+
 let test_clock () =
   with_dir @@ fun dir ->
   let at name = Filename.concat dir name in
@@ -190,7 +229,8 @@ let test_clock () =
   write (at "dyn") (E.elf [ (E.pt_interp, E.interp) ]);
   write (at "stat") (E.elf [ (E.pt_load, "code") ]);
   let clock ?(linux = true) ?(faketime = true) ?(override = Some lib) agent =
-    Doctor.clock_check ~linux ~library_override:override ~path:(Some dir)
+    Doctor.clock_check ~vm:no_vm ~linux ~library_override:override
+      ~path:(Some dir)
       (Some (target ~faketime ~dir (command ~argv:[ agent ] ())))
   in
   let c = clock "dyn" in
@@ -207,10 +247,12 @@ let test_clock () =
   check_status "static binary" Warn (clock "stat");
   check_status "agent not found" Warn (clock "absent");
   check_status "http agent" Skip
-    (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+    (Doctor.clock_check ~vm:no_vm ~linux:true ~library_override:(Some lib)
+       ~path:None
        (Some (target ~dir (http "http://127.0.0.1:9/a"))));
   let host ~linux ~override =
-    Doctor.clock_check ~linux ~library_override:override ~path:None None
+    Doctor.clock_check ~vm:no_vm ~linux ~library_override:override ~path:None
+      None
   in
   check_status "no experiment, macOS" Pass (host ~linux:false ~override:None);
   check_status "no experiment, library found" Pass
@@ -358,6 +400,7 @@ let () =
           Alcotest.test_case "agent" `Quick test_agent;
           Alcotest.test_case "sandbox" `Quick test_sandbox;
           Alcotest.test_case "virtual machine" `Quick test_vm;
+          Alcotest.test_case "clock in the virtual machine" `Quick test_vm_clock;
           Alcotest.test_case "clock" `Quick test_clock;
           Alcotest.test_case "tls and egress" `Quick test_tls;
           Alcotest.test_case "upstream overrides" `Quick test_upstream_checks;

@@ -490,6 +490,122 @@ let readable () =
     "nothing written there" false
     (Sys.file_exists (Filename.concat dir "new.txt"))
 
+(* The clock (decision 0021). The relay starts the agent's clock at SIM_NOW
+   with libfaketime for the image's C library: musl in the node image, glibc in
+   the Python one. An agent, and the program it starts, read SIM_NOW (give or
+   take the seconds a run takes) instead of the host's clock. *)
+
+let sim_now_text = "2023-11-14T22:13:20Z"
+let sim_now_epoch = 1700000000
+
+(* Reads its own clock and a child's ([date +%s]). *)
+let clock_python =
+  {|import json, subprocess, sys, time
+for line in sys.stdin:
+    m = json.loads(line)
+    if m["type"] == "turn":
+        out = {"time": int(time.time()),
+               "child": int(subprocess.check_output(["date", "+%s"])),
+               "slept": time.time()}
+        time.sleep(0.2)
+        out["slept"] = round(time.time() - out["slept"], 1)
+        sys.stdout.write(json.dumps({"v": 1, "type": "reply", "turn": m["turn"],
+                                     "content": json.dumps(out)}) + "\n")
+        sys.stdout.flush()
+    elif m["type"] == "end":
+        break
+|}
+
+let clock_node =
+  {|const rl = require("readline").createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.type === "turn") {
+    const out = {
+      time: Math.floor(Date.now() / 1000),
+      child: Number(require("child_process").execSync("date +%s")),
+    };
+    process.stdout.write(JSON.stringify({ v: 1, type: "reply", turn: m.turn,
+      content: JSON.stringify(out) }) + "\n");
+  } else if (m.type === "end") process.exit(0);
+});|}
+
+let clocked ~image ~name ~files agent =
+  gate [ image ];
+  with_world ~vm:image name @@ fun w ->
+  List.iter
+    (fun (rel, text, perm) ->
+      let path = Filename.concat w.dir rel in
+      Out_channel.with_open_bin path (fun oc -> output_string oc text);
+      Unix.chmod path perm)
+    files;
+  let r = w.execute ~agent:(Command (agent w)) ~sim_now:sim_now_text () in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  check_sandboxed w r;
+  Alcotest.(check string)
+    "the clock is enforced" {|{"mode":"enforced"}|}
+    (Yojson.Safe.to_string (Bactrian_core.Clock_label.to_json r.clock));
+  let reply =
+    match entries "reply" r with
+    | [ j ] ->
+        Yojson.Safe.Util.(
+          Yojson.Safe.from_string (to_string (member "content" j)))
+    | _ -> Alcotest.fail "expected exactly one reply"
+  in
+  let read k = Yojson.Safe.Util.(to_int (member k reply)) in
+  List.iter
+    (fun k ->
+      let t = read k in
+      Alcotest.(check bool)
+        (Printf.sprintf "%s reads SIM_NOW (got %d)" k t)
+        true
+        (t >= sim_now_epoch && t < sim_now_epoch + 60))
+    [ "time"; "child" ];
+  no_container r;
+  reply
+
+let clock_musl () =
+  ignore
+    (clocked ~image:node_image ~name:"vm-clock-musl"
+       ~files:[ ("clock.js", clock_node, 0o644) ]
+       (fun w -> [ "node"; Filename.concat w.dir "clock.js" ])
+      : Yojson.Safe.t)
+
+let clock_glibc () =
+  let reply =
+    clocked ~image:python_image ~name:"vm-clock-glibc"
+      ~files:[ ("clock.py", clock_python, 0o644) ]
+      (fun w -> [ "python3"; "-I"; Filename.concat w.dir "clock.py" ])
+  in
+  (* Python 3.11 and later sleep on CLOCK_MONOTONIC (decision 0009). *)
+  let slept = Yojson.Safe.Util.(to_float (member "slept" reply)) in
+  Alcotest.(check bool)
+    (Printf.sprintf "time.sleep still sleeps (%.1f s)" slept)
+    true
+    (slept >= 0.1 && slept < 5.)
+
+(* A script is followed to its interpreter, in the image. *)
+let clock_script () =
+  ignore
+    (clocked ~image:python_image ~name:"vm-clock-script"
+       ~files:[ ("clock.py", "#!/usr/bin/env python3\n" ^ clock_python, 0o755) ]
+       (fun w -> [ Filename.concat w.dir "clock.py" ])
+      : Yojson.Safe.t)
+
+(* An executable that cannot take a preload is not labelled enforced. *)
+let clock_refused () =
+  gate [ node_image ];
+  with_world ~vm:node_image "vm-clock-refused" @@ fun w ->
+  let r =
+    w.execute ~agent:(Command [ "/bin/does-not-exist-in-the-image" ])
+      ~sim_now:sim_now_text ()
+  in
+  Alcotest.(check string)
+    "contract-only, with the reason"
+    {|{"mode":"contract_only","reason":"unreadable-executable"}|}
+    (Yojson.Safe.to_string (Bactrian_core.Clock_label.to_json r.clock));
+  no_container r
+
 (* Teardown from outside: bactrian record, through the command line, with an
    agent that never answers. SIGINT ends it with 130, SIGKILL leaves the bridge
    to remove the container, and with the bridge and the runtime's client killed
@@ -823,6 +939,13 @@ let () =
         [
           Alcotest.test_case "a hidden file's neighbours" `Slow neighbours;
           Alcotest.test_case "allow_read" `Slow readable;
+        ] );
+      ( "clock",
+        [
+          Alcotest.test_case "musl image" `Slow clock_musl;
+          Alcotest.test_case "glibc image" `Slow clock_glibc;
+          Alcotest.test_case "a script" `Slow clock_script;
+          Alcotest.test_case "an executable the image lacks" `Slow clock_refused;
         ] );
       ( "host processes",
         [

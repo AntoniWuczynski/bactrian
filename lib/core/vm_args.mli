@@ -32,6 +32,16 @@ type probe = {
 type command =
   | Agent of string list  (** The agent's command and arguments. Non-empty. *)
   | Probe of probe  (** The relay's own probe instead of an agent. *)
+  | Probe_exec of string
+      (** The relay's probe of the image and of the executable a command name
+          leads to ({!Vm_exec_probe}). *)
+
+type faketime = {
+  epoch : int;  (** Unix seconds the agent's clock starts at. *)
+  dir : string;
+      (** The host directory that holds [musl/libfaketimeMT.so.1] and
+          [glibc/libfaketimeMT.so.1], beside the relay. *)
+}
 
 type entry_kind =
   | File  (** A regular file. *)
@@ -95,6 +105,11 @@ type input = {
       (** Where container's staging directories go, one numbered directory each:
           in the run's directory, which no mount shows. *)
   forwards : int list;  (** Ports the relay listens on, from 1 to 65535. *)
+  faketime : faketime option;
+      (** For an [Agent]: the relay starts its clock at [epoch], with the
+          library of the image's C library (decision 0021). Docker mounts [dir]
+          read-only at [/bactrian/faketime]. container shows it through the
+          mount of the relay's directory, so [dir] must lie beside the relay. *)
   command : command;
   list_dir : string -> (entry list, string) result;
       (** The entries of a directory that holds a masked file. *)
@@ -136,6 +151,9 @@ val relay_path : string
 val relay_dir : string
 (** [/bactrian], where container mounts the relay's directory. *)
 
+val faketime_dir : string
+(** [/bactrian/faketime], where Docker mounts the libraries' directory. *)
+
 type link = {
   name : string;  (** In the staging directory. *)
   source : string;  (** The host file it is a hard link of. *)
@@ -166,7 +184,7 @@ val argv : input -> (invocation, error) result
      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g --pids-limit 1024 --memory 4g
      --memory-swap 4g --log-driver none --pull never --workdir DIR --env-file
      FILE --entrypoint /bactrian/relay --mount|--tmpfs... -- IMAGE --forward
-     PORT... -- AGENT...] (or
+     PORT... [--faketime EPOCH DIR] -- AGENT...] (or
     [--probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN] in place
     of [-- AGENT...]).
 

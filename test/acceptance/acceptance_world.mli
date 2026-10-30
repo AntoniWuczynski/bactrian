@@ -54,6 +54,7 @@ type world = {
     ?replay:Run.replay ->
     ?mcp:Mcp_proxy.config list ->
     ?variant_env:(string * string) list ->
+    ?sim_now:string ->
     unit ->
     Run.result;
 }

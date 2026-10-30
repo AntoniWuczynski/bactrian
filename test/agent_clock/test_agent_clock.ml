@@ -146,11 +146,42 @@ let test_decide () =
   check "go" "contract-only go-binary" (decide "go");
   check "unreadable" "contract-only unreadable-executable" (decide "absent");
   check "not Linux" "contract-only macos" (decide ~linux:false "dyn");
-  check "the virtual machine, first of all" "contract-only vm"
-    (Agent_clock.decide ~vm:true ~candidates:[ lib ] ~linux:false ~faketime:true
-       ~library_override:None
-       ~env:[ ("PATH", dir) ]
-       ~cwd:dir ~agent:[ "dyn" ] ~sim_now ());
+  let in_vm ?(faketime = true) ?(sim_now = sim_now) vm =
+    Agent_clock.decide ~vm ~linux:false ~faketime ~library_override:None ~env:[]
+      ~cwd:dir ~agent:[ "dyn" ] ~sim_now ()
+  in
+  let image ?(library = true) executable =
+    Agent_clock.Vm_image { library; executable }
+  in
+  check "the virtual machine, any host" "enforced" (in_vm (image Dynamic));
+  Alcotest.(check (option string))
+    "the host's library plays no part" None
+    (Agent_clock.library (in_vm (image Dynamic)));
+  Alcotest.(check (option int))
+    "the clock starts at SIM_NOW" (Some 1773577800)
+    (Agent_clock.epoch (in_vm (image Dynamic)));
+  check "the virtual machine, a static agent" "contract-only static-binary"
+    (in_vm (image Static));
+  check "the virtual machine, a Go agent" "contract-only go-binary"
+    (in_vm (image Go));
+  check "the virtual machine, no executable"
+    "contract-only unreadable-executable"
+    (in_vm (image Not_elf));
+  check "the virtual machine, an image without a library"
+    "contract-only library-not-found"
+    (in_vm (image ~library:false Dynamic));
+  check "the virtual machine, a probe that failed" "contract-only vm"
+    (in_vm Vm_unavailable);
+  check "the virtual machine, not looked at" "contract-only vm"
+    (in_vm Vm_unprobed);
+  check "the virtual machine, faketime off, first" "contract-only faketime-off"
+    (in_vm ~faketime:false Vm_unprobed);
+  check "the virtual machine, a bad SIM_NOW" "contract-only invalid-sim-now"
+    (in_vm ~sim_now:"yesterday" (image Dynamic));
+  Alcotest.(check (list (pair string string)))
+    "nothing injected on the host"
+    [ ("A", "b") ]
+    (Agent_clock.inject (in_vm (image Dynamic)) [ ("A", "b") ]);
   check "faketime off" "contract-only faketime-off"
     (decide ~faketime:false "dyn");
   check "no library" "contract-only library-not-found"

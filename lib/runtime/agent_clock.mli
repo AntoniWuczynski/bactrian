@@ -40,11 +40,25 @@ val http_mode : t
     with {!Bactrian_core.Clock_label.Http_mode}, and {!inject} adds nothing. *)
 
 val library : t -> string option
-(** The library the run preloads, [None] when the clock is contract-only. *)
+(** The host file the run preloads, [None] when the clock is contract-only and
+    in the virtual machine, where the relay preloads the image's own. *)
+
+val epoch : t -> int option
+(** The Unix time the clock starts at, [None] when it is contract-only. *)
+
+(** What the virtual machine's relay found in the image (decision 0021). *)
+type vm =
+  | Vm_unprobed  (** Not looked at, because the clock is not wanted. *)
+  | Vm_unavailable
+      (** The image could not be probed, or libfaketime built for its C library.
+      *)
+  | Vm_image of { library : bool; executable : Elf_probe.kind }
+      (** [library]: libfaketime is there for the image's C library.
+          [executable] is what the agent's command leads to in the image. *)
 
 val decide :
   ?candidates:string list ->
-  ?vm:bool ->
+  ?vm:vm ->
   ?hidden:(string -> bool) ->
   ?stripped:bool ->
   linux:bool ->
@@ -57,12 +71,17 @@ val decide :
   unit ->
   t
 (** For a command agent, whose argv is [agent]: the first reason that applies,
-    in this order: [vm] says the agent runs in the virtual machine sandbox
-    (default: no), not Linux, [faketime] off, no library, [hidden] says the
+    in this order: not Linux, [faketime] off, no library, [hidden] says the
     sandbox would hide the library (default: never), [stripped] says the sandbox
     drops [LD_PRELOAD] (default: no), [sim_now] not RFC 3339, then the agent's
     executable. [env] is the agent's environment, whose [PATH] finds the
-    executable. *)
+    executable.
+
+    With [vm], the agent runs in the virtual machine sandbox, on any host, and
+    the host's own library, sandbox and executable play no part: [faketime] off,
+    [sim_now] not RFC 3339, the image not probed ([Vm_unprobed],
+    [Vm_unavailable]: reason [vm]), then the executable in the image and the
+    library for its C library ([library-not-found] where there is none). *)
 
 val inject : t -> (string * string) list -> (string * string) list
 (** [inject t env] is [env] with the variables that start the clock at [sim_now]
@@ -73,4 +92,6 @@ val inject : t -> (string * string) list -> (string * string) list
     by default: libfaketime 0.9.10 breaks absolute sleeps on [CLOCK_MONOTONIC]
     (Python 3.11's [time.sleep]) when only the wall clock moves. An [env] that
     carries [FAKETIME_DONT_FAKE_MONOTONIC] keeps it, for a runtime that needs
-    real monotonic time. [env] unchanged when the clock is contract-only. *)
+    real monotonic time. [env] unchanged when the clock is contract-only, and in
+    the virtual machine, where the relay sets the variables
+    ([Vm_args.faketime]). *)

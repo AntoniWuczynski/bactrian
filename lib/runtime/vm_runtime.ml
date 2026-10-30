@@ -350,6 +350,201 @@ let relay ~process_mgr ~clock t =
         (Printf.sprintf "the relay could not be built in %s: %s" dir
            (Printexc.to_string e))
 
+(* libfaketime *)
+
+(* Version 0.9.13, published 2026-08-31. The archive's checksum is of the
+   tarball GitHub serves for the tag (github.com and codeload give the same
+   bytes), checked in the container that downloads it and again before each
+   build. *)
+let faketime_url =
+  "https://github.com/wolfcw/libfaketime/archive/refs/tags/v0.9.13.tar.gz"
+
+let faketime_sha256 =
+  "8e56deeb805682b025107e095f1d94a6ea677472f05824cd475f5c5e6e1a5ddf"
+
+let faketime_archive = "libfaketime-0.9.13.tar.gz"
+
+(* Debian bookworm of 2026-10-05, pushed 2026-10-06 (glibc 2.36, so the library
+   loads in any image with a glibc of 2.36 or later), the multi-architecture
+   index. *)
+let glibc_build_image =
+  "debian:bookworm-20261005-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587"
+
+let faketime_fetch_script =
+  Printf.sprintf
+    "set -eu; wget -q -O /out/%s %s && echo '%s  /out/%s' | sha256sum -c >&2"
+    faketime_archive faketime_url faketime_sha256 faketime_archive
+
+(* The same steps in each builder: check the archive, build only the
+   multi-thread library (the other targets do not build with musl), and hand
+   it to the user. *)
+let faketime_build_script ~install =
+  Printf.sprintf
+    "set -eu; %s; echo '%s  /src/%s' | sha256sum -c >&2 && mkdir /tmp/lf && \
+     tar xzf /src/%s -C /tmp/lf --strip-components=1 && make -C /tmp/lf/src \
+     libfaketimeMT.so.1 >&2 && cp /tmp/lf/src/libfaketimeMT.so.1 /out/ && \
+     chown %d:%d /out/libfaketimeMT.so.1"
+    install faketime_sha256 faketime_archive faketime_archive (Unix.getuid ())
+    (Unix.getgid ())
+
+let faketime_builder : Vm_exec_probe.libc -> string * string = function
+  | Musl ->
+      ( build_image,
+        faketime_build_script
+          ~install:"apk add --no-cache make gcc musl-dev >&2" )
+  | Glibc ->
+      ( glibc_build_image,
+        faketime_build_script
+          ~install:
+            "apt-get update -qq >&2 && apt-get install -y -qq \
+             --no-install-recommends gcc make libc6-dev >&2" )
+
+(* A directory beside the relay, named for everything the build depends on, so
+   a changed version or script is built again. *)
+let faketime_name t =
+  Printf.sprintf "faketime-%s-%s"
+    (String.sub
+       Digest.BLAKE256.(
+         to_hex
+           (string
+              (String.concat "\000"
+                 ([ faketime_url; faketime_sha256; faketime_fetch_script ]
+                 @ List.concat_map
+                     (fun libc ->
+                       let image, script = faketime_builder libc in
+                       [ image; script ])
+                     [ Vm_exec_probe.Musl; Glibc ]))))
+       0 16)
+    (String.map
+       (fun c ->
+         match c with
+         | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> c
+         | _ -> '-')
+       t.arch)
+
+let library_file = "libfaketimeMT.so.1"
+
+let library_path ~parent libc =
+  Filename.concat
+    (Filename.concat parent (Vm_exec_probe.libc_name libc))
+    library_file
+
+(* A run command in the build image of a container, with [src] read-only and
+   [out] writable. *)
+let build_in ~process_mgr ~clock t ~what ~image ~src ~out script =
+  let run =
+    match t.kind with
+    | `Docker -> [ "run"; "--rm" ]
+    | `Container -> [ "run"; "--rm"; "--progress"; "none" ]
+  in
+  Result.map_error
+    (fun why ->
+      Printf.sprintf "%s could not be built in %s (%s). It needs the network"
+        what image why)
+    (run_client ~process_mgr ~clock ~timeout:build_timeout t
+       (run
+       @ [
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/src,readonly" src;
+           "--mount";
+           Printf.sprintf "type=bind,source=%s,target=/out" out;
+           image;
+           "sh";
+           "-c";
+           script;
+         ]))
+
+(* The archive, downloaded once into the cache. *)
+let faketime_source ~process_mgr ~clock t ~dir ~work =
+  let target = Filename.concat dir faketime_archive in
+  match owned ~kind:S_REG ~what:"a regular file" target with
+  | Error why -> Error why
+  | Ok true -> Ok target
+  | Ok false ->
+      let src = Filename.concat work "fetch-src"
+      and out = Filename.concat work "fetch-out" in
+      List.iter (fun d -> Unix.mkdir d 0o755) [ src; out ];
+      let* (_ : string) =
+        build_in ~process_mgr ~clock t ~what:"libfaketime's source"
+          ~image:build_image ~src ~out faketime_fetch_script
+      in
+      Unix.rename (Filename.concat out faketime_archive) target;
+      Ok target
+
+let faketime_trusted ~parent libc =
+  let lib = library_path ~parent libc in
+  let* parent_ok = owned ~kind:S_DIR ~what:"a directory" parent in
+  if not parent_ok then Ok false
+  else
+    let* dir_ok =
+      owned ~kind:S_DIR ~what:"a directory" (Filename.dirname lib)
+    in
+    if not dir_ok then Ok false
+    else owned ~kind:S_REG ~what:"a regular file" lib
+
+let faketime_cached t libc =
+  let parent = Filename.concat (relay_cache_dir ()) (faketime_name t) in
+  match faketime_trusted ~parent libc with
+  | result -> result
+  | exception Unix.Unix_error (e, _, _) -> Error (Unix.error_message e)
+
+let faketime ~process_mgr ~clock t libc =
+  let dir = relay_cache_dir () in
+  let parent = Filename.concat dir (faketime_name t) in
+  let untrusted why =
+    Error
+      (Printf.sprintf
+         "the cached libfaketime cannot be trusted: %s. Fix: remove %s" why
+         parent)
+  in
+  match
+    mkdirs dir;
+    match owned ~kind:S_DIR ~what:"a directory" dir with
+    | Error why -> untrusted why
+    | Ok (_ : bool) -> (
+        match faketime_trusted ~parent libc with
+        | Error why -> untrusted why
+        | Ok true -> Ok parent
+        | Ok false -> (
+            let work =
+              Filename.concat dir
+                ("build-" ^ Proc_util.hex (Mirage_crypto_rng.generate 6))
+            in
+            Fun.protect ~finally:(fun () ->
+                try Proc_util.remove_tree work
+                with Unix.Unix_error _ | Sys_error _ -> ())
+            @@ fun () ->
+            Unix.mkdir work 0o755;
+            let* archive = faketime_source ~process_mgr ~clock t ~dir ~work in
+            let src = Filename.concat work "src"
+            and out = Filename.concat work "out" in
+            List.iter (fun d -> Unix.mkdir d 0o755) [ src; out ];
+            Out_channel.with_open_bin (Filename.concat src faketime_archive)
+              (fun oc ->
+                output_string oc
+                  (In_channel.with_open_bin archive In_channel.input_all));
+            let image, script = faketime_builder libc in
+            let* (_ : string) =
+              build_in ~process_mgr ~clock t ~what:"libfaketime" ~image ~src
+                ~out script
+            in
+            mkdirs (Filename.dirname (library_path ~parent libc));
+            Unix.rename
+              (Filename.concat out library_file)
+              (library_path ~parent libc);
+            match faketime_trusted ~parent libc with
+            | Ok true -> Ok parent
+            | Ok false ->
+                untrusted
+                  (library_path ~parent libc ^ " is missing after the build")
+            | Error why -> untrusted why))
+  with
+  | result -> result
+  | exception ((Unix.Unix_error _ | Sys_error _) as e) ->
+      Error
+        (Printf.sprintf "libfaketime could not be built in %s: %s" dir
+           (Printexc.to_string e))
+
 let label_run = "bactrian.run"
 let label_pid = "bactrian.pid"
 let label_host = "bactrian.host"

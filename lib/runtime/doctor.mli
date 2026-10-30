@@ -86,6 +86,9 @@ type vm_host = {
   relay_cached : unit -> (bool, string) result;
       (** Whether the relay is cached ({!Vm_runtime.relay_cached}), or why the
           cache cannot be used. *)
+  faketime_cached : Vm_exec_probe.libc -> (bool, string) result;
+      (** Whether libfaketime for that C library is cached
+          ({!Vm_runtime.faketime_cached}). *)
 }
 (** What the [vm] check asks of this host. *)
 
@@ -107,6 +110,7 @@ val vm_check : host:vm_host -> target option -> check
     [seatbelt] or [bubblewrap]. *)
 
 val clock_check :
+  vm:vm_host ->
   linux:bool ->
   library_override:string option ->
   path:string option ->
@@ -114,7 +118,10 @@ val clock_check :
   check
 (** With a target, the label its command agent would get
     ({!Agent_clock.decide}). Without, whether this host can enforce the clock at
-    all. Contract-only on macOS is expected, so it is [Pass]. *)
+    all. Contract-only on macOS is expected, so it is [Pass]. An agent in the
+    virtual machine gets its clock from the relay (decision 0021): [Pass] when
+    faketime is on, saying which libraries are built ([vm]), [Skip] when the
+    experiment turns it off. *)
 
 val tls_check :
   available:bool ->

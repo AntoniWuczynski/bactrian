@@ -1,5 +1,10 @@
 (tests
- (names test_vm_frame test_vm_args test_vm_probe test_container_cli)
+ (names
+  test_vm_frame
+  test_vm_args
+  test_vm_probe
+  test_vm_exec_probe
+  test_container_cli)
  (package bactrian)
  (libraries bactrian.core alcotest qcheck-core qcheck-alcotest)
  (flags

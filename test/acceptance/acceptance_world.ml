@@ -181,6 +181,7 @@ type world = {
     ?replay:Run.replay ->
     ?mcp:Mcp_proxy.config list ->
     ?variant_env:(string * string) list ->
+    ?sim_now:string ->
     unit ->
     Run.result;
 }
@@ -244,7 +245,8 @@ let with_world ?vm ?(allow_read = []) ?(deny_read = []) ?(rounds = 1) name f =
       ~deny_read:(List.map (Filename.concat abs_dir) deny_read)
       ()
   in
-  let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) () =
+  let execute ~agent ?replay ?(mcp = []) ?(variant_env = []) ?(sim_now = "") ()
+      =
     incr counter;
     let ledger =
       Ledger.create
@@ -260,7 +262,7 @@ let with_world ?vm ?(allow_read = []) ?(deny_read = []) ?(rounds = 1) name f =
         turns = (if replay = None then [ first_turn ] else []);
         scenario = "weather";
         variant = "base";
-        sim_now = "";
+        sim_now;
         timezone = "UTC";
         replay;
         env_passthrough = [ prompt_variable ];

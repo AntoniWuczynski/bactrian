@@ -8,7 +8,8 @@ type probe = {
   other_run : string;
 }
 
-type command = Agent of string list | Probe of probe
+type command = Agent of string list | Probe of probe | Probe_exec of string
+type faketime = { epoch : int; dir : string }
 type entry_kind = File | Dir | Special | Link_to_file of string | Other_link
 
 type entry = {
@@ -40,6 +41,7 @@ type input = {
   deny : (string * Sandbox_policy.kind) list;
   staging_dir : string;
   forwards : int list;
+  faketime : faketime option;
   command : command;
   list_dir : string -> (entry list, string) result;
 }
@@ -135,6 +137,7 @@ let describe_error = function
 
 let relay_path = "/bactrian/relay"
 let relay_dir = "/bactrian"
+let faketime_dir = "/bactrian/faketime"
 
 (* Fixed limits, so an agent that forks without end or fills memory or /tmp
    starves neither the virtual machine's other containers nor, on Linux, the
@@ -471,6 +474,9 @@ let argv i =
          ("the temporary directory", i.temp_dir);
          ("the staging directory", i.staging_dir);
        ]
+      @ List.map
+          (fun (f : faketime) -> ("the libfaketime directory", f.dir))
+          (Option.to_list i.faketime)
       @ List.map (fun (p, _) -> ("sandbox.allow_read", p)) i.allow_read
       @ List.map (fun (p, _) -> ("sandbox.allow_write", p)) i.allow_write
       @ List.map (fun p -> ("a read-only path", p)) i.read_only
@@ -528,6 +534,9 @@ let argv i =
         in
         let* () = all check_argument paths in
         Ok ("--probe" :: paths)
+    | Probe_exec name ->
+        let* () = check_argument name in
+        Ok [ "--probe-exec"; name ]
   in
   let* () =
     all check_argument
@@ -538,6 +547,31 @@ let argv i =
     Option.map
       (fun (s : stage) -> s.dir)
       (List.find_opt (fun (s : stage) -> String.equal s.over path) stages)
+  in
+  (* The clock is the agent's alone. Docker mounts the libraries' directory
+     beside the relay. container's mount of the relay's directory shows it,
+     because the cache keeps them side by side. *)
+  let faketime =
+    match (i.command, i.faketime) with
+    | Agent _, Some f -> Some f
+    | (Agent _ | Probe _ | Probe_exec _), _ -> None
+  in
+  let faketime_mount, faketime_flags =
+    match (i.kind, faketime) with
+    | _, None -> ([], [])
+    | `Docker, Some f ->
+        ( [
+            "--mount";
+            bind_value ~source:f.dir ~target:faketime_dir ~writable:false;
+          ],
+          [ "--faketime"; string_of_int f.epoch; faketime_dir ] )
+    | `Container, Some f ->
+        ( [],
+          [
+            "--faketime";
+            string_of_int f.epoch;
+            Filename.concat relay_dir (Filename.basename f.dir);
+          ] )
   in
   let start, flags, entrypoint, relay_mount =
     match i.kind with
@@ -575,11 +609,11 @@ let argv i =
         @ [ "--network"; "none"; "--read-only"; "--cap-drop"; "ALL" ]
         @ flags @ [ "--workdir"; i.workdir ]
         @ [ "--env-file"; i.env_file; "--entrypoint"; entrypoint ]
-        @ [ "--mount"; relay_mount ]
+        @ [ "--mount"; relay_mount ] @ faketime_mount
         @ List.concat_map (mount_args i.kind ~stage_of) mounts
         @ [ "--"; i.image ]
         @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
-        @ tail;
+        @ faketime_flags @ tail;
       stages;
     }
 
