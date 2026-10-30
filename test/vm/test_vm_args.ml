@@ -211,14 +211,22 @@ let test_command_line () =
     (argv (input ()))
 
 (* Podman: Docker's command line, plus a user namespace that maps the agent to
-   itself when rootless, and no writable tmpfs but /tmp. *)
+   itself when rootless, no writable tmpfs but /tmp, and neither the service's
+   proxy variables nor its environment. *)
 let test_podman_command_line () =
   let docker = argv (input ()) in
   let expected ~userns =
     List.concat_map
       (function
         | "/usr/bin/docker" -> [ "/usr/bin/podman" ]
-        | "--user" -> userns @ [ "--read-only-tmpfs=false"; "--user" ]
+        | "--user" ->
+            userns
+            @ [
+                "--read-only-tmpfs=false";
+                "--http-proxy=false";
+                "--env-host=false";
+                "--user";
+              ]
         | a -> [ a ])
       docker
   in

@@ -443,13 +443,17 @@ let mounts i =
    the container's root and any other ID is a subordinate one that owns none of
    the project's files, so the agent's own ID is mapped to itself
    ([keep-id]). A read-only root gets a writable tmpfs on /dev, /dev/shm, /run,
-   /tmp and /var/tmp unless told not to, and Docker's has none but /tmp. *)
+   /tmp and /var/tmp unless told not to, and Docker's has none but /tmp.
+   Podman also adds the proxy variables of the Podman service's environment
+   ([http-proxy], on by default, which can hold credentials) and, with
+   [env_host] in containers.conf, the whole of it ([env-host]), so both are
+   switched off. *)
 let podman_flags kind ~rootless =
   match kind with
   | `Docker -> []
   | `Podman ->
       (if rootless then [ "--userns=keep-id" ] else [])
-      @ [ "--read-only-tmpfs=false" ]
+      @ [ "--read-only-tmpfs=false"; "--http-proxy=false"; "--env-host=false" ]
 
 let check_port p = if p >= 1 && p <= 65535 then Ok () else Error (Bad_port p)
 

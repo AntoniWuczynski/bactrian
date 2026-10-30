@@ -169,9 +169,10 @@ val argv : input -> (invocation, error) result
     of [-- AGENT...]).
 
     For Podman the same, with [--userns=keep-id] after [--security-opt] when the
-    runtime is rootless ([rootless]), and [--read-only-tmpfs=false] after it.
-    Its directory masks are [--tmpfs PATH:ro,mode=0755,notmpcopyup], because
-    Podman copies what is beneath a tmpfs into it unless told not to.
+    runtime is rootless ([rootless]), and [--read-only-tmpfs=false],
+    [--http-proxy=false] and [--env-host=false] after it. Its directory masks
+    are [--tmpfs PATH:ro,mode=0755,notmpcopyup], because Podman copies what is
+    beneath a tmpfs into it unless told not to.
 
     For container:
     [RUNTIME create --rm --name NAME --label KEY=VALUE... --network none
