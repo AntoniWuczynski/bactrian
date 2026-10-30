@@ -211,7 +211,7 @@ let escapes ?vm ~name argv_of =
       {
         items = vs;
         coverage = (Relay_failures_only | Relay_failures_and_dns) as coverage;
-        gaps = _;
+        gaps;
       } ->
       (* Linux reports relay failures, and the model call makes none, and its
          forwarder's DNS lookups (the virtual machine and a set-user-ID
@@ -230,12 +230,16 @@ let escapes ?vm ~name argv_of =
                (fun (v : Sandbox_log.violation) ->
                  if String.equal v.kind "dns" then None else Some v.kind)
                vs);
-          Alcotest.(check bool)
-            "the lookup of example.com is recorded" true
-            (List.exists
-               (fun (v : Sandbox_log.violation) ->
-                 String.starts_with ~prefix:"example.com " v.detail)
-               vs)
+          (* A lookup through a resolver the forwarder does not answer is
+             not recorded, and a gap says so. *)
+          if List.is_empty (Sandbox_dns.unrecorded_resolvers ()) then
+            Alcotest.(check bool)
+              "the lookup of example.com is recorded" true
+              (List.exists
+                 (fun (v : Sandbox_log.violation) ->
+                   String.starts_with ~prefix:"example.com " v.detail)
+                 vs)
+          else Alcotest.(check bool) "a gap says so" false (List.is_empty gaps)
       | Relay_failures_only | Seatbelt_log ->
           Alcotest.(check int) "no relay failures" 0 (List.length vs));
       Alcotest.(check bool)
