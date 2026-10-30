@@ -196,8 +196,8 @@ let miss s (r : request) =
 
 let matched s (r : request) (e : Cassette.exchange) =
   match r.channel with
-  | Mcp -> serve s r e ~similarity:None ~findings:[]
-  | Model | Http -> (
+  | Mcp | Http -> serve s r e ~similarity:None ~findings:[]
+  | Model -> (
       match channel_pending s r.channel () with
       | Seq.Cons ({ exchange = first; _ }, _)
         when not (Int.equal first.Cassette.seq e.seq) -> (

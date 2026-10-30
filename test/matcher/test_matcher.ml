@@ -221,14 +221,7 @@ let test_reordered_model () =
   let _, rs = run st [ req Model "a" ] in
   Alcotest.(check (list int))
     "a still served" [ 0 ]
-    (List.map (fun (d, _) -> seq_of d) rs);
-  (* Http is ordered too *)
-  let _, rs =
-    run
-      (start M.Strict [ ex ~channel:Http 0 "a"; ex ~channel:Http 1 "b" ])
-      [ req Http "b" ]
-  in
-  Alcotest.(check bool) "http refuses" true (is_refuse (fst (List.hd rs)))
+    (List.map (fun (d, _) -> seq_of d) rs)
 
 let test_reordered_and_shape () =
   let exs = [ ex 0 "a"; ex ~stream:true 1 "b" ] in
@@ -247,20 +240,23 @@ let test_reordered_and_shape () =
   Alcotest.(check (list string))
     "and reports the order" [ "reordered" ] (tags f)
 
+(* MCP and egress calls come from tools, which agents call in parallel. *)
 let test_mcp_unordered () =
-  let exs =
-    [ ex ~channel:Mcp 0 "a"; ex ~channel:Mcp 1 "b"; ex ~channel:Mcp 2 "c" ]
-  in
-  let st, rs =
-    run (start M.Strict exs) [ req Mcp "c"; req Mcp "a"; req Mcp "b" ]
-  in
-  Alcotest.(check (list int))
-    "served" [ 2; 0; 1 ]
-    (List.map (fun (d, _) -> seq_of d) rs);
-  Alcotest.(check bool)
-    "no findings" true
-    (List.for_all (fun (_, f) -> f = []) rs);
-  Alcotest.(check int) "finish" 0 (List.length (M.finish st))
+  List.iter
+    (fun channel ->
+      let exs = [ ex ~channel 0 "a"; ex ~channel 1 "b"; ex ~channel 2 "c" ] in
+      let st, rs =
+        run (start M.Strict exs)
+          [ req channel "c"; req channel "a"; req channel "b" ]
+      in
+      Alcotest.(check (list int))
+        "served" [ 2; 0; 1 ]
+        (List.map (fun (d, _) -> seq_of d) rs);
+      Alcotest.(check bool)
+        "no findings" true
+        (List.for_all (fun (_, f) -> f = []) rs);
+      Alcotest.(check int) "finish" 0 (List.length (M.finish st)))
+    [ Cassette.Mcp; Cassette.Http ]
 
 let test_channels_independent () =
   (* same key on two channels *)
@@ -527,7 +523,7 @@ let () =
           Alcotest.test_case "reordered" `Quick test_reordered_model;
           Alcotest.test_case "reordered and shape" `Quick
             test_reordered_and_shape;
-          Alcotest.test_case "mcp unordered" `Quick test_mcp_unordered;
+          Alcotest.test_case "mcp and http unordered" `Quick test_mcp_unordered;
           Alcotest.test_case "channels independent" `Quick
             test_channels_independent;
           Alcotest.test_case "shape" `Quick test_shape;

@@ -376,6 +376,54 @@ let test_record_then_replay =
     ]
     (flat (calls f))
 
+(* Two tool calls at once, each fetching a URL: the slow one is recorded after
+   the fast one, and a strict replay that asks in the other order must still
+   serve both (design §6.3). *)
+let fast_done, fast_answered = Eio.Promise.create ()
+
+let test_parallel_fetches =
+  let handler (r : F.request) =
+    if String.equal r.path "/slow" then Eio.Promise.await fast_done;
+    backend r
+  in
+  with_world ~handler "parallel" @@ fun w ->
+  let p = policy [ ("127.0.0.1", Record) ] in
+  let run = register w ~token:token_a (Some p) in
+  let get ~token path =
+    (through ~creds:(creds token) w ~meth:"GET" ~path ()).status
+  in
+  let slow, fast =
+    Eio.Fiber.pair
+      (fun () -> get ~token:token_a "/slow")
+      (fun () ->
+        let status = get ~token:token_a "/fast" in
+        Eio.Promise.resolve fast_answered ();
+        status)
+  in
+  Alcotest.(check (pair int int)) "both answered" (200, 200) (slow, fast);
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a);
+  let recorded = recording w.ctx run in
+  Alcotest.(check (list string))
+    "recorded as they finished" [ "/fast"; "/slow" ]
+    (List.map (fun (e : Cassette.exchange) -> e.path) recorded.exchanges);
+  let replay =
+    Model_proxy.Replay
+      {
+        recording = recorded;
+        matcher = Strict;
+        allow_reorder = false;
+        timing = Fast;
+      }
+  in
+  let _ =
+    register w ~connector:Upstream.plain ~mode:replay ~token:token_c (Some p)
+  in
+  let slow = get ~token:token_c "/slow" in
+  let fast = get ~token:token_c "/fast" in
+  Alcotest.(check (pair int int)) "both replayed" (200, 200) (slow, fast);
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_c in
+  Alcotest.(check int) "no divergence" 0 (List.length f.divergences)
+
 let test_passthrough_and_replay_policy =
   with_world "passthrough" @@ fun w ->
   let run =
@@ -420,6 +468,8 @@ let () =
           Alcotest.test_case "a blocked host" `Quick test_blocked;
           Alcotest.test_case "record, then strict replay" `Quick
             test_record_then_replay;
+          Alcotest.test_case "parallel fetches, replayed in another order"
+            `Quick test_parallel_fetches;
           Alcotest.test_case "passthrough and replay policies" `Quick
             test_passthrough_and_replay_policy;
         ] );

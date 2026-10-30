@@ -36,9 +36,6 @@ let channel_equal (a : Cassette.channel) (b : Cassette.channel) =
       (Cassette.Model | Cassette.Mcp | Cassette.Http) ) ->
       false
 
-let is_mcp (c : Cassette.channel) =
-  match c with Cassette.Mcp -> true | Cassette.Model | Cassette.Http -> false
-
 let is_model (c : Cassette.channel) =
   match c with Cassette.Model -> true | Cassette.Mcp | Cassette.Http -> false
 
@@ -162,7 +159,7 @@ module Make (C : Config) = struct
       match found with
       | Some e ->
           let reordered =
-            (not (is_mcp r.channel))
+            is_model r.channel
             &&
             match lowest_unconsumed st r.channel with
             | Some low -> low.seq <> e.seq

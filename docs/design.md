@@ -321,8 +321,8 @@ Canonical keys:
 
 Matching layers:
 1. `(key, occurrence)` lookup, where occurrence counts earlier identical requests in the run on the same channel.
-2. Model and egress calls are ordered per channel. In `strict` mode a matched key that arrives out of recorded order is a `Reordered` divergence. `--allow-reorder` downgrades it to a warning. The lenient modes (`until-divergence`, `fuzzy`) always serve a reordered match and report the `Reordered` finding. Every request counts towards its key's occurrences, including refused and live ones. When a request is both out of order and of the wrong shape, the order check runs first and both findings are reported.
-3. MCP calls are matched by `(key, occurrence)` regardless of order, because agents issue parallel tool calls. Identical concurrent calls are served in recorded order. Missing and unconsumed MCP calls are still divergences in `strict` mode.
+2. Model calls are ordered. In `strict` mode a matched key that arrives out of recorded order is a `Reordered` divergence. `--allow-reorder` downgrades it to a warning. The lenient modes (`until-divergence`, `fuzzy`) always serve a reordered match and report the `Reordered` finding. Every request counts towards its key's occurrences, including refused and live ones. When a request is both out of order and of the wrong shape, the order check runs first and both findings are reported.
+3. MCP and egress calls are matched by `(key, occurrence)` regardless of order, because agents issue parallel tool calls and egress comes from those tools. An egress exchange takes its `seq` when its response has finished, so two parallel fetches are recorded in whichever order they finished. Identical concurrent calls are served in recorded order. Missing and unconsumed MCP and egress calls are still divergences in `strict` mode.
 
 Divergence type:
 - `Missing_request` with the nearest recorded candidate and a structural diff path (for example `messages[3].tool_result.content`).
@@ -426,7 +426,7 @@ Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per r
 2. QCheck properties:
    - `Sse`: print then parse is the identity, and parsing is invariant under any split of the input bytes
    - `Canon`: idempotent, and key order is irrelevant
-   - `Matcher`: recording any generated sequence and replaying it matches perfectly. Changing one element yields `Missing_request` at exactly that index with the right diff path. MCP matching ignores order.
+   - `Matcher`: recording any generated sequence and replaying it matches perfectly. Changing one element yields `Missing_request` at exactly that index with the right diff path. MCP and egress matching ignores order.
    - `Redact`: idempotent, and generated secrets never appear in the output
    - `Stats`: the properties in section 8
 3. `qcheck-stm` model-based tests of the matcher and cassette session against a simple reference model.
