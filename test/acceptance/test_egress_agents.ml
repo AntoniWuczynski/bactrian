@@ -68,13 +68,16 @@ let month_ago () =
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
-let record_and_replay ?sim_now c () =
+(* [host] is an address, or a name the agent's client must send as SNI and
+   find in the leaf's DNS names. *)
+let record_and_replay ?sim_now ?(host = "127.0.0.1") c () =
   let argv = c.agent.argv () in
   with_services
-    ("egress-" ^ c.agent.name ^ "-" ^ c.http_client
-    ^ match sim_now with Some _ -> "-past" | None -> "")
+    (String.concat "-"
+       ([ "egress"; c.agent.name; c.http_client; host ]
+       @ match sim_now with Some _ -> [ "past" ] | None -> []))
   @@ fun ~project ~ca ~models ~weather ~port ->
-  let url = Printf.sprintf "https://127.0.0.1:%d/weather" port in
+  let url = Printf.sprintf "https://%s:%d/weather" host port in
   let env = env ~ca ~models ~url c in
   let live = (("BACTRIAN_CAP_OPENAI", "1") :: key_env) @ env in
   let code, recorded =
@@ -82,7 +85,7 @@ let record_and_replay ?sim_now c () =
       ([ "record"; "--json"; "--turn"; first_turn; "--sandbox" ]
       @ sandbox
       @ (match sim_now with Some t -> [ "--sim-now"; t ] | None -> [])
-      @ [ "--egress"; Printf.sprintf "127.0.0.1:%d=record" port ]
+      @ [ "--egress"; Printf.sprintf "%s:%d=record" host port ]
       @ passthrough @ [ "--" ] @ argv)
   in
   Alcotest.(check (pair int string))
@@ -117,7 +120,7 @@ let record_and_replay ?sim_now c () =
     "strict replay: the service was not called" 1
     (List.length (weather_calls weather));
   (* Another URL is not in the recording: a replay miss on egress. *)
-  let other = Printf.sprintf "https://127.0.0.1:%d/weather/v2" port in
+  let other = Printf.sprintf "https://%s:%d/weather/v2" host port in
   let code, diverged =
     replay
       ~env:
@@ -176,6 +179,13 @@ let () =
         List.map
           (fun c -> Alcotest.test_case c.label `Slow (record_and_replay c))
           clients
+        @ List.map
+            (fun c ->
+              Alcotest.test_case
+                (c.label ^ ", a host name")
+                `Slow
+                (record_and_replay ~host:"localhost" c))
+            clients
         @ [
             Alcotest.test_case "node fetch, SIM_NOW a month back" `Slow
               (record_and_replay ~sim_now:(month_ago ()) (List.hd clients));
