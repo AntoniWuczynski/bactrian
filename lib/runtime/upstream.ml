@@ -225,6 +225,9 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
           ~default:(if is_https req.url then 443 else 80)
       in
       let host_header =
+        let host =
+          if String.contains host ':' then "[" ^ host ^ "]" else host
+        in
         match Uri.port req.url with
         | Some p -> Printf.sprintf "%s:%d" host p
         | None -> host

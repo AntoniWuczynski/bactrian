@@ -4,25 +4,18 @@ let ( let* ) = Result.bind
 
 type peer = Host of [ `host ] Domain_name.t | Ip of Ipaddr.t
 
-(* Uri keeps the brackets of an IPv6 literal. *)
+(* Uri gives an IPv6 literal without its brackets. *)
 let peer url =
   match Uri.host url with
   | None -> Error "the URL has no host"
   | Some host -> (
-      let bare =
-        if
-          String.starts_with ~prefix:"[" host
-          && String.ends_with ~suffix:"]" host
-        then String.sub host 1 (String.length host - 2)
-        else host
-      in
-      match Ipaddr.of_string bare with
+      match Ipaddr.of_string host with
       | Ok ip -> Ok (Ip ip)
       | Error (`Msg _) -> (
-          match Result.bind (Domain_name.of_string bare) Domain_name.host with
+          match Result.bind (Domain_name.of_string host) Domain_name.host with
           | Ok name -> Ok (Host name)
           | Error (`Msg reason) ->
-              Error (Printf.sprintf "%S is not a host name: %s" bare reason)))
+              Error (Printf.sprintf "%S is not a host name: %s" host reason)))
 
 let failure = function
   | Tls_eio.Tls_failure f ->

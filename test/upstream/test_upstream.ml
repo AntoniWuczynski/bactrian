@@ -1,17 +1,16 @@
 open Bactrian_runtime
 
-let listen ~sw net =
+let listen ?(addr = Eio.Net.Ipaddr.V4.loopback) ~sw net =
   let sock =
-    Eio.Net.listen ~sw ~backlog:16 ~reuse_addr:true net
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+    Eio.Net.listen ~sw ~backlog:16 ~reuse_addr:true net (`Tcp (addr, 0))
   in
   match Eio.Net.listening_addr sock with
   | `Tcp (_, p) -> (sock, p)
   | `Unix _ -> Alcotest.fail "unexpected unix address"
 
 (* cohttp-eio server answering every request through [callback]. *)
-let serve ~sw net ~callback =
-  let sock, port = listen ~sw net in
+let serve ?addr ~sw net ~callback =
+  let sock, port = listen ?addr ~sw net in
   let server = Cohttp_eio.Server.make ~callback () in
   Eio.Fiber.fork_daemon ~sw (fun () ->
       Cohttp_eio.Server.run sock server ~on_error:(fun _ -> ()));
@@ -148,6 +147,26 @@ let test_accept_encoding env sw =
       !seen
   in
   Alcotest.(check (list string)) "only identity" [ "identity" ] ae
+
+(* Uri gives an IPv6 host without its brackets, and the Host header puts them
+   back. *)
+let test_ipv6_host env sw =
+  let seen = ref None in
+  let port =
+    serve ~addr:Eio.Net.Ipaddr.V6.loopback ~sw (Eio.Stdenv.net env)
+      ~callback:(fun _ req _ ->
+        seen := Http.Header.get (Cohttp.Request.headers req) "host";
+        Cohttp_eio.Server.respond_string ~status:`OK ~body:"x" ())
+  in
+  let o =
+    run_call ~env ~sw
+      (get (Uri.of_string (Printf.sprintf "http://[::1]:%d/" port)))
+  in
+  Alcotest.(check (result unit error_testable)) "ok" (Ok ()) o.result;
+  Alcotest.(check (option string))
+    "bracketed"
+    (Some (Printf.sprintf "[::1]:%d" port))
+    !seen
 
 let test_header_allowlist env sw =
   let port =
@@ -410,6 +429,7 @@ let () =
           t "whole body" test_whole_body;
           t "error status is a normal response" test_error_status_is_ok;
           t "accept-encoding identity" test_accept_encoding;
+          t "an IPv6 Host header" test_ipv6_host;
           t "header allowlist" test_header_allowlist;
           t "streamed body arrives as it is sent" test_streamed;
           t "200 KiB event" test_large_event;
