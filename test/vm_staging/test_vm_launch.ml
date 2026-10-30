@@ -34,7 +34,10 @@ let with_env name value f =
   let previous = Sys.getenv_opt name in
   Unix.putenv name value;
   Fun.protect
-    ~finally:(fun () -> Unix.putenv name (Option.value previous ~default:""))
+    ~finally:(fun () ->
+      match previous with
+      | Some v -> Unix.putenv name v
+      | None -> Unix.unsetenv name)
     f
 
 (* A project with a hidden .env and a directory beside it that the command
