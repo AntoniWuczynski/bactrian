@@ -78,6 +78,13 @@ type error =
   | File_allow_write of string
   | Root_allow_read
   | File_allow_read of string
+  | System_allow_read of string
+  | Bactrian_allow_read of string
+
+(* Directories that hold the sockets of a user's daemons (the D-Bus session bus
+   and a rootless Docker or Podman socket under /run/user/UID, ssh-agent's in
+   /tmp) or are the kernel's own. *)
+let system_dirs = [ "/run"; "/var/run"; "/tmp"; "/proc"; "/sys"; "/dev" ]
 
 let describe_error = function
   | Bad_path { what; path } ->
@@ -133,6 +140,19 @@ let describe_error = function
       Printf.sprintf
         "sandbox.allow_read %s is a file, which container cannot mount (it \
          mounts directories only). Fix: name its directory"
+        path
+  | System_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is in a directory where the system keeps its \
+         sockets (%s). A read-only mount does not stop connect() on a socket, \
+         so the agent would reach a daemon of this user. Fix: name a directory \
+         of files"
+        path
+        (String.concat ", " system_dirs)
+  | Bactrian_allow_read path ->
+      Printf.sprintf
+        "sandbox.allow_read %s is in .bactrian, which the virtual machine \
+         hides apart from the run's own directories and sandbox.allow_write"
         path
 
 let relay_path = "/bactrian/relay"
@@ -483,9 +503,14 @@ let argv i =
       @ List.map (fun (p, _) -> ("the deny-list path", p)) i.deny)
   in
   let* () =
-    if List.exists (fun (p, _) -> String.equal p "/") i.allow_read then
-      Error Root_allow_read
-    else Ok ()
+    all
+      (fun (p, _) ->
+        if String.equal p "/" then Error Root_allow_read
+        else if List.exists (fun d -> within ~dir:d p) system_dirs then
+          Error (System_allow_read p)
+        else if within ~dir:i.bactrian_dir p then Error (Bactrian_allow_read p)
+        else Ok ())
+      i.allow_read
   in
   let* () =
     match i.kind with

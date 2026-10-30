@@ -142,6 +142,15 @@ type error =
   | Root_allow_read  (** An [allow_read] path of [/]. *)
   | File_allow_read of string
       (** container, with an [allow_read] path that is a file. *)
+  | System_allow_read of string
+      (** An [allow_read] path at or under [/run], [/var/run], [/tmp], [/proc],
+          [/sys] or [/dev]: a read-only bind does not stop [connect()] on a
+          socket the user owns there (the D-Bus session bus, a rootless
+          container runtime's socket, an agent's), and the container runs as the
+          host's user. Sockets elsewhere under an [allow_read] path stay
+          reachable. *)
+  | Bactrian_allow_read of string
+      (** An [allow_read] path at or under [.bactrian]. *)
 
 val describe_error : error -> string
 

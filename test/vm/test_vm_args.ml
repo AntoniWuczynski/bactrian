@@ -776,8 +776,7 @@ let test_readable_paths () =
   let m =
     mounts
       (input ~deny ~listing
-         ~allow_read:
-           [ "/r"; "/p/secret/r"; "/w"; "/p"; "/h/lib"; "/p/.bactrian/runs/x" ]
+         ~allow_read:[ "/r"; "/p/secret/r"; "/w"; "/p"; "/h/lib" ]
          ~allow_write:[ "/w" ] ())
   in
   let has s = List.mem s m in
@@ -798,9 +797,6 @@ let test_readable_paths () =
   Alcotest.(check bool)
     "a mask hides a path under it" false
     (has "type=bind,source=/p/secret/r,target=/p/secret/r,readonly");
-  Alcotest.(check bool)
-    "another run stays hidden" false
-    (List.exists (fun s -> contains s "runs/x") m);
   Alcotest.(check bool)
     "a writable path wins over the same path read-only" true
     (has "type=bind,source=/w,target=/w"
@@ -824,6 +820,34 @@ let test_readable_errors () =
     "sandbox.allow_read / would replace the image's whole file system. Fix: \
      name the directories the agent reads"
     (error (input ~allow_read:[ "/" ] ()));
+  List.iter
+    (fun path ->
+      Alcotest.(check bool)
+        (path ^ " holds sockets of the user's daemons")
+        true
+        (contains
+           (error (input ~allow_read:[ path ] ()))
+           "does not stop connect() on a socket"))
+    [
+      "/run";
+      "/run/user/1000";
+      "/var/run/docker";
+      "/tmp";
+      "/tmp/ssh-x";
+      "/proc";
+      "/sys/fs";
+      "/dev";
+    ];
+  Alcotest.(check bool)
+    "a name that only starts like one is fine" true
+    (Result.is_ok
+       (Vm_args.argv (input ~allow_read:[ "/runner/x"; "/tmpfs" ] ())));
+  Alcotest.(check string)
+    "under .bactrian"
+    "sandbox.allow_read /p/.bactrian/runs/x is in .bactrian, which the virtual \
+     machine hides apart from the run's own directories and \
+     sandbox.allow_write"
+    (error (input ~allow_read:[ "/p/.bactrian/runs/x" ] ()));
   Alcotest.(check string)
     "a comma"
     {|sandbox.allow_read "/p/a,b" cannot be mounted: it must be absolute and hold no comma, colon, double quote or control character|}
