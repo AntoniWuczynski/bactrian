@@ -584,6 +584,19 @@ let test_endless_head () =
     "a head past the bound is cut" ""
     (until_closed ~port ("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n" ^ pad))
 
+(* Closing the connection after a pipelined request still cancels the call. *)
+let test_pipelined_hang_up () =
+  with_listener @@ fun ~port ~started ~cancelled ~release:_ ->
+  client ~port (fun ~port ->
+      H.hang_up ~port
+        ~pipelined:
+          (H.request ~port (call_headers "echo")
+             (H.body ~id:2 "tools/call" (call_params "echo")))
+        (call_headers "slow")
+        (H.body ~id:1 "tools/call" (call_params "slow")));
+  started ();
+  cancelled ()
+
 (* A POST with neither Content-Length nor Transfer-Encoding has no body, so it
    is answered at once and the next request follows its head. *)
 let test_no_length () =
@@ -673,6 +686,8 @@ let () =
           Alcotest.test_case "a body too long" `Quick test_too_long;
           Alcotest.test_case "CORS" `Quick test_cors;
           Alcotest.test_case "a request during a call" `Quick test_pipelined;
+          Alcotest.test_case "hanging up after a request during a call" `Quick
+            test_pipelined_hang_up;
           Alcotest.test_case "a POST without a length" `Quick test_no_length;
           Alcotest.test_case "clients that never read" `Quick test_stalled;
         ] );

@@ -514,10 +514,12 @@ module Http = struct
   let send ?meth ?path ?timeout ~port headers body =
     parse (exchange ?timeout ~port (request ?meth ?path ~port headers body))
 
-  let hang_up ?(timeout = 60.) ?(linger = 0.2) ~port headers body =
+  let hang_up ?(timeout = 60.) ?(linger = 0.2) ?(pipelined = "") ~port headers
+      body =
     let fd = connect ~timeout port in
     Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
-    write_all fd (request ~port headers body);
+    write_all fd (request ~close:(String.equal pipelined "") ~port headers body);
+    write_all fd pipelined;
     let buf = Buffer.create 4096 in
     let rec head () =
       match find (Buffer.contents buf) "\r\n\r\n" with

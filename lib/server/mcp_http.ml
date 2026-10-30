@@ -333,11 +333,13 @@ let message ~status m =
   fixed ~status ~headers:[ json ] (Mcp_msg.encode ~short_floats:true m)
 
 (* Returns once the client has closed the connection. Bytes it sends meanwhile
-   are a next request, left in the buffer for the server's loop. *)
-let closed ic =
-  match Eio.Buf_read.ensure ic 1 with
-  | () -> Eio.Fiber.await_cancel ()
+   are a next request, left in the buffer for the server's loop, and past the
+   bound on a head they are no longer watched. *)
+let rec closed ic =
+  match Eio.Buf_read.ensure ic (Eio.Buf_read.buffered_bytes ic + 1) with
+  | () -> closed ic
   | exception (End_of_file | Eio.Io _) -> ()
+  | exception Eio.Buf_read.Buffer_limit_exceeded -> Eio.Fiber.await_cancel ()
 
 let chunk oc s =
   Eio.Buf_write.printf oc "%x\r\n" (String.length s);

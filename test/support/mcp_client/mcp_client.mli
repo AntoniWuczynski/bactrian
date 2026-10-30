@@ -157,12 +157,14 @@ module Http : sig
   val hang_up :
     ?timeout:float ->
     ?linger:float ->
+    ?pipelined:string ->
     port:int ->
     (string * string) list ->
     string ->
     unit
-  (** Sends a POST, waits for the head of the answer and [linger] seconds more
-      (default 0.2), and closes the connection before its body. *)
+  (** Sends a POST, then the bytes [pipelined] (default none, else the POST
+      keeps the connection alive), waits for the head of the answer and [linger]
+      seconds more (default 0.2), and closes the connection before its body. *)
 
   val events : string -> string list
   (** The [data] of each event of an SSE body. *)
