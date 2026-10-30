@@ -7,7 +7,7 @@ type info = {
 }
 
 val info_format : string
-(** The [--format] template of [podman info] that {!info} reads. *)
+(** The [--format] template of [podman info] that {!val-info} reads. *)
 
 val info : string -> (info, string) result
 (** The output of [podman info --format {!info_format}]. The error completes
