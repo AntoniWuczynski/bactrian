@@ -444,7 +444,7 @@ let make_host ~env settings engine =
     dns_as =
       (match engine with
       | Bubblewrap path when not (root || setuid path) ->
-          Some (Unix.getuid (), Unix.getgid ())
+          Some (Unix.geteuid (), Unix.getegid ())
       | Bubblewrap _ | Seatbelt | Vm _ -> None);
     drop_capabilities = root;
     bactrian_exe = resolved settings.bactrian_exe;

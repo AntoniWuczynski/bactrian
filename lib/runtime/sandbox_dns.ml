@@ -50,6 +50,9 @@ let loopback address =
       Some (Eio.Net.Ipaddr.of_raw (String.of_seq (List.to_seq [ a; b; c; d ])))
   | _ -> None
 
+(* Errs towards a gap: [0.0.0.0], which the kernel sends to 127.0.0.1, a short
+   form such as [127.1], and a server glibc never asks (after the third) each
+   count as unanswered, which only makes [complete] false. *)
 let unanswered_nameservers text =
   List.filter (fun a -> Option.is_none (loopback a)) (nameservers text)
 
