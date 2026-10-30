@@ -38,8 +38,11 @@
    The probe form runs the sandbox checks instead of an agent and writes one
    JSON line on channel 0: the outcome of a connection to a public address and
    to bactrian's listener, of creating OUTSIDE, INSIDE, ROOT and OTHER_RUN, of
-   reading DENIED, MASKED and MASKED_CASE, the network interfaces, and whether
-   no_new_privs is set. */
+   reading DENIED, MASKED and MASKED_CASE, the network interfaces, whether
+   no_new_privs is set, and, with --heartbeat, whether the modification time of
+   FILE changes within PROBE_BEAT_MS (the bridge touches it, and a runtime
+   whose file sharing does not show that would have the relay stop every long
+   run). */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -477,6 +480,10 @@ static void frame_heard(long now) {
   if (heartbeat_path == NULL) last_heard = now;
 }
 
+static int same_time(const struct timespec *a, const struct timespec *b) {
+  return a->tv_sec == b->tv_sec && a->tv_nsec == b->tv_nsec;
+}
+
 /* A change of the file's modification time since the last look is a sign of
    life. A file that cannot be read is not. */
 static void check_heartbeat(long now) {
@@ -485,8 +492,7 @@ static void check_heartbeat(long now) {
   last_beat_check = now;
   if (stat(heartbeat_path, &st) < 0) return;
   /* beat_seen starts at the epoch, so the first look counts. */
-  if (st.st_mtim.tv_sec != beat_seen.tv_sec ||
-      st.st_mtim.tv_nsec != beat_seen.tv_nsec) {
+  if (!same_time(&st.st_mtim, &beat_seen)) {
     beat_seen = st.st_mtim;
     last_heard = now;
   }

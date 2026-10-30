@@ -23,6 +23,11 @@ type report = {
   no_new_privs : outcome;
       (** Whether [NoNewPrivs] is 1 in [/proc/self/status], so no program the
           agent runs gains privileges. [Error "off"] when it is 0. *)
+  heartbeat : outcome;
+      (** Whether the heartbeat file's modification time changed within a few
+          seconds, as the bridge touches it every {!Vm_frame.heartbeat_interval}
+          seconds: [Error "unchanged"] when it did not, or the error of looking
+          at it. Without a heartbeat file, [Ok ()]. *)
   interfaces_listed : outcome;  (** Listing [/sys/class/net]. *)
   interfaces : string list;  (** The container's network interfaces. *)
 }
@@ -43,9 +48,9 @@ val judge : Experiment.sandbox_runtime -> report -> (unit, string list) result
 (** Every check with the wrong result, described. The interfaces must have been
     listed and be [lo] alone, and the public connection must fail at once rather
     than time out, which would mean a route that drops packets, and
-    [no_new_privs] must be set. Reads of the masked file under either name and
-    the write into another run must fail with [ENOENT], the write to [/] with
-    [EROFS], and the write outside the state directory, which is under a mask,
-    with [EROFS] for Docker (a read-only tmpfs) and [EACCES] for container (a
-    tmpfs only root can write to): another error is a surprise, so it fails the
-    probe too. *)
+    [no_new_privs] must be set and the heartbeat file must change. Reads of the
+    masked file under either name and the write into another run must fail with
+    [ENOENT], the write to [/] with [EROFS], and the write outside the state
+    directory, which is under a mask, with [EROFS] for Docker (a read-only
+    tmpfs) and [EACCES] for container (a tmpfs only root can write to): another
+    error is a surprise, so it fails the probe too. *)

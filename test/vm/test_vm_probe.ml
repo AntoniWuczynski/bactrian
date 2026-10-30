@@ -3,7 +3,7 @@
 open Bactrian_core
 
 let good =
-  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|}
+  {|{"public":"ENETUNREACH","listener":"ok","outside_write":"EROFS","inside_write":"ok","denied_read":"ENOENT","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","heartbeat":"ok","interfaces_listed":"ok","interfaces":["lo"]}|}
 
 let judged ?(runtime = `Docker) line =
   match Vm_probe.of_line line with
@@ -58,7 +58,7 @@ let test_judge () =
          "a read of a denied file succeeded";
        ])
     (judged
-       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","interfaces_listed":"ok","interfaces":["lo"]}|});
+       {|{"public":"ENETUNREACH","listener":"ECONNREFUSED","outside_write":"ok","inside_write":"EACCES","denied_read":"ok","masked_read":"ENOENT","masked_case_read":"ENOENT","root_write":"EROFS","other_run_write":"ENOENT","no_new_privs":"ok","heartbeat":"ok","interfaces_listed":"ok","interfaces":["lo"]}|});
   Alcotest.check wrong "a masked file read under another name"
     (Error
        [ "a read of a masked file under its name in another case succeeded" ])
@@ -73,6 +73,15 @@ let test_judge () =
           program could raise its privileges";
        ])
     (judged (with_field "no_new_privs" (`String "off")));
+  Alcotest.check wrong "a heartbeat file that does not change"
+    (Error
+       [
+         "the heartbeat file's modification time did not change as the host \
+          touched it (unchanged), so the runtime's file sharing does not pass \
+          changes on promptly and the relay would stop every run that lasts \
+          longer than 10 seconds";
+       ])
+    (judged (with_field "heartbeat" (`String "unchanged")));
   Alcotest.check wrong "a writable root" (Error [ "a write to / succeeded" ])
     (judged (with_field "root_write" (`String "ok")));
   Alcotest.check wrong "another run visible"

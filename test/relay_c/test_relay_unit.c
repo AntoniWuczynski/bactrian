@@ -303,6 +303,37 @@ static void t_conn_finish(void) {
   CHECK(buf_used(&out) == HEADER && out.data[out.off + 4] == K_CLOSE);
 }
 
+/* The probe's look at the heartbeat file. */
+static void t_probe_heartbeat(void) {
+  char dir[] = "/tmp/relay-unit-XXXXXX";
+  CHECK(mkdtemp(dir) != NULL);
+  char file[64];
+  snprintf(file, sizeof file, "%s/beat", dir);
+  close(open(file, O_CREAT | O_WRONLY, 0600));
+  /* No file watched: nothing to check. */
+  heartbeat_path = NULL;
+  CHECK(probe_heartbeat(300) == NULL);
+  heartbeat_path = file;
+  /* Nobody touches it. */
+  CHECK(strcmp(probe_heartbeat(300), "unchanged") == 0);
+  /* A touch a little later is seen before the wait is over. */
+  pid_t pid = fork();
+  if (pid < 0) die("fork");
+  if (pid == 0) {
+    usleep(250000);
+    utimensat(AT_FDCWD, file, NULL, 0);
+    _exit(0);
+  }
+  long t0 = now_ms();
+  CHECK(probe_heartbeat(3000) == NULL);
+  CHECK(now_ms() - t0 < 2000);
+  waitpid(pid, NULL, 0);
+  /* A file that is gone. */
+  unlink(file);
+  CHECK(strcmp(probe_heartbeat(300), "ENOENT") == 0);
+  rmdir(dir);
+}
+
 /* Main */
 
 static const struct test tests[] = {
@@ -317,6 +348,7 @@ static const struct test tests[] = {
     {"deliver to an unknown channel", t_deliver_unknown_channel},
     {"deliver to a connection", t_deliver_conn},
     {"connection finishes both ways", t_conn_finish},
+    {"probe watches the heartbeat file", t_probe_heartbeat},
 };
 
 /* These end the child on purpose, with 70. */

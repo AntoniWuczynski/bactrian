@@ -126,6 +126,30 @@ static const char *probe_read(const char *path) {
   return n == 0 ? "empty" : NULL;
 }
 
+/* How long the probe waits for the heartbeat file to change. The bridge
+   touches it every 2 seconds, so a runtime that shows the change within 3
+   seconds of the touch passes, and the relay's timeout (10 seconds) has room
+   to spare. */
+#ifndef PROBE_BEAT_MS
+#define PROBE_BEAT_MS 5000
+#endif
+
+/* NULL when no heartbeat file is watched or its modification time changes
+   within [wait_ms]: the touches of the host reach the container. Otherwise
+   "unchanged", or the error of looking at it. */
+static const char *probe_heartbeat(long wait_ms) {
+  struct stat st;
+  if (heartbeat_path == NULL) return NULL;
+  if (stat(heartbeat_path, &st) < 0) return errno_name(errno);
+  struct timespec first = st.st_mtim;
+  for (long waited = 0; waited < wait_ms; waited += 100) {
+    usleep(100000);
+    if (stat(heartbeat_path, &st) < 0) return errno_name(errno);
+    if (!same_time(&st.st_mtim, &first)) return NULL;
+  }
+  return "unchanged";
+}
+
 static void put_outcome(FILE *f, const char *name, const char *res, int comma) {
   fprintf(f, "\"%s\":\"%s\"%s", name, res == NULL ? "ok" : res,
           comma ? "," : "");
@@ -143,6 +167,7 @@ static int run_probe(int port, const char **paths) {
   const char *root_w = probe_create(paths[5]);
   const char *other_run_w = probe_create(paths[6]);
   const char *no_new_privs = probe_no_new_privs();
+  const char *heartbeat = probe_heartbeat(PROBE_BEAT_MS);
   FILE *f = stdout;
   fputc('{', f);
   put_outcome(f, "public", public_, 1);
@@ -155,6 +180,7 @@ static int run_probe(int port, const char **paths) {
   put_outcome(f, "root_write", root_w, 1);
   put_outcome(f, "other_run_write", other_run_w, 1);
   put_outcome(f, "no_new_privs", no_new_privs, 1);
+  put_outcome(f, "heartbeat", heartbeat, 1);
   DIR *d = opendir("/sys/class/net");
   put_outcome(f, "interfaces_listed", d == NULL ? errno_name(errno) : NULL, 1);
   fputs("\"interfaces\":[", f);
