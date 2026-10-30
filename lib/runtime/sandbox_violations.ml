@@ -155,14 +155,25 @@ let seatbelt ~env ~tag ~since ~marker =
       let now () = Eio.Time.now clock in
       (* The deadline is checked between reads, and the outer bound only stops
          a [log show] that hangs. *)
+      (* How often the marker was logged, which says on a slow runner whether
+         the log dropped it or only showed it late. *)
+      let marks = ref 1 in
       let collected ?(gaps = []) items =
+        if !marks > 1 then
+          prerr_endline
+            (Printf.sprintf
+               "bactrian: sandbox: the system log showed the run's end marker \
+                once it had been logged %d times"
+               !marks);
         Collected { items; coverage = Seatbelt_log; gaps = log_drops :: gaps }
       in
       match
         Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
             Ok
               (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
-                 ~mark:(fun () -> ignore (mark () : bool))
+                 ~mark:(fun () ->
+                   incr marks;
+                   ignore (mark () : bool))
                  ~deadline:(now () +. log_timeout)))
       with
       | Ok (Settled vs) -> collected vs
@@ -178,8 +189,9 @@ let seatbelt ~env ~tag ~since ~marker =
           Not_collected
             (Printf.sprintf
                "the system log did not show the run's end marker within %.0f \
-                seconds"
-               log_timeout)
+                seconds, though it was logged %s"
+               log_timeout
+               (if !marks = 1 then "once" else Printf.sprintf "%d times" !marks))
       | Error `Timeout ->
           Not_collected
             (Printf.sprintf "log show did not finish within %.0f seconds"
