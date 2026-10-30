@@ -26,7 +26,7 @@
         "minItems": 2
       }
     },
-    "sha256_hex": {
+    "hex_digest_256": {
       "description": "A BLAKE2b-256 or SHA-256 digest: 64 lower-case hexadecimal digits.",
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"

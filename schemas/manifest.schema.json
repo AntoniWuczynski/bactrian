@@ -18,8 +18,8 @@
       "required": ["experiment", "agent", "scenarios"],
       "additionalProperties": false,
       "properties": {
-        "experiment": { "$ref": "defs.schema.json#/$defs/sha256_hex" },
-        "agent": { "$ref": "defs.schema.json#/$defs/sha256_hex" },
+        "experiment": { "$ref": "defs.schema.json#/$defs/hex_digest_256" },
+        "agent": { "$ref": "defs.schema.json#/$defs/hex_digest_256" },
         "pricing": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
         "scenarios": {
           "type": "array",
@@ -29,7 +29,7 @@
             "additionalProperties": false,
             "properties": {
               "path": { "type": "string" },
-              "digest": { "$ref": "defs.schema.json#/$defs/sha256_hex" }
+              "digest": { "$ref": "defs.schema.json#/$defs/hex_digest_256" }
             }
           }
         }
