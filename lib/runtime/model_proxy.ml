@@ -740,6 +740,7 @@ let connect ?only t ~conn st_target request =
                   logged =
                     (fun c ->
                       locked st (fun () -> st.http_calls <- c :: st.http_calls));
+                  ended = (fun () -> locked st (fun () -> st.ended));
                 }
                 ~conn ~target:st_target)
       | Some _ | None -> forbidden ())

@@ -46,6 +46,9 @@ type run = {
   logged : Trace_builder.http_call -> unit;
       (** Called for every request: refused at [CONNECT], refused, answered from
           the recording or forwarded. *)
+  ended : unit -> bool;
+      (** Whether the run has ended. A tunnel can outlive its run, so each
+          request on it checks. *)
 }
 
 exception Tunnel_closed
@@ -72,7 +75,8 @@ val connect :
     upstream failure 502 with [bactrian_upstream_error], an [Upgrade] request (a
     WebSocket) 501 with [bactrian_unsupported], and a request target that is
     neither a path nor an [https] URL of the tunnel's own host and port
-    ({!Bactrian_core.Egress.target}) 400 with [bactrian_bad_request]. Forwarded
-    requests go to the [CONNECT] host and port, with the request's path and
-    query, through the run's TLS connector, without the hop by hop and proxy
-    headers (the [Host] header is the tunnel's). *)
+    ({!Bactrian_core.Egress.target}) 400 with [bactrian_bad_request]. A request
+    after the run has ended gets 403 with [bactrian_forbidden], and the tunnel
+    is closed. Forwarded requests go to the [CONNECT] host and port, with the
+    request's path and query, through the run's TLS connector, without the hop
+    by hop and proxy headers (the [Host] header is the tunnel's). *)

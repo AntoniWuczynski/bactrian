@@ -21,6 +21,7 @@ type run = {
     (unit, Upstream.error) result;
   max_body : int;
   logged : Trace_builder.http_call -> unit;
+  ended : unit -> bool;
 }
 
 exception Tunnel_closed
@@ -309,13 +310,25 @@ let answer r ~host ~port ~authority act request body : response =
 (* Neither the answer to a HEAD nor a 204 or 304 has a body, so writing one
    would be read as the start of the next response. *)
 let handle r ~host ~port ~authority act request body =
-  let reply = answer r ~host ~port ~authority act request body in
-  let head, _ = reply in
-  if
-    String.equal (Http.Method.to_string (Http.Request.meth request)) "HEAD"
-    || not (Http.Status.body_allowed (Http.Response.status head))
-  then bodiless reply
-  else reply
+  if r.ended () then (
+    let head, write =
+      error_response ~status:403 ~type_:"bactrian_forbidden"
+        ~headers:[ ("connection", "close") ]
+        "the run has ended"
+    in
+    ( head,
+      fun ic oc ->
+        write ic oc;
+        Eio.Buf_write.flush oc;
+        raise Tunnel_closed ))
+  else
+    let reply = answer r ~host ~port ~authority act request body in
+    let head, _ = reply in
+    if
+      String.equal (Http.Method.to_string (Http.Request.meth request)) "HEAD"
+      || not (Http.Status.body_allowed (Http.Response.status head))
+    then bodiless reply
+    else reply
 
 let serve r ~conn ~host ~port ~authority act tls =
   let server =

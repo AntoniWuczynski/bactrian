@@ -448,6 +448,33 @@ let test_parallel_fetches =
   let f = Model_proxy.unregister w.ctx.proxy ~token:token_c in
   Alcotest.(check int) "no divergence" 0 (List.length f.divergences)
 
+(* A tunnel open when its run ends forwards nothing more. *)
+let test_tunnel_after_run =
+  with_world "after-run" @@ fun w ->
+  let _ = register w ~token:token_a (Some (policy [ ("127.0.0.1", Record) ])) in
+  let request path = request_text ~close:false ~meth:"GET" ~path () in
+  match
+    with_tunnel ~creds:(creds token_a) w (fun tls ->
+        let r = Eio.Buf_read.of_flow ~max_size:1_000_000 tls in
+        Eio.Flow.copy_string (request "/before") tls;
+        let before = read_response r in
+        ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a);
+        Eio.Flow.copy_string (request "/after") tls;
+        let after = read_response r in
+        (* Only a refusal closes the tunnel: waiting for the end of a live one
+           would hang. *)
+        ( before.status,
+          after.status,
+          after.status = 403 && Eio.Buf_read.at_end_of_input r ))
+  with
+  | Error status -> Alcotest.failf "CONNECT refused: %d" status
+  | Ok (before, after, closed) ->
+      Alcotest.(check (pair int int)) "statuses" (200, 403) (before, after);
+      Alcotest.(check bool) "the tunnel is closed" true closed;
+      Alcotest.(check (list string))
+        "only the first reached the server" [ "/before" ]
+        (List.map (fun (r : F.request) -> r.path) (F.requests w.up))
+
 let test_passthrough_and_replay_policy =
   with_world "passthrough" @@ fun w ->
   let run =
@@ -494,6 +521,8 @@ let () =
             test_record_then_replay;
           Alcotest.test_case "parallel fetches, replayed in another order"
             `Quick test_parallel_fetches;
+          Alcotest.test_case "a tunnel that outlives its run" `Quick
+            test_tunnel_after_run;
           Alcotest.test_case "passthrough and replay policies" `Quick
             test_passthrough_and_replay_policy;
         ] );

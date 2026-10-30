@@ -221,25 +221,27 @@ let split_response text =
         ended = (not chunked) || String.ends_with ~suffix:"\r\n0\r\n\r\n" rest;
       }
 
-let request_text ?(host = "127.0.0.1") ?(headers = []) ~meth ~path ?(body = "")
-    () =
+let request_text ?(host = "127.0.0.1") ?(headers = []) ?(close = true) ~meth
+    ~path ?(body = "") () =
   Printf.sprintf
     "%s %s HTTP/1.1\r\n\
      Host: %s\r\n\
      Content-Type: application/json\r\n\
      Content-Length: %d\r\n\
-     Connection: close\r\n\
+     Connection: %s\r\n\
      %s\r\n\
      %s"
     meth path host (String.length body)
+    (if close then "close" else "keep-alive")
     (String.concat ""
        (List.map (fun (k, v) -> Printf.sprintf "%s: %s\r\n" k v) headers))
     body
 
-(* An agent's HTTPS call through the proxy. [creds] is the Proxy-Authorization
-   user and password, none when [None]. *)
-let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
-    ?host_header ?headers ?(at = now) ?anchors w ~meth ~path ?body () =
+(* [f] on an agent's TLS connection through the proxy, or the status of the
+   refused CONNECT. [creds] is the Proxy-Authorization user and password, none
+   when [None]. *)
+let with_tunnel ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
+    ?(at = now) ?anchors w f =
   let net = Eio.Stdenv.net w.ctx.env in
   Eio.Switch.run @@ fun sw ->
   let socket =
@@ -293,25 +295,77 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
         Ok (pipe ~head:None ~skipped:true))
   in
   match flow with
-  | Error status -> { status; head = ""; body = ""; ended = false }
+  | Error status -> Error status
   | Ok flow ->
-      let tls =
-        match Ipaddr.of_string target_host with
-        | Ok _ -> Tls_eio.client_of_flow tls_config ~ip flow
-        | Error _ ->
-            Tls_eio.client_of_flow tls_config
-              ~host:
-                (Domain_name.host_exn (Domain_name.of_string_exn target_host))
-              flow
-      in
-      Eio.Flow.copy_string
-        (request_text ?host:host_header ?headers ~meth ~path ?body ())
-        tls;
-      let text =
-        try Eio.Buf_read.take_all (Eio.Buf_read.of_flow ~max_size:1_000_000 tls)
-        with End_of_file -> ""
-      in
-      split_response text
+      Ok
+        (f
+           (match Ipaddr.of_string target_host with
+           | Ok _ -> Tls_eio.client_of_flow tls_config ~ip flow
+           | Error _ ->
+               Tls_eio.client_of_flow tls_config
+                 ~host:
+                   (Domain_name.host_exn
+                      (Domain_name.of_string_exn target_host))
+                 flow))
+
+(* An agent's HTTPS call through the proxy, on a tunnel of its own. *)
+let through ?pipelined ?creds ?target_host ?host_header ?headers ?at ?anchors w
+    ~meth ~path ?body () =
+  match
+    with_tunnel ?pipelined ?creds ?target_host ?at ?anchors w (fun tls ->
+        Eio.Flow.copy_string
+          (request_text ?host:host_header ?headers ~meth ~path ?body ())
+          tls;
+        split_response
+          (try
+             Eio.Buf_read.take_all
+               (Eio.Buf_read.of_flow ~max_size:1_000_000 tls)
+           with End_of_file -> ""))
+  with
+  | Error status -> { status; head = ""; body = ""; ended = false }
+  | Ok a -> a
+
+(* One response from [r], chunked or with a length, when several share a
+   connection. *)
+let read_response r =
+  let status_line = Eio.Buf_read.line r in
+  let rec head acc =
+    match Eio.Buf_read.line r with
+    | "" -> List.rev acc
+    | l -> head (String.lowercase_ascii l :: acc)
+  in
+  let lines = head [] in
+  let value name =
+    let prefix = name ^ ":" in
+    let n = String.length prefix in
+    List.find_map
+      (fun l ->
+        if String.starts_with ~prefix l then
+          Some (String.trim (String.sub l n (String.length l - n)))
+        else None)
+      lines
+  in
+  let body =
+    match (value "transfer-encoding", value "content-length") with
+    | Some "chunked", _ ->
+        let rec chunks acc =
+          match
+            int_of_string_opt ("0x" ^ String.trim (Eio.Buf_read.line r))
+          with
+          | Some 0 | None ->
+              ignore (Eio.Buf_read.line r : string);
+              acc
+          | Some n ->
+              let piece = Eio.Buf_read.take n r in
+              ignore (Eio.Buf_read.line r : string);
+              chunks (acc ^ piece)
+        in
+        chunks ""
+    | _, Some n -> Eio.Buf_read.take (int_of_string n) r
+    | _, None -> ""
+  in
+  let status = (split_response status_line).status in
+  { status; head = String.concat "\n" lines; body; ended = true }
 
 (* The status of a refused CONNECT. *)
 let connect_status ?creds w ~host =
