@@ -37,7 +37,7 @@ let test_large () =
       Alcotest.(check int) "a whole prefix" n (String.length bytes)
   | Ok { executable = None; _ } | Error _ -> Alcotest.fail "expected a prefix"
 
-(* The library comes from the executable's own interpreter (decision 0021). *)
+(* The library comes from the executable's own interpreter (decision 0025). *)
 let test_libc () =
   let libc ~glibc segments =
     Option.map Vm_exec_probe.libc_name

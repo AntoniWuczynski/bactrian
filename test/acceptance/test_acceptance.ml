@@ -313,7 +313,7 @@ let http_concurrent agent () =
 
 (* sandbox.allow_read under the host's sandbox: the whole host is readable
    already, so what the option adds is the hidden .env of the allowed
-   directory (decision 0020). *)
+   directory (decision 0024). *)
 let allow_read_env () =
   if not sandbox_available then begin
     print_endline "no sandbox on this host: skipped";

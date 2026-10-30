@@ -46,7 +46,7 @@ val library : t -> string option
 val epoch : t -> int option
 (** The Unix time the clock starts at, [None] when it is contract-only. *)
 
-(** What the virtual machine's relay found in the image (decision 0021). *)
+(** What the virtual machine's relay found in the image (decision 0025). *)
 type vm =
   | Vm_unprobed  (** Not looked at, because the clock is not wanted. *)
   | Vm_unavailable

@@ -1,5 +1,5 @@
 (** What the relay's [--probe-exec NAME] reports about an image (design §5.3,
-    decision 0021): whether its glibc is new enough for libfaketime, and the
+    decision 0025): whether its glibc is new enough for libfaketime, and the
     start of the file a command name leads to. Pure. *)
 
 type libc =

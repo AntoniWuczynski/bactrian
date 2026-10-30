@@ -119,7 +119,7 @@ val clock_check :
 (** With a target, the label its command agent would get
     ({!Agent_clock.decide}). Without, whether this host can enforce the clock at
     all. Contract-only on macOS is expected, so it is [Pass]. An agent in the
-    virtual machine gets its clock from the relay (decision 0021): [Pass] when
+    virtual machine gets its clock from the relay (decision 0025): [Pass] when
     faketime is on and libfaketime is built for both C libraries, [Warn] naming
     those that are not (the first run that needs one builds it), [Skip] when the
     experiment turns it off. It does not say the clock is enforced, because that

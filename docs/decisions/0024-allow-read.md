@@ -1,4 +1,4 @@
-# 0020: Readable paths outside the project
+# 0024: Readable paths outside the project
 
 Date: 2026-10-30
 

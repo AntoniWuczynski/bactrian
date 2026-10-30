@@ -1,5 +1,5 @@
 (* The virtual machine's clock and allow_read across kinds of image and cache
-   (decisions 0020 and 0021): an image whose glibc is too old for libfaketime,
+   (decisions 0024 and 0025): an image whose glibc is too old for libfaketime,
    one that carries both C libraries' loaders, one of another architecture, a
    static agent, a cache that cannot be trusted, a file and a home-like tree as
    allow_read. Like test_vm, on docker, or container when BACTRIAN_VM_RUNTIME

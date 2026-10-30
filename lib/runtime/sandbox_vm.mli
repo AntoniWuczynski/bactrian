@@ -83,7 +83,7 @@ val clock :
   cwd:string ->
   string list ->
   Agent_clock.vm
-(** What decides the agent's clock in the image (decision 0021). Without
+(** What decides the agent's clock in the image (decision 0025). Without
     [wanted] (the experiment turns the clock off), {!Agent_clock.Vm_unprobed}.
     Otherwise the relay is run once in a container built like the run's, with
     [cwd] as its working directory, to report the image's C library and the

@@ -334,7 +334,7 @@ let readable () =
     "nothing written there" false
     (Sys.file_exists (Filename.concat dir "new.txt"))
 
-(* The clock (decision 0021). The relay starts the agent's clock at SIM_NOW
+(* The clock (decision 0025). The relay starts the agent's clock at SIM_NOW
    with libfaketime for the image's C library: musl in the node image, glibc in
    the Python one. An agent, and the program it starts, read SIM_NOW (give or
    take the seconds a run takes) instead of the host's clock. *)
