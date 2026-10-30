@@ -111,8 +111,8 @@ let detect_docker ~process_mgr ~clock =
       Error
         (Printf.sprintf
            "%s is not on PATH. Fix: install a Docker-compatible runtime \
-            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux, \
-            Podman on Linux)"
+            (OrbStack or Docker Desktop on macOS, Docker Engine on Linux), or \
+            for Podman set sandbox.runtime to podman"
            name)
   | Some exe -> (
       let client_env = current_client_env `Docker in
@@ -196,12 +196,7 @@ let detect_podman ~process_mgr ~clock =
       let client_env = current_client_env `Podman in
       match
         capture ~process_mgr ~clock ~env:client_env ~timeout:30.
-          [
-            exe;
-            "info";
-            "--format";
-            "{{.Host.Arch}} {{.Host.Security.Rootless}}";
-          ]
+          [ exe; "info"; "--format"; Podman_cli.info_format ]
       with
       | Error why ->
           Error
@@ -210,45 +205,39 @@ let detect_podman ~process_mgr ~clock =
                 %s machine start, on Linux check %s info"
                exe why name name)
       | Ok text -> (
-          match String.split_on_char ' ' (String.trim text) with
-          | [ arch; (("true" | "false") as rootless) ]
-            when not (String.equal arch "") ->
-              Ok
-                {
-                  kind = `Podman;
-                  name;
-                  exe;
-                  client_env;
-                  arch;
-                  rootless = String.equal rootless "true";
-                }
-          | _ ->
-              Error
-                (Printf.sprintf
-                   "%s info gave %S, not an architecture and whether it is \
-                    rootless"
-                   exe (String.trim text))))
+          match Podman_cli.info text with
+          | Ok { arch; rootless } ->
+              Ok { kind = `Podman; name; exe; client_env; arch; rootless }
+          | Error m -> Error (Printf.sprintf "%s info %s" exe m)))
 
-(* Unset, the first of docker, podman and container that answers. *)
+let detect_kind ~process_mgr ~clock : Experiment.sandbox_runtime -> _ = function
+  | `Docker -> detect_docker ~process_mgr ~clock
+  | `Container -> detect_container ~process_mgr ~clock
+  | `Podman -> detect_podman ~process_mgr ~clock
+
+let detection_order ~macos : Experiment.sandbox_runtime list =
+  if macos then [ `Docker; `Container; `Podman ]
+  else [ `Docker; `Podman; `Container ]
+
+(* Unset, the first of the [detection_order] that answers. *)
 let detect ~process_mgr ~clock = function
-  | Some `Docker -> detect_docker ~process_mgr ~clock
-  | Some `Container -> detect_container ~process_mgr ~clock
-  | Some `Podman -> detect_podman ~process_mgr ~clock
-  | None -> (
-      match detect_docker ~process_mgr ~clock with
-      | Ok t -> Ok t
-      | Error docker -> (
-          match detect_podman ~process_mgr ~clock with
-          | Ok t -> Ok t
-          | Error podman -> (
-              match detect_container ~process_mgr ~clock with
-              | Ok t -> Ok t
-              | Error container ->
-                  Error
-                    (Printf.sprintf
-                       "no container runtime works. docker: %s. podman: %s. \
-                        container: %s"
-                       docker podman container))))
+  | Some kind -> detect_kind ~process_mgr ~clock kind
+  | None ->
+      let rec first failed = function
+        | [] ->
+            Error
+              ("no container runtime works. "
+              ^ String.concat ". " (List.rev failed))
+        | kind :: rest -> (
+            match detect_kind ~process_mgr ~clock kind with
+            | Ok t -> Ok t
+            | Error why ->
+                first
+                  (Printf.sprintf "%s: %s" (runtime_name kind) why :: failed)
+                  rest)
+      in
+      first []
+        (detection_order ~macos:(Sys.file_exists "/usr/bin/sandbox-exec"))
 
 let image_id ~process_mgr ~clock t image =
   let missing () =
@@ -267,19 +256,10 @@ let image_id ~process_mgr ~clock t image =
           (Printf.sprintf "%s image inspect gave %S, not an image digest" t.name
              d)
   in
-  (* Podman's ID is the 64 hexadecimal digits alone. [sha256:] before it, as
-     in Docker's, is read as the same image by [run] and [image inspect]. *)
   let hex_id out =
-    match String.trim out with
-    | d
-      when String.length d = 64
-           && String.for_all
-                (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
-                d ->
-        Ok ("sha256:" ^ d)
-    | d ->
-        Error
-          (Printf.sprintf "%s image inspect gave %S, not an image ID" t.name d)
+    Result.map_error
+      (Printf.sprintf "%s image inspect %s" t.name)
+      (Podman_cli.image_id out)
   in
   let by_id check =
     match
@@ -353,6 +333,21 @@ let rec mkdirs path =
     try Unix.mkdir path 0o700 with Unix.Unix_error (EEXIST, _, _) -> ()
   end
 
+let build_script ~kind ~rootless ~uid ~gid =
+  (* In a rootless Podman the container's root is this user already, and this
+     user's ID is a subordinate one there, which a chown would give the file. *)
+  let chown =
+    match (kind, rootless) with
+    | `Podman, true -> ""
+    | (`Docker | `Container | `Podman), (true | false) ->
+        Printf.sprintf " && chown %d:%d /out/relay" uid gid
+  in
+  Printf.sprintf
+    "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
+     /out/relay /src/relay.c%s"
+    (String.concat " " build_packages)
+    chown
+
 (* Built into a directory of its own and renamed into place, so two bactrian
    processes building at once never see half a file. *)
 let build ~process_mgr ~clock t ~dir ~target =
@@ -367,22 +362,9 @@ let build ~process_mgr ~clock t ~dir ~target =
   List.iter (fun d -> Unix.mkdir d 0o755) [ work; src; out ];
   Out_channel.with_open_bin (Filename.concat src "relay.c") (fun oc ->
       output_string oc Relay_source.text);
-  (* In a rootless Podman the container's root is this user already, and
-     this user's ID is a subordinate one there, which a chown would give the
-     file. *)
-  let chown =
-    match (t.kind, t.rootless) with
-    | `Podman, true -> ""
-    | (`Docker | `Container | `Podman), (true | false) ->
-        Printf.sprintf " && chown %d:%d /out/relay" (Unix.getuid ())
-          (Unix.getgid ())
-  in
   let script =
-    Printf.sprintf
-      "apk add --no-cache %s >&2 && gcc -static -O2 -Wall -Wextra -Werror -o \
-       /out/relay /src/relay.c%s"
-      (String.concat " " build_packages)
-      chown
+    build_script ~kind:t.kind ~rootless:t.rootless ~uid:(Unix.getuid ())
+      ~gid:(Unix.getgid ())
   in
   let run =
     match t.kind with
@@ -492,10 +474,10 @@ let stale ~name ~pid ~host =
   String.starts_with ~prefix:"bactrian-" name && owner_gone ~pid ~host
 
 (* A label in a [ps --format] row. Docker's [.Labels] is one string, so it has
-   [.Label]. Podman 4.9's is a map and its rows have no [.Label] method. *)
+   [.Label]. *)
 let ps_label (kind : [ `Docker | `Podman ]) key =
   match kind with
-  | `Podman -> Printf.sprintf {|{{index .Labels "%s"}}|} key
+  | `Podman -> Podman_cli.ps_label key
   | `Docker -> Printf.sprintf {|{{.Label "%s"}}|} key
 
 (* Each container that carries the labels, as (name, pid, host). *)

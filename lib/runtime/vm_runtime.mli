@@ -18,6 +18,11 @@ val name : t -> string
 val exe : t -> string
 (** The executable, an absolute path. *)
 
+val client_variables : Bactrian_core.Experiment.sandbox_runtime -> string list
+(** The names of the variables the runtime's client gets from bactrian's own
+    environment, and no others. Never a credential, such as
+    [CONTAINER_PASSPHRASE] or [SSH_AUTH_SOCK]. *)
+
 val client_env : t -> string array
 (** [NAME=VALUE] for the variables the runtime's client reads ([PATH], [HOME],
     [USER], [LOGNAME], [TMPDIR], [XDG_RUNTIME_DIR], [XDG_CONFIG_HOME], and for
@@ -33,6 +38,12 @@ val arch : t -> string
 (** The architecture of the runtime's machines, such as ["arm64"] or ["amd64"].
 *)
 
+val detection_order :
+  macos:bool -> Bactrian_core.Experiment.sandbox_runtime list
+(** The runtimes {!detect} tries when none is named: docker, podman, container,
+    and on macOS docker, container, podman, so a Podman machine that happens to
+    run is not taken ahead of Apple's [container], which was checked more. *)
+
 val detect :
   process_mgr:_ Eio.Process.mgr ->
   clock:_ Eio.Time.clock ->
@@ -41,9 +52,8 @@ val detect :
 (** Looks the runtime up on [PATH] and asks it for its architecture: docker's
     daemon ([version]), or container's services, which must be running
     ([system status]), or podman's ([info]: architecture and whether it is
-    rootless). Unset, it is the first of docker, podman and container that
-    answers. The error says what is missing and how to get it, for each when
-    none works. *)
+    rootless). Unset, it is the first of {!detection_order} that answers. The
+    error says what is missing and how to get it, for each when none works. *)
 
 val image_id :
   process_mgr:_ Eio.Process.mgr ->
@@ -79,14 +89,24 @@ val relay_cache_dir : unit -> string
 
 val relay_name : t -> string
 (** The cached relay's file name: a hash of {!Relay_source.text} and the
-    architecture, so a changed relay is built again, and the same for both
-    runtimes on one host. *)
+    architecture, so a changed relay is built again, and the same for every
+    runtime on one host. *)
 
 val build_image : string
 (** The Alpine image, pinned by digest, that builds the relay. *)
 
 val build_packages : string list
 (** The Alpine packages the build installs. *)
+
+val build_script :
+  kind:Bactrian_core.Experiment.sandbox_runtime ->
+  rootless:bool ->
+  uid:int ->
+  gid:int ->
+  string
+(** The shell script that builds the relay in the container. It ends with a
+    [chown] to [uid:gid], except under a rootless Podman, where the container's
+    root is that user already and the user's ID is a subordinate one inside. *)
 
 val relay :
   process_mgr:_ Eio.Process.mgr ->
