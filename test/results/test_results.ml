@@ -274,7 +274,7 @@ let test_reads_what_the_run_wrote =
        {|{"collected": true, "coverage": "seatbelt-log", "complete": false, "reason": "the system log can drop denials", "items": [{"kind": "network-outbound", "detail": "x"}]}|});
   Alcotest.(check (option string))
     "Linux: relay failures only"
-    (Some "0 relay failures (Linux records no other kind of denial)")
+    (Some "0 relay failures (this sandbox records no other kind of denial)")
     (violations
        {|{"collected": true, "coverage": "relay-failures-only", "complete": true, "items": []}|});
   Alcotest.(check (option string))

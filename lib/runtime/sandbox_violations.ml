@@ -67,15 +67,16 @@ let describe_violations = function
               [] )
         | Relay_failures_only ->
             ( plural n "relay failure",
-              [ "Linux records no other kind of denial" ] )
+              [ "this sandbox records no other kind of denial" ] )
         | Relay_failures_and_dns ->
             ( (if n = 1 then "1 DNS lookup or relay failure"
                else Printf.sprintf "%d DNS lookups or relay failures" n),
-              [ "Linux records no other kind of denial" ] )
+              [ "this sandbox records no other kind of denial" ] )
       in
       Printf.sprintf "%s (%s)" count (String.concat "; " (scope @ gaps))
 
-(* The forwarder writes one line per relay failure, so this much means
+(* The forwarder writes one line per relay failure or DNS query, so this much
+   means
    something is flooding the log, and the rest is dropped (still read, so the
    writer never blocks). *)
 let max_log = 16 * 1024 * 1024

@@ -226,8 +226,8 @@ val describe_violations : violations -> string
 (** One line for people, such as
     ["at least 2 (the system log can drop denials, so this is a lower bound)"]
     or
-    ["2 DNS lookups or relay failures (Linux records no other kind of denial)"].
-*)
+    ["2 DNS lookups or relay failures (this sandbox records no other kind of
+     denial)"]. *)
 
 type started
 
