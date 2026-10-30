@@ -38,6 +38,10 @@ let derived ~tag ~base ~step =
 
 let remove_image tag = ignore (quiet ("docker rmi -f " ^ Filename.quote tag))
 
+(* OCaml's Unix has no unsetenv, so a variable that was unset is restored as
+   empty, on purpose. The ones set here read empty as unset: XDG_CACHE_HOME in
+   Vm_runtime.relay_cache_dir (empty is relative) and DOCKER_CONFIG in the
+   docker client. HOME is always set, so it gets its value back. *)
 let with_env bindings f =
   let previous = List.map (fun (k, _) -> (k, Sys.getenv_opt k)) bindings in
   List.iter (fun (k, v) -> Unix.putenv k v) bindings;
