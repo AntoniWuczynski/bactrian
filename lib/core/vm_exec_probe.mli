@@ -26,11 +26,13 @@ val of_line : string -> (report, string) result
 (** Decodes the JSON line [{"glibc_2_34","found","prefix"}], whose prefix is
     hexadecimal. [Error] describes what is wrong with it. *)
 
-val libc : report -> libc option
-(** The C library libfaketime is preloaded from for the executable of a report:
-    the one its [PT_INTERP] names ([ld-musl-...] is musl, [ld-linux...] is
-    glibc), and for glibc only when the image's is at least {!glibc_floor}. The
-    image's other loaders play no part, because a library of the wrong C
-    library, preloaded, stops the program from starting. [None] for a static
-    executable, one that is not ELF, another loader, or glibc older than the
-    floor. *)
+val libc : arch:string -> report -> libc option
+(** The C library libfaketime is preloaded from for the executable of a report,
+    on a runtime whose machines are [arch] (["arm64"] or ["amd64"]): the one its
+    [PT_INTERP] names ([ld-musl-...] is musl, [ld-linux...] is glibc), and for
+    glibc only when the image's is at least {!glibc_floor}. The image's other
+    loaders play no part, because a library of the wrong C library, preloaded,
+    stops the program from starting. The library is built for [arch], so an
+    executable of another architecture (an amd64 image run under emulation on
+    arm64) has none either. [None] for a static executable, one that is not ELF,
+    another loader, another architecture or glibc older than the floor. *)

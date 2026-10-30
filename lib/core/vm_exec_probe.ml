@@ -41,9 +41,19 @@ let of_line line =
           | Some bytes -> Ok { glibc_2_34; executable = Some bytes }
           | None -> Error "the executable's prefix is not hexadecimal"))
 
-let libc { glibc_2_34; executable } =
+(* The [e_machine] of the runtime's architecture, as Docker and container name
+   it. *)
+let machine_of_arch = function
+  | "amd64" | "x86_64" -> Some 62
+  | "arm64" | "aarch64" -> Some 183
+  | _ -> None
+
+let libc ~arch { glibc_2_34; executable } =
   let loader prefix =
-    Option.map Filename.basename (Elf_probe.interpreter prefix)
+    match (Elf_probe.machine prefix, machine_of_arch arch) with
+    | Some m, Some want when Int.equal m want ->
+        Option.map Filename.basename (Elf_probe.interpreter prefix)
+    | Some _, Some _ | None, _ | _, None -> None
   in
   match Option.bind executable loader with
   | Some name when String.starts_with ~prefix:"ld-musl-" name -> Some Musl

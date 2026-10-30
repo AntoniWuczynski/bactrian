@@ -41,7 +41,7 @@ let test_large () =
 let test_libc () =
   let libc ~glibc segments =
     Option.map Vm_exec_probe.libc_name
-      (Vm_exec_probe.libc
+      (Vm_exec_probe.libc ~arch:"amd64"
          { glibc_2_34 = glibc; executable = Some (E.elf segments) })
   in
   let linked interp = [ (E.pt_load, "x"); (E.pt_interp, interp ^ "\000") ] in
@@ -60,12 +60,42 @@ let test_libc () =
   Alcotest.(check (option string))
     "not found" None
     (Option.map Vm_exec_probe.libc_name
-       (Vm_exec_probe.libc { glibc_2_34 = true; executable = None }));
+       (Vm_exec_probe.libc ~arch:"amd64"
+          { glibc_2_34 = true; executable = None }));
   Alcotest.(check (option string))
     "a script" None
     (Option.map Vm_exec_probe.libc_name
-       (Vm_exec_probe.libc
+       (Vm_exec_probe.libc ~arch:"amd64"
           { glibc_2_34 = true; executable = Some "#!/bin/sh\n" }))
+
+(* The library is built for the runtime's architecture, so an executable of
+   another one, run under emulation, has none. *)
+let test_architecture () =
+  let libc ~arch ~machine interp =
+    Option.map Vm_exec_probe.libc_name
+      (Vm_exec_probe.libc ~arch
+         {
+           glibc_2_34 = true;
+           executable = Some (E.elf ~machine [ (E.pt_interp, interp ^ "\000") ]);
+         })
+  in
+  let check name expected ~arch ~machine interp =
+    Alcotest.(check (option string)) name expected (libc ~arch ~machine interp)
+  in
+  let amd64 = 62 and arm64 = 183 in
+  check "arm64 on arm64" (Some "musl") ~arch:"arm64" ~machine:arm64
+    "/lib/ld-musl-aarch64.so.1";
+  check "amd64 on amd64" (Some "glibc") ~arch:"amd64" ~machine:amd64
+    "/lib64/ld-linux-x86-64.so.2";
+  check "amd64 musl on arm64" None ~arch:"arm64" ~machine:amd64
+    "/lib/ld-musl-x86_64.so.1";
+  check "amd64 glibc on arm64" None ~arch:"arm64" ~machine:amd64
+    "/lib64/ld-linux-x86-64.so.2";
+  check "arm64 on amd64" None ~arch:"amd64" ~machine:arm64
+    "/lib/ld-linux-aarch64.so.1";
+  check "32-bit x86 on amd64" None ~arch:"amd64" ~machine:3 "/lib/ld-linux.so.2";
+  check "a runtime architecture bactrian does not know" None ~arch:"riscv64"
+    ~machine:243 "/lib/ld-linux-riscv64-lp64d.so.1"
 
 (* relay_image.c reads this many bytes of the executable, which bactrian
    classifies: they must be the same number. *)
@@ -92,6 +122,7 @@ let () =
           Alcotest.test_case "decode" `Quick test_decode;
           Alcotest.test_case "a whole prefix" `Quick test_large;
           Alcotest.test_case "the C library" `Quick test_libc;
+          Alcotest.test_case "the architecture" `Quick test_architecture;
           Alcotest.test_case "the prefix length" `Quick test_prefix_length;
         ] );
     ]

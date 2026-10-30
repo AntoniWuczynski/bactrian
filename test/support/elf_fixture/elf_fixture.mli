@@ -7,10 +7,11 @@ val pt_dynamic : int
 val pt_interp : int
 val pt_note : int
 
-val elf : ?class64:bool -> (int * string) list -> string
+val elf : ?class64:bool -> ?machine:int -> (int * string) list -> string
 (** [elf segments] is a little-endian ELF file with one program header per
     [(type, body)], whose body follows the table. 64-bit unless [class64] is
-    [false]. *)
+    [false]. Its [e_machine] is [machine], by default x86-64 (62) for 64-bit and
+    i386 (3) for 32-bit. *)
 
 val note : name:string -> kind:int -> desc:string -> string
 (** One ELF note. [name] is written as given, so it carries its own NUL bytes.

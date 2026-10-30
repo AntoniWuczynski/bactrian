@@ -37,3 +37,7 @@ val interpreter : string -> string option
     of a file. [None] for a file with no such segment, one that is not a
     little-endian ELF file, or an interpreter cut off by the end of the prefix.
 *)
+
+val machine : string -> int option
+(** The [e_machine] field of a little-endian ELF file: 62 for x86-64, 183 for
+    AArch64. [None] for a file that is not one. *)

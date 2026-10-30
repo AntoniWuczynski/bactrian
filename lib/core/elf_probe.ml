@@ -31,14 +31,16 @@ type segment = { kind : int; offset : int; size : int }
 
 (* The program header table of a little-endian ELF file, or [None] when the
    file is not one or the table is cut off. *)
-let segments s =
+(* Whether a little-endian ELF file is 64-bit, [None] when it is not one. *)
+let class64 s =
   let* () = if String.starts_with ~prefix:"\x7fELF" s then Some () else None in
-  let* class64 =
-    match u16 s 4 with
-    | Some c when c land 0xff = 2 && c lsr 8 = 1 -> Some true
-    | Some c when c land 0xff = 1 && c lsr 8 = 1 -> Some false
-    | Some _ | None -> None
-  in
+  match u16 s 4 with
+  | Some c when c land 0xff = 2 && c lsr 8 = 1 -> Some true
+  | Some c when c land 0xff = 1 && c lsr 8 = 1 -> Some false
+  | Some _ | None -> None
+
+let segments s =
+  let* class64 = class64 s in
   let word off = if class64 then u64 s off else u32 s off in
   let phoff, phentsize, phnum, minimum =
     if class64 then (32, 54, 56, 56) else (28, 42, 44, 32)
@@ -109,3 +111,7 @@ let interpreter s =
       | Some n -> String.sub raw 0 n
       | None -> raw)
   else None
+
+let machine s =
+  let* _ = class64 s in
+  u16 s 18

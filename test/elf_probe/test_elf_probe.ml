@@ -127,6 +127,21 @@ let test_overflow () =
         (Elf_probe.interpreter s))
     both
 
+let test_machine () =
+  Alcotest.(check (option int))
+    "x86-64" (Some 62)
+    (Elf_probe.machine (E.elf []));
+  Alcotest.(check (option int))
+    "AArch64" (Some 183)
+    (Elf_probe.machine (E.elf ~machine:183 []));
+  Alcotest.(check (option int))
+    "32-bit" (Some 3)
+    (Elf_probe.machine (E.elf ~class64:false []));
+  Alcotest.(check (option int)) "not ELF" None (Elf_probe.machine "#!/bin/sh\n");
+  Alcotest.(check (option int))
+    "cut off" None
+    (Elf_probe.machine "\x7fELF\002\001")
+
 let shebang =
   Alcotest.testable
     (fun ppf (t : Shebang.t option) ->
@@ -180,6 +195,7 @@ let () =
           Alcotest.test_case "the interpreter" `Quick test_interpreter;
           Alcotest.test_case "malformed notes" `Quick test_hostile_notes;
           Alcotest.test_case "sizes that overflow" `Quick test_overflow;
+          Alcotest.test_case "the machine" `Quick test_machine;
         ] );
       ( "shebang",
         [ Alcotest.test_case "the program it starts" `Quick test_shebang ] );

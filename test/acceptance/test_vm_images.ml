@@ -1,9 +1,9 @@
 (* The virtual machine's clock and allow_read across kinds of image and cache
    (decisions 0020 and 0021): an image whose glibc is too old for libfaketime,
-   one that carries both C libraries' loaders, a static agent, a cache that
-   cannot be trusted, a file and a home-like tree as allow_read. Like test_vm,
-   on docker, or container when BACTRIAN_VM_RUNTIME is container, and skipped
-   without one. *)
+   one that carries both C libraries' loaders, one of another architecture, a
+   static agent, a cache that cannot be trusted, a file and a home-like tree as
+   allow_read. Like test_vm, on docker, or container when BACTRIAN_VM_RUNTIME
+   is container, and skipped without one. *)
 
 open Bactrian_runtime
 open Acceptance_world
@@ -20,14 +20,21 @@ let docker_only what =
       Printf.printf "%s needs docker: skipped\n" what;
       Alcotest.skip ()
 
-(* An image built from [base] with one more step, for docker. *)
+(* The shell command that builds an image from [base] with one more step, for
+   docker, of [platform] when given. *)
+let build_command ?platform ~tag ~base ~step () =
+  Printf.sprintf
+    "printf 'FROM %%s\\nRUN %%s\\n' %s %s | docker build -q%s -t %s - > \
+     /dev/null"
+    (Filename.quote base) (Filename.quote step)
+    (match platform with
+    | Some p -> " --platform " ^ Filename.quote p
+    | None -> "")
+    (Filename.quote tag)
+
 let derived ~tag ~base ~step =
   gate [ base ];
-  run_or_fail
-    (Printf.sprintf
-       "printf 'FROM %%s\\nRUN %%s\\n' %s %s | docker build -q -t %s - > \
-        /dev/null"
-       (Filename.quote base) (Filename.quote step) (Filename.quote tag))
+  run_or_fail (build_command ~tag ~base ~step ())
 
 let remove_image tag = ignore (quiet ("docker rmi -f " ^ Filename.quote tag))
 
@@ -96,6 +103,35 @@ let static_agent () =
   answered ~image:tag ~name:"vm-clock-static"
     ~argv:(fun script -> [ "/bin/busybox.static"; "sh"; script ])
     {|{"mode":"contract_only","reason":"static-binary"}|}
+
+(* An image of the other architecture, run under emulation, is given no library,
+   which is built for the runtime's own: the agent starts, contract-only, where
+   the wrong library would stop it (musl) or be ignored under an enforced label
+   (glibc). Skipped where the runtime cannot run the other architecture. *)
+let foreign_architecture () =
+  docker_only "an image of another architecture";
+  let platform =
+    let ic =
+      Unix.open_process_in "docker version --format '{{.Server.Arch}}'"
+    in
+    let arch = String.trim (In_channel.input_all ic) in
+    ignore (Unix.close_process_in ic : Unix.process_status);
+    match arch with "arm64" -> "linux/amd64" | _ -> "linux/arm64"
+  in
+  List.iter
+    (fun (base, libc) ->
+      let tag = "bactrian-test-foreign-" ^ libc ^ ":1" in
+      gate [];
+      if not (quiet (build_command ~platform ~tag ~base ~step:"true" ())) then begin
+        Printf.printf "the runtime cannot build a %s image: skipped\n" platform;
+        Alcotest.skip ()
+      end;
+      Fun.protect ~finally:(fun () -> remove_image tag) @@ fun () ->
+      answered ~image:tag
+        ~name:("vm-clock-foreign-" ^ libc)
+        ~argv:(fun script -> [ "/bin/sh"; script ])
+        {|{"mode":"contract_only","reason":"library-not-found"}|})
+    [ (Vm_runtime.build_image, "musl"); (python_image, "glibc") ]
 
 (* A library cache that others could write to is refused, and the run goes on
    contract-only (vm) instead of failing. *)
@@ -261,6 +297,8 @@ let () =
           Alcotest.test_case "glibc older than libfaketime's" `Slow old_glibc;
           Alcotest.test_case "both C libraries' loaders" `Slow mixed_libc;
           Alcotest.test_case "a static agent" `Slow static_agent;
+          Alcotest.test_case "an image of another architecture" `Slow
+            foreign_architecture;
           Alcotest.test_case "a library cache that is not trusted" `Slow
             untrusted_cache;
           Alcotest.test_case "both libraries, one after the other" `Slow

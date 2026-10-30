@@ -452,7 +452,7 @@ let executable_of ~env t layout ~run_id ~run_dir ~state_dir ~temp_dir ~cwd argv0
   in
   Ok
     {
-      libc = Vm_exec_probe.libc last;
+      libc = Vm_exec_probe.libc ~arch:(Vm_runtime.arch t.runtime) last;
       kind =
         (match last.executable with
         | Some prefix -> Elf_probe.probe prefix
