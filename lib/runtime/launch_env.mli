@@ -54,3 +54,10 @@ val close_inherited_on_exec : unit -> unit
     every child, through [bwrap] into the sandbox: an inherited directory
     descriptor leads out of any mount namespace. Called once at start, after
     {!restore}, so a child gets only the descriptors it is given explicitly. *)
+
+val keep_dev_null_on_exec : unit -> unit
+(** Clears close-on-exec on every descriptor above 2 that is open on
+    [/dev/null], undoing {!close_inherited_on_exec} for those alone. Called by
+    [__sandbox-user] just before it runs the agent, so that the descriptors the
+    forwarder hides behind [/dev/null] are [/dev/null] in the agent too, rather
+    than closed. *)

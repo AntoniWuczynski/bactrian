@@ -49,6 +49,8 @@ type process = {
   deadline : float;  (** Absolute [clock] time of the total timeout. *)
   mutable aborted : bool;
       (** The run is being stopped, not finished: no exit grace. *)
+  terminate : (unit -> unit) option;
+      (** Sends SIGTERM in place of a signal to the process group. *)
 }
 
 type t = Process of process | Http of http
@@ -131,7 +133,9 @@ let shutdown t =
     match status_within t exit_grace with
     | Some status -> status
     | None -> (
-        ignore (Process_group.signal pgid Sys.sigterm : bool);
+        (match t.terminate with
+        | Some terminate -> terminate ()
+        | None -> ignore (Process_group.signal pgid Sys.sigterm : bool));
         match status_within t t.config.kill_grace with
         | Some status -> status
         | None ->
@@ -157,7 +161,7 @@ let open_stderr ~sw path =
    fibre has to keep running to learn the exit status during shutdown, which
    happens exactly when the caller is cancelled. [f] runs in a fibre of the
    caller's own switch, so it is still cancelled with the caller. *)
-let with_agent ?(fds = []) ~process_mgr ~clock config f =
+let with_agent ?(fds = []) ?terminate ~process_mgr ~clock config f =
   Eio.Switch.run @@ fun caller_sw ->
   Eio.Cancel.protect @@ fun () ->
   Eio.Switch.run @@ fun sw ->
@@ -199,6 +203,7 @@ let with_agent ?(fds = []) ~process_mgr ~clock config f =
           config;
           deadline = Eio.Time.now clock +. config.total_timeout;
           aborted = false;
+          terminate;
         }
       in
       let result =

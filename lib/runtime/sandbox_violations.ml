@@ -1,14 +1,16 @@
 open Bactrian_core
 
-type coverage = Seatbelt_log | Relay_failures_only
+type coverage = Seatbelt_log | Relay_failures_only | Relay_failures_and_dns
 
 let coverage_name = function
   | Seatbelt_log -> "seatbelt-log"
   | Relay_failures_only -> "relay-failures-only"
+  | Relay_failures_and_dns -> "relay-failures-and-dns"
 
 let coverage_of_name = function
   | "seatbelt-log" -> Some Seatbelt_log
   | "relay-failures-only" -> Some Relay_failures_only
+  | "relay-failures-and-dns" -> Some Relay_failures_and_dns
   | _ -> None
 
 type violations =
@@ -65,11 +67,16 @@ let describe_violations = function
               [] )
         | Relay_failures_only ->
             ( plural n "relay failure",
-              [ "Linux records no other kind of denial" ] )
+              [ "this sandbox records no other kind of denial" ] )
+        | Relay_failures_and_dns ->
+            ( (if n = 1 then "1 DNS lookup or relay failure"
+               else Printf.sprintf "%d DNS lookups or relay failures" n),
+              [ "this sandbox records no other kind of denial" ] )
       in
       Printf.sprintf "%s (%s)" count (String.concat "; " (scope @ gaps))
 
-(* The forwarder writes one line per relay failure, so this much means
+(* The forwarder writes one line per relay failure or DNS query, so this much
+   means
    something is flooding the log, and the rest is dropped (still read, so the
    writer never blocks). *)
 let max_log = 16 * 1024 * 1024
@@ -95,8 +102,8 @@ let drain reader fd =
 
 let log_timeout = 30.
 
-(* Denies the one write it makes, with the end tag, so the marker always
-   reaches the log. *)
+(* Denies the one write it makes, with the end tag, so each marker is a
+   tagged denial. *)
 let marker_profile =
   "(version 1)\n\
    (deny default (with message (param \"TAG\")))\n\
@@ -108,22 +115,27 @@ let seatbelt ~env ~tag ~since ~marker =
   let end_tag = Sandbox_log.end_tag tag in
   (* touch reports the denial on its standard error, which is not ours. *)
   let discard = Eio.Flow.buffer_sink (Buffer.create 256) in
-  match
-    Eio.Process.run mgr
-      ~is_success:(fun (_ : int) -> true)
-      ~stdout:discard ~stderr:discard ~env:(Proc_util.tool_env ())
-      [
-        "/usr/bin/sandbox-exec";
-        "-p";
-        marker_profile;
-        "-D";
-        "TAG=" ^ end_tag;
-        "/usr/bin/touch";
-        marker;
-      ]
-  with
-  | exception Eio.Io _ -> Not_collected "the end marker could not be logged"
-  | () -> (
+  let mark () =
+    match
+      Eio.Process.run mgr
+        ~is_success:(fun (_ : int) -> true)
+        ~stdout:discard ~stderr:discard ~env:(Proc_util.tool_env ())
+        [
+          "/usr/bin/sandbox-exec";
+          "-p";
+          marker_profile;
+          "-D";
+          "TAG=" ^ end_tag;
+          "/usr/bin/touch";
+          marker;
+        ]
+    with
+    | () -> true
+    | exception Eio.Io _ -> false
+  in
+  match mark () with
+  | false -> Not_collected "the end marker could not be logged"
+  | true -> (
       let argv =
         [
           "/usr/bin/log";
@@ -144,13 +156,28 @@ let seatbelt ~env ~tag ~since ~marker =
       let now () = Eio.Time.now clock in
       (* The deadline is checked between reads, and the outer bound only stops
          a [log show] that hangs. *)
+      (* How often the marker was logged, which says on a slow runner whether
+         the log dropped it or only showed it late. *)
+      let marks = ref 1 in
       let collected ?(gaps = []) items =
-        Collected { items; coverage = Seatbelt_log; gaps = log_drops :: gaps }
+        let late =
+          if !marks > 1 then
+            [
+              Printf.sprintf
+                "the system log showed the run's end marker once it had been \
+                 logged %d times"
+                !marks;
+            ]
+          else []
+        in
+        Collected
+          { items; coverage = Seatbelt_log; gaps = (log_drops :: late) @ gaps }
       in
       match
         Eio.Time.with_timeout clock (log_timeout +. 5.) (fun () ->
             Ok
               (Sandbox_log.settle ~tag ~read ~wait:(Eio.Time.sleep clock) ~now
+                 ~mark:(fun () -> if mark () then incr marks)
                  ~deadline:(now () +. log_timeout)))
       with
       | Ok (Settled vs) -> collected vs
@@ -166,8 +193,9 @@ let seatbelt ~env ~tag ~since ~marker =
           Not_collected
             (Printf.sprintf
                "the system log did not show the run's end marker within %.0f \
-                seconds"
-               log_timeout)
+                seconds, though it was logged %s"
+               log_timeout
+               (if !marks = 1 then "once" else Printf.sprintf "%d times" !marks))
       | Error `Timeout ->
           Not_collected
             (Printf.sprintf "log show did not finish within %.0f seconds"
@@ -175,24 +203,36 @@ let seatbelt ~env ~tag ~since ~marker =
       | exception (Eio.Io _ as e) ->
           Not_collected ("log show failed: " ^ Printexc.to_string e))
 
-let relay_violations ~gaps path =
+let relay_violations ~coverage ~gaps path =
   match In_channel.with_open_bin path In_channel.input_all with
   | exception Sys_error m -> Not_collected m
   | text ->
-      let items, bad = Sandbox_log.of_relay_log text in
+      let { Sandbox_log.items; unreadable; not_kept } =
+        Sandbox_log.of_relay_log text
+      in
+      let were n = if n = 1 then "was" else "were" in
       Collected
         {
           items;
-          coverage = Relay_failures_only;
+          coverage;
           gaps =
             (gaps
+            @ (if unreadable = 0 then []
+               else
+                 [
+                   Printf.sprintf "%s in sandbox.log %s skipped"
+                     (plural unreadable "unreadable line")
+                     (were unreadable);
+                 ])
             @
-            if bad = 0 then []
+            if not_kept = 0 then []
             else
               [
-                Printf.sprintf "%s in sandbox.log %s skipped"
-                  (plural bad "unreadable line")
-                  (if bad = 1 then "was" else "were");
+                Printf.sprintf
+                  "%s after the first %d %s not kept here (sandbox.log has \
+                   them)"
+                  (plural not_kept "violation")
+                  Sandbox_log.max_items (were not_kept);
               ]);
         }
 
@@ -200,23 +240,26 @@ let relay_violations ~gaps path =
    forwarder that did not, never a wait in a normal run. *)
 let drain_timeout = 5.
 
-let relay ~env ~path ~writer ~drained =
+let relay ~env ~path ~writer ~drained ~coverage ~gaps:known =
   Eio.Resource.close writer;
   match
     Eio.Time.with_timeout (Eio.Stdenv.clock env) drain_timeout (fun () ->
         Ok (Eio.Promise.await_exn drained))
   with
   | Ok dropped ->
-      relay_violations path
+      relay_violations ~coverage path
         ~gaps:
-          (if dropped then
-             [
-               Printf.sprintf "the log passed %d bytes, the rest was dropped"
-                 max_log;
-             ]
-           else [])
+          (known
+          @
+          if dropped then
+            [
+              Printf.sprintf "the log passed %d bytes, the rest was dropped"
+                max_log;
+            ]
+          else [])
   | Error `Timeout ->
-      relay_violations path
-        ~gaps:[ "a process still held the log open at the end of the run" ]
+      relay_violations ~coverage path
+        ~gaps:
+          (known @ [ "a process still held the log open at the end of the run" ])
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Not_collected ("sandbox.log: " ^ Printexc.to_string e)

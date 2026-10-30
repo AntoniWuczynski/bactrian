@@ -708,7 +708,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
                 }
               in
               let session =
-                D.with_agent ~fds:sandboxed.fds
+                D.with_agent ~fds:sandboxed.fds ?terminate:sandboxed.terminate
                   ~process_mgr:(Eio.Stdenv.process_mgr env) ~clock driver_config
                   (fun d -> converse ~t_ms ~add d ~start:(start None) turns)
               in

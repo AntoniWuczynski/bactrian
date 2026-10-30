@@ -1,7 +1,14 @@
 type forward = { port : int; socket : string }
-type config = { forwards : forward list; agent : string list }
+type identity = { uid : int; gid : int }
+
+type config = {
+  forwards : forward list;
+  dns : identity option;
+  agent : string list;
+}
 
 type parse_error =
+  | Bad_identity of string
   | Bad_pair of string
   | Bad_port of string
   | Bad_socket of string
@@ -11,16 +18,43 @@ type parse_error =
 
 let ( let* ) = Result.bind
 let log_variable = "BACTRIAN_SANDBOX_LOG_FD"
+let signal_variable = "BACTRIAN_SANDBOX_SIGNAL_FD"
 
 (* SAFETY: the C function ignores its argument, allocates nothing on the OCaml
    heap and only calls prctl, so it may be [@@noalloc]. Its result is an
    immediate OCaml bool. *)
 external set_undumpable : unit -> bool = "bactrian_set_undumpable" [@@noalloc]
 
+(* SAFETY: the C function only calls unshare and strerror, and registers its
+   argument and result with the runtime before it allocates. *)
+external unshare_user : unit -> string option = "bactrian_unshare_user"
+
 (* Parsing *)
 
+let digits text =
+  (not (String.equal text ""))
+  && String.for_all (function '0' .. '9' -> true | _ -> false) text
+
+(* The largest user or group ID: 2^32 - 1 is the kernel's "no ID". *)
+let max_id = 4294967294
+
+let id text =
+  if digits text && String.length text <= 10 then
+    Option.bind (int_of_string_opt text) (fun n ->
+        if n <= max_id then Some n else None)
+  else None
+
+let parse_identity text =
+  match String.split_on_char ':' text with
+  | [ u; g ] -> (
+      match (id u, id g) with
+      | Some uid, Some gid -> Ok { uid; gid }
+      | None, (Some _ | None) | Some _, None -> Error (Bad_identity text))
+  | [] | [ _ ] | _ :: _ :: _ -> Error (Bad_identity text)
+
+let identity_text { uid; gid } = Printf.sprintf "%d:%d" uid gid
+
 let parse_port text =
-  let digits = String.for_all (function '0' .. '9' -> true | _ -> false) in
   match int_of_string_opt text with
   | Some port
     when String.length text <= 5 && digits text && port >= 1 && port <= 65535 ->
@@ -55,14 +89,22 @@ let parse args =
     | "--" :: agent -> Ok (List.rev pairs, agent)
     | pair :: rest -> split (pair :: pairs) rest
   in
+  let* dns, args =
+    match args with
+    | flag :: rest when String.starts_with ~prefix:"--dns=" flag ->
+        let* id = parse_identity (String.sub flag 6 (String.length flag - 6)) in
+        Ok (Some id, rest)
+    | _ -> Ok (None, args)
+  in
   let* pairs, agent = split [] args in
   let* () = match agent with [] -> Error Empty_agent | _ :: _ -> Ok () in
   let* forwards = parse_pairs pairs in
   match first_duplicate [] forwards with
   | Some port -> Error (Duplicate_port port)
-  | None -> Ok { forwards; agent }
+  | None -> Ok { forwards; dns; agent }
 
 let describe_parse_error = function
+  | Bad_identity text -> Printf.sprintf "%S is not of the form UID:GID" text
   | Bad_pair text -> Printf.sprintf "%S is not of the form PORT=SOCKET" text
   | Bad_port text ->
       Printf.sprintf "%S is not a port number from 1 to 65535" text
@@ -75,11 +117,13 @@ let describe_parse_error = function
 
 type error =
   | Listen_failed of { port : int; reason : string }
+  | Dns_failed of Sandbox_dns.error
   | Spawn_failed of string
 
 let describe_error = function
   | Listen_failed { port; reason } ->
       Printf.sprintf "cannot listen on 127.0.0.1:%d: %s" port reason
+  | Dns_failed e -> Sandbox_dns.describe_error e
   | Spawn_failed reason -> "cannot start the agent: " ^ reason
 
 let violation_line ~port ~socket ~reason =
@@ -196,6 +240,7 @@ let with_signal_forwarding f =
     Atomic.set flag true;
     Eio.Condition.broadcast arrived
   in
+  let sigterm = Option.to_list (List.assoc_opt Sys.sigterm flags) in
 
   let rec forward pgid =
     List.iter
@@ -208,7 +253,37 @@ let with_signal_forwarding f =
   in
   Interrupt.with_handlers
     (List.map (fun (s, flag) -> (s, handle flag)) flags)
-    (fun () -> f forward)
+    (fun () ->
+      f
+        ~terminate:(fun () -> List.iter (fun flag -> handle flag ()) sigterm)
+        forward)
+
+(* Each byte bactrian writes to the signal pipe asks for SIGTERM, as the signal
+   itself would, which bubblewrap cannot pass on (see {!signal_variable}). The
+   end of the pipe asks for nothing. *)
+let watch_requests ~terminate fd =
+  let byte = Bytes.create 1 in
+  let rec loop () =
+    match
+      Eio_unix.Fd.use_exn "signal pipe" fd (fun u ->
+          Eio_unix.await_readable u;
+          Unix.read u byte 0 1)
+    with
+    | 0 -> ()
+    | _ ->
+        terminate ();
+        loop ()
+    (* A signal or a spurious wake-up is not the end of the pipe. *)
+    | exception Unix.Unix_error ((EINTR | EAGAIN | EWOULDBLOCK), _, _) ->
+        loop ()
+    (* Later requests are lost, and the agent gets SIGKILL after the grace
+       period, so say why. *)
+    | exception ((Unix.Unix_error _ | Eio.Io _) as e) ->
+        prerr_endline
+          ("bactrian sandbox-init: the signal pipe failed, so SIGTERM is no \
+            longer passed on: " ^ Printexc.to_string e)
+  in
+  loop ()
 
 let rec serve_all ~sw ~net ~log ~on_listening = function
   | [] -> Ok ()
@@ -217,19 +292,28 @@ let rec serve_all ~sw ~net ~log ~on_listening = function
       | Ok () -> serve_all ~sw ~net ~log ~on_listening rest
       | Error _ as failed -> failed)
 
-let spawn ~sw ~process_mgr ~stdout ~hidden_fd agent =
+(* With [dns] the forwarder is root of bubblewrap's user namespace, so the agent
+   is started through [__sandbox-user], which gives it one of its own. *)
+let agent_argv ~dns agent =
+  match dns with
+  | None -> agent
+  | Some id ->
+      Sys.executable_name :: "__sandbox-user" :: identity_text id :: "--"
+      :: agent
+
+let spawn ~sw ~process_mgr ~stdout ~hidden_fds argv =
   let env =
     Eio.Process.Env.override
-      [ (log_variable, None) ]
+      [ (log_variable, None); (signal_variable, None) ]
       (Eio.Process.environment process_mgr)
   in
   match
     let hidden =
-      Option.map
+      List.map
         (fun n ->
           let null = Unix.openfile "/dev/null" [ O_RDWR; O_CLOEXEC ] 0 in
           (n, Eio_unix.Fd.of_unix ~sw ~close_unix:true null, `Blocking))
-        hidden_fd
+        hidden_fds
     in
     let fds =
       [
@@ -237,20 +321,41 @@ let spawn ~sw ~process_mgr ~stdout ~hidden_fd agent =
         (1, stdout, `Blocking);
         (2, Eio_unix.Fd.stderr, `Blocking);
       ]
-      @ Option.to_list hidden
+      @ hidden
     in
-    Eio_unix.Process.spawn_unix ~sw process_mgr ~pgid:0 ~fds ~env agent
+    Eio_unix.Process.spawn_unix ~sw process_mgr ~pgid:0 ~fds ~env argv
   with
   | proc -> Ok proc
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Error (Spawn_failed (Printexc.to_string e))
 
 let run ?(on_listening = fun ~requested:_ ~bound:_ -> ())
-    ?(stdout = Eio_unix.Fd.stdout) ?log ?hidden_fd ~net ~process_mgr config =
+    ?(stdout = Eio_unix.Fd.stdout) ?log ?signals ?(hidden_fds = []) ~net
+    ~process_mgr config =
   Eio.Switch.run @@ fun sw ->
-  with_signal_forwarding @@ fun forward ->
+  with_signal_forwarding @@ fun ~terminate forward ->
   let* () = serve_all ~sw ~net ~log ~on_listening config.forwards in
-  let* proc = spawn ~sw ~process_mgr ~stdout ~hidden_fd config.agent in
+  let* () =
+    match config.dns with
+    | None -> Ok ()
+    | Some _ ->
+        Result.map_error
+          (fun e -> Dns_failed e)
+          (Sandbox_dns.serve ~sw ~net ~record:(record ~log)
+             (List.map
+                (fun ip -> (ip, Sandbox_dns.port))
+                (Sandbox_dns.listen_addresses ())))
+  in
+  Option.iter
+    (fun fd ->
+      Eio.Fiber.fork_daemon ~sw (fun () ->
+          watch_requests ~terminate fd;
+          `Stop_daemon))
+    signals;
+  let* proc =
+    spawn ~sw ~process_mgr ~stdout ~hidden_fds
+      (agent_argv ~dns:config.dns config.agent)
+  in
   let pgid = Eio.Process.pid proc in
   (* The leader's death leaves its children behind unless the group goes too. *)
   Eio.Switch.on_release sw (fun () ->
@@ -259,3 +364,36 @@ let run ?(on_listening = fun ~requested:_ ~bound:_ -> ())
     Eio.Fiber.first (fun () -> Eio.Process.await proc) (fun () -> forward pgid)
   in
   Ok (exit_code status)
+
+(* The agent's own user namespace *)
+
+let write_proc file text =
+  let path = "/proc/self/" ^ file in
+  match Unix.openfile path [ O_WRONLY; O_CLOEXEC ] 0 with
+  | exception Unix.Unix_error (e, _, _) ->
+      Error (path ^ ": " ^ Unix.error_message e)
+  | fd ->
+      Fun.protect
+        ~finally:(fun () -> Unix.close fd)
+        (fun () ->
+          match Unix.write_substring fd text 0 (String.length text) with
+          | (_ : int) -> Ok ()
+          | exception Unix.Unix_error (e, _, _) ->
+              Error (path ^ ": " ^ Unix.error_message e))
+
+let enter_user_namespace { uid; gid } =
+  let* () =
+    match unshare_user () with
+    | None -> Ok ()
+    | Some reason -> Error ("cannot make a user namespace: " ^ reason)
+  in
+  let* () = write_proc "uid_map" (Printf.sprintf "%d 0 1\n" uid) in
+  let* () = write_proc "setgroups" "deny" in
+  write_proc "gid_map" (Printf.sprintf "%d 0 1\n" gid)
+
+let parse_user = function
+  | text :: "--" :: exe :: args ->
+      Result.map
+        (fun id -> (id, exe, args))
+        (Result.map_error describe_parse_error (parse_identity text))
+  | [] | [ _ ] | _ :: _ :: _ -> Error "expected UID:GID -- AGENT..."

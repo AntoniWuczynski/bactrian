@@ -7,6 +7,7 @@ type report = {
   inside_write : outcome;
   denied_read : outcome;
   netns : string option;
+  capabilities : string option;
 }
 
 let greeting = "bactrian-probe\n"
@@ -85,6 +86,21 @@ let read path =
   | _ -> Ok ()
   | exception Sys_error m -> Error m
 
+(* The capability sets of /proc/self/status that are not empty. *)
+let held_capabilities () =
+  match In_channel.with_open_bin "/proc/self/status" In_channel.input_all with
+  | exception Sys_error _ -> None
+  | status ->
+      String.split_on_char '\n' status
+      |> List.filter_map (fun line ->
+          match String.split_on_char ':' line with
+          | [ (("CapInh" | "CapPrm" | "CapEff" | "CapAmb") as set); value ] ->
+              let value = String.trim value in
+              if String.for_all (Char.equal '0') value then None
+              else Some (set ^ "=" ^ value)
+          | _ -> None)
+      |> String.concat " " |> Option.some
+
 let run ~port ~outside ~inside ~denied =
   let public =
     connect
@@ -106,6 +122,7 @@ let run ~port ~outside ~inside ~denied =
     inside_write = create inside;
     denied_read = read denied;
     netns;
+    capabilities = held_capabilities ();
   }
 
 (* The wire form: each outcome is "ok" or the error's name. *)
@@ -117,6 +134,7 @@ type wire = {
   inside_write : string;
   denied_read : string;
   netns : string option; [@default None]
+  capabilities : string option; [@default None]
 }
 [@@deriving yojson]
 
@@ -134,6 +152,7 @@ let to_line (r : report) =
          inside_write = to_word r.inside_write;
          denied_read = to_word r.denied_read;
          netns = r.netns;
+         capabilities = r.capabilities;
        })
 
 let of_line line =
@@ -149,6 +168,7 @@ let of_line line =
             inside_write = of_word w.inside_write;
             denied_read = of_word w.denied_read;
             netns = w.netns;
+            capabilities = w.capabilities;
           })
         (wire_of_yojson json)
 
@@ -172,8 +192,15 @@ let judge (platform : Bactrian_core.Sandbox_policy.platform) ~host_netns
         | Some _, Some _ | None, _ | _, None ->
             [ "the probe was not in a network namespace of its own" ])
   in
+  (* The forwarder holds capabilities on Linux, and the agent must hold none. *)
+  let capabilities =
+    match (platform, r.capabilities) with
+    | Macos, (Some _ | None) | Linux, Some "" -> []
+    | Linux, Some held -> [ "the probe holds capabilities (" ^ held ^ ")" ]
+    | Linux, None -> [ "the probe could not read its capabilities" ]
+  in
   match
-    public
+    public @ capabilities
     @ Bactrian_core.Vm_probe.checks ~listener:r.listener
         ~outside_write:r.outside_write ~inside_write:r.inside_write
         ~denied_read:r.denied_read

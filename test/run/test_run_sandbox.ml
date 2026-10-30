@@ -77,6 +77,102 @@ let test_record_and_replay =
     (List.length replayed.findings.divergences);
   Alcotest.(check int) "upstream untouched" 2 (List.length (F.requests ctx.up))
 
+(* A run stopped by its turn timeout gives the agent SIGTERM and a grace period,
+   as an unsandboxed run does. On Linux it goes through the forwarder, because
+   a signal to bubblewrap's group would not reach it. *)
+let test_sigterm_reaches_agent =
+  sandboxed "sandbox-sigterm" @@ fun ctx ->
+  let sandbox = strict ctx in
+  let agent =
+    [
+      "sh";
+      "-c";
+      {|trap 'echo term > "$BACTRIAN_STATE_DIR/got-term"; exit 0' TERM; while :; do sleep 0.2; done|};
+    ]
+  in
+  let r =
+    ok (execute ctx { (config ~agent ()) with sandbox; turn_timeout = 1. })
+  in
+  Alcotest.(check string) "outcome" "failed: timeout: turn" (outcome_name r);
+  Alcotest.(check bool)
+    "the agent saw SIGTERM" true
+    (Sys.file_exists (Filename.concat (file r "state") "got-term"))
+
+(* On Linux the forwarder answers DNS, so a lookup is a violation, unless the
+   agent's resolver asks another address, which a gap then names. *)
+let test_dns_is_recorded =
+  sandboxed "sandbox-dns" @@ fun ctx ->
+  let unrecorded = Bactrian_runtime.Sandbox_dns.unrecorded_resolvers () in
+  let sandbox = strict ctx in
+  let lookup =
+    "import socket\n\
+     try:\n\
+    \    socket.getaddrinfo('example.com', 443)\n\
+     except OSError:\n\
+    \    pass\n"
+  in
+  let r =
+    ok
+      (execute ctx
+         {
+           (config ~agent:[ "python3"; "-I"; "-c"; lookup ^ python_agent ] ()) with
+           sandbox;
+         })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  match (r.violations, unrecorded) with
+  | Collected { items; coverage = Relay_failures_and_dns; gaps = [] }, [] ->
+      Alcotest.(check bool)
+        "the lookup is there" true
+        (List.exists
+           (fun (v : Sandbox_log.violation) ->
+             String.equal v.kind "dns"
+             && String.starts_with ~prefix:"example.com " v.detail)
+           items)
+  | Collected { coverage = Relay_failures_and_dns; gaps; _ }, first :: _ ->
+      Alcotest.(check bool)
+        "a gap names the resolver" true
+        (List.exists
+           (fun g ->
+             List.exists (String.equal first) (String.split_on_char ' ' g))
+           gaps)
+  | Collected { coverage = Relay_failures_and_dns; gaps = _ :: _; _ }, [] ->
+      Alcotest.fail "the DNS lookups are incomplete"
+  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ }, _ ->
+      print_endline "this sandbox does not record DNS lookups as such: skipped";
+      Alcotest.skip ()
+  | Not_collected m, _ -> Alcotest.failf "violations not collected: %s" m
+
+(* On the DNS path the agent starts through [__sandbox-user], and the
+   descriptors that held the log and the signal pipe must still be /dev/null
+   there, as on the plain path, not closed. *)
+let test_dns_path_hides_descriptors =
+  sandboxed "sandbox-dns-fds" @@ fun ctx ->
+  if macos then begin
+    print_endline "not Linux: skipped";
+    Alcotest.skip ()
+  end;
+  let sandbox = strict ctx in
+  let agent =
+    [
+      "sh";
+      "-c";
+      {|readlink /proc/self/fd/3 /proc/self/fd/4 > "$BACTRIAN_STATE_DIR/fds"; exec python3 -I -c "$1"|};
+      "sh";
+      python_agent;
+    ]
+  in
+  let r = ok (execute ctx { (config ~agent ()) with sandbox }) in
+  match r.violations with
+  | Collected { coverage = Relay_failures_and_dns; _ } ->
+      Alcotest.(check string)
+        "fds 3 and 4" "/dev/null\n/dev/null\n"
+        (read (file r "state/fds"))
+  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ } ->
+      print_endline "this sandbox has no DNS path: skipped";
+      Alcotest.skip ()
+  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+
 (* An agent that tries to leave: each attempt's result is its reply. *)
 let escape_agent =
   {|
@@ -217,8 +313,14 @@ let test_escapes_fail =
       Alcotest.(check bool)
         "in the trace" true
         (List.mem "sandbox_violation" (trace_types r))
-  | Collected { items = vs; coverage = Relay_failures_only; gaps = _ } ->
-      (* Linux reports only relay failures, and these attempts make none. *)
+  | Collected
+      {
+        items = vs;
+        coverage = Relay_failures_only | Relay_failures_and_dns;
+        gaps = _;
+      } ->
+      (* Linux reports only relay failures and DNS lookups, and these attempts
+         make neither. *)
       Alcotest.(check int) "no relay failures" 0 (List.length vs)
 
 (* ~/.aws and the project's .env as symbolic links (a dotfile manager, a .env
@@ -607,6 +709,76 @@ let test_off_probes_nothing =
         "label" {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
         (Yojson.Safe.to_string (Sandbox.label_json (Sandbox.label t)))
 
+(* A host that refuses the DNS path, here a bubblewrap that fails whenever it
+   is asked for a capability, runs the plain sandbox after a warning. Root and a
+   set-user-ID bubblewrap never take the DNS path. *)
+let test_dns_path_falls_back =
+  sandboxed "sandbox-dns-fallback" @@ fun ctx ->
+  let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  let real =
+    List.find_opt
+      (fun d -> Sys.file_exists (Filename.concat d "bwrap"))
+      (String.split_on_char ':' path)
+  in
+  match real with
+  | None ->
+      print_endline "not Linux: skipped";
+      Alcotest.skip ()
+  | Some _ when Unix.geteuid () = 0 ->
+      print_endline "root has no DNS path: skipped";
+      Alcotest.skip ()
+  | Some dir
+    when (Unix.stat (Filename.concat dir "bwrap")).st_perm land 0o4000 <> 0 ->
+      print_endline "a set-user-ID bubblewrap has no DNS path: skipped";
+      Alcotest.skip ()
+  | Some dir ->
+      let fake = Filename.concat (Eio.Path.native_exn ctx.dir) "fake-bin" in
+      Unix.mkdir fake 0o700;
+      Out_channel.with_open_bin (Filename.concat fake "bwrap") (fun oc ->
+          Printf.fprintf oc
+            "#!/bin/sh\n\
+             for a in \"$@\"; do\n\
+            \  if [ \"$a\" = --cap-add ]; then echo 'no capability here' >&2; \
+             exit 1; fi\n\
+             done\n\
+             exec %s \"$@\"\n"
+            (Filename.quote (Filename.concat dir "bwrap")));
+      Unix.chmod (Filename.concat fake "bwrap") 0o755;
+      Unix.putenv "PATH" (fake ^ ":" ^ path);
+      Fun.protect ~finally:(fun () -> Unix.putenv "PATH" path) @@ fun () ->
+      let warnings = ref [] in
+      let t =
+        match
+          Sandbox.preflight ~env:ctx.env
+            ~warn:(fun w -> warnings := w :: !warnings)
+            {
+              mode = `Strict;
+              backend = `Bubblewrap;
+              image = None;
+              runtime = None;
+              allow_write = [];
+              deny_read = [];
+              bactrian_exe = bactrian_bin;
+              bactrian_dir = root ctx;
+            }
+        with
+        | Ok t -> t
+        | Error m -> Alcotest.failf "preflight: %s" m
+      in
+      Alcotest.(check bool) "applied" true (Sandbox.label t).applied;
+      Alcotest.(check (list bool))
+        "one warning, about DNS" [ true ]
+        (List.map
+           (fun w -> contains w "DNS lookups are not recorded")
+           !warnings);
+      let r = ok (execute ctx { (config ()) with sandbox = t }) in
+      Alcotest.(check string) "the run passes" "passed" (outcome_name r);
+      Alcotest.(check (option string))
+        "coverage" (Some "relay-failures-only")
+        (match r.violations with
+        | Collected { coverage; _ } -> Some (Sandbox.coverage_name coverage)
+        | Not_collected _ -> None)
+
 (* The probe run outside any sandbox must be judged a failure: the preflight
    cannot report a sandbox that does not enforce. *)
 let test_unsandboxed_probe_is_rejected () =
@@ -652,7 +824,8 @@ let test_unsandboxed_probe_is_rejected () =
             "the read is named" true
             (List.mem "a read of a denied file succeeded" wrong))
 
-let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
+let report ?(public = Error "EPERM") ?netns ?(capabilities = Some "") () :
+    Sandbox_probe.report =
   {
     public;
     listener = Ok ();
@@ -660,6 +833,7 @@ let report ?(public = Error "EPERM") ?netns () : Sandbox_probe.report =
     inside_write = Ok ();
     denied_read = Error "EPERM";
     netns;
+    capabilities;
   }
 
 let test_judge () =
@@ -684,6 +858,16 @@ let test_judge () =
   Alcotest.(check bool)
     "Linux without a namespace reading" false
     (judged Linux (report ~public:(Error "ENETUNREACH") ()));
+  Alcotest.(check bool)
+    "Linux with a capability held" false
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]"
+          ~capabilities:(Some "CapEff=0000000000000400") ()));
+  Alcotest.(check bool)
+    "Linux with no capability reading" false
+    (judged Linux ~host:"net:[1]"
+       (report ~public:(Error "ENETUNREACH") ~netns:"net:[2]" ~capabilities:None
+          ()));
   Alcotest.(check bool)
     "a listener that cannot be reached" false
     (judged Macos { (report ()) with listener = Error "EPERM" });
@@ -711,6 +895,8 @@ let () =
           Alcotest.test_case "auto falls back, labelled" `Slow
             test_auto_falls_back;
           Alcotest.test_case "off probes nothing" `Quick test_off_probes_nothing;
+          Alcotest.test_case "the DNS path falls back" `Slow
+            test_dns_path_falls_back;
           Alcotest.test_case "the seatbelt hint" `Quick test_seatbelt_hint;
           Alcotest.test_case "an unsandboxed probe is rejected" `Quick
             test_unsandboxed_probe_is_rejected;
@@ -722,6 +908,12 @@ let () =
             test_record_and_replay;
           Alcotest.test_case "escapes fail and are reported" `Slow
             test_escapes_fail;
+          Alcotest.test_case "a stopped agent gets SIGTERM" `Slow
+            test_sigterm_reaches_agent;
+          Alcotest.test_case "a DNS lookup is recorded" `Slow
+            test_dns_is_recorded;
+          Alcotest.test_case "the DNS path hides descriptors" `Slow
+            test_dns_path_hides_descriptors;
           Alcotest.test_case "linked credential paths are denied" `Slow
             test_linked_credentials;
           Alcotest.test_case "MCP servers readable by the agent" `Slow

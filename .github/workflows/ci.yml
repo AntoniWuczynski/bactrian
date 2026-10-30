@@ -51,6 +51,16 @@ jobs:
       - run: opam exec -- dune build @acceptance
         env:
           BACTRIAN_REQUIRE_VM: ${{ runner.os == 'Linux' && '1' || '0' }}
+      # bactrian run as root has bubblewrap drop every capability and skips the
+      # DNS path, so the sandbox tests run once more as root. Without
+      # capabilities root crosses the runner's home directory only through its
+      # permissions.
+      - if: runner.os == 'Linux'
+        name: Sandbox tests as root
+        working-directory: _build/default/test/run
+        run: |
+          sudo chmod o+x "$HOME"
+          sudo env PATH="$PATH" BACTRIAN_BIN=../../../install/default/bin/bactrian ./test_run_sandbox.exe
   lint-fmt:
     runs-on: ubuntu-latest
     steps:

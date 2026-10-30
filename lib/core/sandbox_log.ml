@@ -157,8 +157,18 @@ let of_seatbelt_ndjson ~tag line =
 type relay = { kind : string; port : int; socket : string; reason : string }
 [@@deriving of_yojson]
 
+type dns = {
+  kind : string;
+  transport : string;
+  name : string option; [@default None]
+  type_ : string option; [@key "type"] [@default None]
+  error : string option; [@default None]
+}
+[@@deriving of_yojson]
+
 let poll_interval = 0.5
 let settle_interval = 1.
+let mark_interval = 5.
 
 let equal_violation (a : violation) (b : violation) =
   String.equal a.kind b.kind && String.equal a.detail b.detail
@@ -168,19 +178,25 @@ type settled =
   | Unsettled of violation list
   | No_marker
 
-let settle ~tag ~read ~wait ~now ~deadline =
+let settle ~tag ~read ~wait ~now ~mark ~deadline =
   let marked =
     List.exists (fun l ->
         Option.is_some (of_seatbelt_ndjson ~tag:(end_tag tag) l))
   in
   let parse = List.filter_map (of_seatbelt_ndjson ~tag) in
-  let rec until_marker () =
+  (* The log can drop the marker as it drops any denial, so it is logged
+     again while it is missing. *)
+  let rec until_marker ~marked_at =
     let lines = read () in
     if marked lines then until_stable (parse lines)
     else if now () >= deadline then No_marker
     else begin
       wait poll_interval;
-      until_marker ()
+      if now () -. marked_at >= mark_interval then begin
+        mark ();
+        until_marker ~marked_at:(now ())
+      end
+      else until_marker ~marked_at
     end
   and until_stable previous =
     if now () +. settle_interval > deadline then Unsettled previous
@@ -191,29 +207,62 @@ let settle ~tag ~read ~wait ~now ~deadline =
       else until_stable next
     end
   in
-  until_marker ()
+  until_marker ~marked_at:(now ())
+
+let relay_violation json =
+  Result.map
+    (fun ({ kind; port; socket; reason } : relay) ->
+      {
+        kind;
+        detail = Printf.sprintf "127.0.0.1:%d to %s: %s" port socket reason;
+      })
+    (relay_of_yojson json)
+
+let dns_violation json =
+  match dns_of_yojson json with
+  | Error m -> Error m
+  | Ok { kind; transport; name = Some name; type_ = Some t; error = None } ->
+      Ok { kind; detail = Printf.sprintf "%s %s over %s" name t transport }
+  | Ok { kind; transport; name = None; type_ = None; error = Some e } ->
+      Ok
+        {
+          kind;
+          detail = Printf.sprintf "an unreadable query over %s: %s" transport e;
+        }
+  | Ok { name = Some _ | None; type_ = Some _ | None; error = Some _ | None; _ }
+    ->
+      Error "a dns line has a name and a type, or an error"
 
 let of_relay_line line =
   match Yojson.Safe.from_string line with
   | exception Yojson.Json_error m -> Error m
-  | json -> (
-      match relay_of_yojson json with
-      | Error m -> Error m
-      | Ok { kind; port; socket; reason } ->
-          Ok
-            {
-              kind;
-              detail =
-                Printf.sprintf "127.0.0.1:%d to %s: %s" port socket reason;
-            })
+  | `Assoc fields as json -> (
+      match List.assoc_opt "kind" fields with
+      | Some (`String "relay_failed") -> relay_violation json
+      | Some (`String "dns") -> dns_violation json
+      | Some
+          ( `String _ | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _
+          | `List _ | `Assoc _ )
+      | None ->
+          Error "not a relay failure or a dns lookup")
+  | `Null | `Bool _ | `Int _ | `Intlit _ | `Float _ | `String _ | `List _ ->
+      Error "not an object"
 
-let of_relay_log text =
-  let lines =
-    List.filter
-      (fun l -> not (String.equal l ""))
-      (String.split_on_char '\n' text)
+type relay_log = { items : violation list; unreadable : int; not_kept : int }
+
+let max_items = 1000
+
+let of_relay_log ?(max_items = max_items) text =
+  let rec read kept n ~unreadable ~not_kept = function
+    | [] -> { items = List.rev kept; unreadable; not_kept }
+    | "" :: rest -> read kept n ~unreadable ~not_kept rest
+    | line :: rest -> (
+        match of_relay_line line with
+        | Error (_ : string) ->
+            read kept n ~unreadable:(unreadable + 1) ~not_kept rest
+        | Ok v when n < max_items ->
+            read (v :: kept) (n + 1) ~unreadable ~not_kept rest
+        | Ok (_ : violation) ->
+            read kept n ~unreadable ~not_kept:(not_kept + 1) rest)
   in
-  let items =
-    List.filter_map (fun l -> Result.to_option (of_relay_line l)) lines
-  in
-  (items, List.length lines - List.length items)
+  read [] 0 ~unreadable:0 ~not_kept:0 (String.split_on_char '\n' text)

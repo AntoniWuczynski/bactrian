@@ -14,6 +14,8 @@ type input = {
   agent : string list;
   bactrian_exe : string;
   preload : string option;
+  dns_as : (int * int) option;
+  drop_capabilities : bool;
   tag : string;
 }
 
@@ -351,8 +353,21 @@ let bwrap_of ~exists ~resolve i =
       (fun l -> Option.map (fun s -> Printf.sprintf "%d=%s" l.port s) l.socket)
       i.listeners
   in
+  (* Port 53 needs root of the user namespace, which then makes the agent's
+     own: mapping that root into it needs CAP_SETFCAP. *)
+  let dns_caps, dns_arg =
+    match i.dns_as with
+    | None -> ([], [])
+    | Some (uid, gid) ->
+        ( [ "--uid"; "0"; "--gid"; "0"; "--cap-add"; "CAP_NET_BIND_SERVICE" ]
+          @ [ "--cap-add"; "CAP_SETFCAP" ],
+          [ Printf.sprintf "--dns=%d:%d" uid gid ] )
+  in
+  (* Before the two above, which bubblewrap applies in order. *)
+  let drop = if i.drop_capabilities then [ "--cap-drop"; "ALL" ] else [] in
   [ "bwrap"; "--die-with-parent"; "--new-session"; "--unshare-net" ]
-  @ [ "--unshare-pid"; "--unshare-ipc"; "--ro-bind"; "/"; "/" ]
+  @ [ "--unshare-pid"; "--unshare-ipc" ]
+  @ drop @ dns_caps @ [ "--ro-bind"; "/"; "/" ]
   @ [ "--dev"; "/dev"; "--proc"; "/proc"; "--tmpfs"; "/tmp" ]
   @ [ "--tmpfs"; "/dev/shm"; "--tmpfs"; "/run" ]
   (* The executable and the preloaded library may live under one of the fresh
@@ -363,7 +378,7 @@ let bwrap_of ~exists ~resolve i =
   @ List.concat_map mask (denies ~resolve i)
   @ List.concat_map read_only (denies ~resolve i)
   @ [ "--"; i.bactrian_exe; "__sandbox-init" ]
-  @ pairs @ ("--" :: i.agent)
+  @ dns_arg @ pairs @ ("--" :: i.agent)
 
 let generate ?(resolve = Fun.id) ~exists i =
   let* () = validate i in

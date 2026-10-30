@@ -25,16 +25,40 @@ let parses () =
            [
              { port = 8080; socket = "/a/b.sock" }; { port = 1; socket = "/c" };
            ];
+         dns = None;
          agent = [ "node"; "agent.js" ];
        })
     [ "8080=/a/b.sock"; "1=/c"; "--"; "node"; "agent.js" ];
-  check "no pairs" (Ok { forwards = []; agent = [ "x" ] }) [ "--"; "x" ];
+  check "no pairs"
+    (Ok { forwards = []; dns = None; agent = [ "x" ] })
+    [ "--"; "x" ];
   check "socket keeps later equals signs"
-    (Ok { forwards = [ { port = 9; socket = "/a=b" } ]; agent = [ "x" ] })
+    (Ok
+       {
+         forwards = [ { port = 9; socket = "/a=b" } ];
+         dns = None;
+         agent = [ "x" ];
+       })
     [ "9=/a=b"; "--"; "x" ];
   check "later separators belong to the agent"
-    (Ok { forwards = []; agent = [ "x"; "--"; "9=/y" ] })
-    [ "--"; "x"; "--"; "9=/y" ]
+    (Ok { forwards = []; dns = None; agent = [ "x"; "--"; "9=/y" ] })
+    [ "--"; "x"; "--"; "9=/y" ];
+  check "dns as a user"
+    (Ok
+       {
+         forwards = [ { port = 9; socket = "/s" } ];
+         dns = Some { uid = 1001; gid = 118 };
+         agent = [ "x" ];
+       })
+    [ "--dns=1001:118"; "9=/s"; "--"; "x" ];
+  check "dns as a directory user's ten-digit IDs"
+    (Ok
+       {
+         forwards = [];
+         dns = Some { uid = 1876400001; gid = 4294967294 };
+         agent = [ "x" ];
+       })
+    [ "--dns=1876400001:4294967294"; "--"; "x" ]
 
 let rejects () =
   let check name expected args =
@@ -52,7 +76,46 @@ let rejects () =
     [ "80=/a"; "81=/b"; "80=/c"; "--"; "x" ];
   check "missing separator" S.Missing_separator [ "80=/a"; "x" ];
   check "nothing at all" S.Missing_separator [];
-  check "empty agent" S.Empty_agent [ "80=/a"; "--" ]
+  check "empty agent" S.Empty_agent [ "80=/a"; "--" ];
+  List.iter
+    (fun id ->
+      check ("identity " ^ id) (S.Bad_identity id) [ "--dns=" ^ id; "--"; "x" ])
+    [
+      "";
+      "1";
+      "1:";
+      ":1";
+      "a:b";
+      "1:2:3";
+      "-1:2";
+      "1:+2";
+      "4294967295:1";
+      "1:12345678901";
+      "99999999999:1";
+    ];
+  check "dns only first" (S.Bad_port "--dns")
+    [ "80=/a"; "--dns=1:1"; "--"; "x" ]
+
+let parses_user () =
+  let t =
+    Alcotest.(
+      result
+        (triple
+           (of_pp (fun ppf (id : S.identity) ->
+                Format.fprintf ppf "%d:%d" id.uid id.gid))
+           string (list string))
+        string)
+  in
+  let ok = Alcotest.check t in
+  ok "the IDs and the agent"
+    (Ok ({ uid = 1001; gid = 118 }, "x", [ "--"; "y" ]))
+    (S.parse_user [ "1001:118"; "--"; "x"; "--"; "y" ]);
+  List.iter
+    (fun args ->
+      match S.parse_user args with
+      | Ok _ -> Alcotest.failf "accepted %s" (String.concat " " args)
+      | Error (_ : string) -> ())
+    [ []; [ "1:1" ]; [ "1:1"; "--" ]; [ "1:1"; "x" ]; [ "a:b"; "--"; "x" ] ]
 
 (* Harness *)
 
@@ -104,7 +167,7 @@ let describe = function
 
 (* Runs the forwarder in a daemon fibre of [ctx.sw], so ending the switch ends
    the run, and returns once every listener is bound. *)
-let start ctx ?log ~forwards agent =
+let start ctx ?log ?signals ~forwards agent =
   let n = List.length forwards in
   let bound = ref [] in
   let all_bound, set_bound = Eio.Promise.create () in
@@ -131,12 +194,13 @@ let start ctx ?log ~forwards agent =
   if n = 0 then Eio.Promise.resolve set_bound [];
   Eio.Fiber.fork_daemon ~sw:ctx.sw (fun () ->
       Eio.Promise.resolve set_result
-        (S.run ~on_listening ?log
+        (S.run ~on_listening ?log ?signals
            ~stdout:(Eio_unix.Resource.fd out_w)
            ~net:(Eio.Stdenv.net ctx.env)
            ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
            {
              forwards = List.map (fun socket -> { S.port = 0; socket }) forwards;
+             dns = None;
              agent;
            });
       `Stop_daemon);
@@ -389,6 +453,65 @@ let signal_reaches_agent signal name expected_code () =
 let sigterm_reaches_agent = signal_reaches_agent Sys.sigterm "TERM" 9
 let sigint_reaches_agent = signal_reaches_agent Sys.sigint "INT" 8
 
+(* bactrian's way to send SIGTERM through bubblewrap: a byte on the pipe. Its
+   end asks for nothing. *)
+let signal_pipe_terminates_agent () =
+  with_ctx @@ fun ctx ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let signals = Eio_unix.Fd.of_unix ~sw:ctx.sw ~close_unix:true r in
+  let f =
+    start ctx ~signals ~forwards:[]
+      (waiting ~traps:"trap 'echo got-TERM; exit 9' TERM; " ())
+  in
+  let pid = pid_line f in
+  ignore (Unix.write_substring w "t" 0 1 : int);
+  Alcotest.(check string) "agent saw SIGTERM" "got-TERM" (Buf_read.line f.out);
+  Alcotest.(check string)
+    "exit code" "exit 9"
+    (describe (Eio.Promise.await f.result));
+  Unix.close w;
+  Alcotest.(check bool)
+    "group gone" true
+    (Pg.wait_gone ~clock:(Eio.Stdenv.clock ctx.env) ~timeout:5. pid)
+
+let closed_signal_pipe_asks_nothing () =
+  with_ctx @@ fun ctx ->
+  let r, w = Unix.pipe ~cloexec:true () in
+  let signals = Eio_unix.Fd.of_unix ~sw:ctx.sw ~close_unix:true r in
+  let f = start ctx ~signals ~forwards:[] (waiting ()) in
+  let pid = pid_line f in
+  Unix.close w;
+  Eio.Time.sleep (Eio.Stdenv.clock ctx.env) 0.3;
+  Alcotest.(check bool) "agent still runs" true (Pg.signal pid 0);
+  Unix.kill (Unix.getpid ()) Sys.sigterm;
+  Alcotest.(check string)
+    "ended by the real signal" "exit 143"
+    (describe (Eio.Promise.await f.result))
+
+(* DNS *)
+
+(* Port 53 needs root on Linux, and macOS has no 127.0.0.53, so the forwarder
+   stops before the agent starts. *)
+let dns_needs_port_53 () =
+  if Unix.geteuid () = 0 then Alcotest.skip ();
+  with_ctx @@ fun ctx ->
+  match
+    S.run ~net:(Eio.Stdenv.net ctx.env)
+      ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
+      {
+        forwards = [];
+        dns = Some { uid = 1; gid = 1 };
+        agent = sh ("touch " ^ path ctx "ran");
+      }
+  with
+  | Error (S.Dns_failed _) ->
+      Alcotest.(check bool)
+        "the agent did not start" false
+        (Sys.file_exists (path ctx "ran"))
+  | Error ((S.Listen_failed _ | S.Spawn_failed _) as e) ->
+      Alcotest.failf "failed: %s" (S.describe_error e)
+  | Ok code -> Alcotest.failf "ran and exited %d" code
+
 let signal_reaches_whole_group () =
   with_ctx @@ fun ctx ->
   (* The helper dies from the forwarded SIGTERM, not from the cleanup. *)
@@ -409,13 +532,16 @@ let signal_reaches_whole_group () =
 let environment_loses_log_variable () =
   with_ctx @@ fun ctx ->
   Unix.putenv S.log_variable "3";
+  Unix.putenv S.signal_variable "4";
   Unix.putenv "BACTRIAN_SANDBOX_KEPT" "yes";
   let f, result =
     run_to_end ctx
-      (sh "echo ${BACTRIAN_SANDBOX_LOG_FD-unset} $BACTRIAN_SANDBOX_KEPT")
+      (sh
+         "echo ${BACTRIAN_SANDBOX_LOG_FD-unset} \
+          ${BACTRIAN_SANDBOX_SIGNAL_FD-unset} $BACTRIAN_SANDBOX_KEPT")
   in
   Alcotest.(check string) "status" "exit 0" (describe result);
-  Alcotest.(check string) "variables" "unset yes" (Buf_read.line f.out)
+  Alcotest.(check string) "variables" "unset unset yes" (Buf_read.line f.out)
 
 let own_process_group () =
   with_ctx @@ fun ctx ->
@@ -470,13 +596,15 @@ let port_in_use () =
       ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
       {
         forwards = [ { port; socket = path ctx "x.sock" } ];
+        dns = None;
         agent = sh "exit 0";
       }
   in
   match result with
   | Error (S.Listen_failed { port = p; _ }) ->
       Alcotest.(check int) "port" port p
-  | Error (S.Spawn_failed m) -> Alcotest.failf "spawn failed: %s" m
+  | Error ((S.Spawn_failed _ | S.Dns_failed _) as e) ->
+      Alcotest.failf "failed: %s" (S.describe_error e)
   | Ok code -> Alcotest.failf "ran and exited %d" code
 
 let missing_agent () =
@@ -484,16 +612,18 @@ let missing_agent () =
   let result =
     S.run ~net:(Eio.Stdenv.net ctx.env)
       ~process_mgr:(Eio.Stdenv.process_mgr ctx.env)
-      { forwards = []; agent = [ "/nonexistent/bactrian-agent" ] }
+      { forwards = []; dns = None; agent = [ "/nonexistent/bactrian-agent" ] }
   in
   match result with
   | Error (S.Spawn_failed _) -> ()
-  | Error (S.Listen_failed _) | Ok _ -> Alcotest.fail "expected Spawn_failed"
+  | Error (S.Listen_failed _ | S.Dns_failed _) | Ok _ ->
+      Alcotest.fail "expected Spawn_failed"
 
 (* The subcommand *)
 
-(* [log] becomes the subcommand's descriptor 3, named by the variable. *)
-let subcommand ?log args =
+(* [log] becomes the subcommand's descriptor 3 and [signals] its descriptor 4,
+   each named by its variable. *)
+let run_bactrian ?log ?signals ~name args =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let out_r, out_w = Eio_unix.pipe sw in
@@ -508,11 +638,20 @@ let subcommand ?log args =
                   0o600),
              `Blocking ))
          log)
+    @ Option.to_list
+        (Option.map
+           (fun fd ->
+             (4, Eio_unix.Fd.of_unix ~sw ~close_unix:false fd, `Blocking))
+           signals)
   in
   let out = Eio_unix.Resource.fd out_w in
   let env_vars =
     Eio.Process.Env.override
-      [ (S.log_variable, Option.map (fun (_ : string) -> "3") log) ]
+      [
+        (S.log_variable, Option.map (fun (_ : string) -> "3") log);
+        ( S.signal_variable,
+          Option.map (fun (_ : Unix.file_descr) -> "4") signals );
+      ]
       (Eio.Process.environment (Eio.Stdenv.process_mgr env))
   in
   let proc =
@@ -526,11 +665,14 @@ let subcommand ?log args =
            (2, out, `Blocking);
          ]
         @ inherited)
-      (bactrian :: "__sandbox-init" :: args)
+      (bactrian :: name :: args)
   in
   Eio.Resource.close out_w;
   let output = Buf_read.parse_exn Buf_read.take_all ~max_size:max_int out_r in
   (Eio.Process.await proc, output)
+
+let subcommand ?log ?signals args =
+  run_bactrian ?log ?signals ~name:"__sandbox-init" args
 
 let status_t =
   Alcotest.of_pp (fun ppf -> function
@@ -544,18 +686,64 @@ let subcommand_runs_the_agent () =
   Alcotest.check status_t "status" (`Exited 7) status;
   Alcotest.(check string) "argv after the first separator" "a b --\n" output
 
+let contains ~needle text =
+  let n = String.length needle in
+  let rec find i =
+    i + n <= String.length text
+    && (String.equal (String.sub text i n) needle || find (i + 1))
+  in
+  find 0
+
 let subcommand_rejects_bad_arguments () =
   let status, output = subcommand [ "8080=/s"; "/bin/true" ] in
   Alcotest.check status_t "status" (`Exited 64) status;
+  Alcotest.(check bool) "says why" true (contains ~needle:"missing --" output)
+
+(* The agent gets /dev/null, open for writing, in place of the signal pipe's
+   read end, and no variable naming it. *)
+let subcommand_hides_the_signal_pipe () =
+  let r, w = Unix.pipe ~cloexec:true () in
+  Fun.protect ~finally:(fun () ->
+      Unix.close r;
+      Unix.close w)
+  @@ fun () ->
+  let status, output =
+    subcommand ~signals:r
+      [
+        "--";
+        "/bin/sh";
+        "-c";
+        "echo x >&4 && echo writable; echo ${BACTRIAN_SANDBOX_SIGNAL_FD-unset}";
+      ]
+  in
+  Alcotest.check status_t "status" (`Exited 0) status;
+  Alcotest.(check string) "descriptor 4" "writable\nunset\n" output
+
+let sandbox_user args = run_bactrian ~name:"__sandbox-user" args
+
+let sandbox_user_rejects_bad_arguments () =
+  List.iter
+    (fun args ->
+      let status, output = sandbox_user args in
+      Alcotest.check status_t (String.concat " " args) (`Exited 64) status;
+      Alcotest.(check bool)
+        "says why" true
+        (contains ~needle:"bactrian __sandbox-user: " output))
+    [ [ "1:1"; "/bin/true" ]; [ "x:1"; "--"; "/bin/true" ] ]
+
+(* Outside a sandbox's user namespace no user may map root of the one it
+   leaves, and macOS has no user namespaces, so the agent never starts. *)
+let sandbox_user_needs_a_namespace () =
+  if Unix.geteuid () = 0 then Alcotest.skip ();
+  let dir = Filename.temp_dir "bactrian-sbx" "" in
+  Fun.protect ~finally:(fun () -> remove_tree dir) @@ fun () ->
+  let ran = Filename.concat dir "ran" in
+  let status, output = sandbox_user [ "1:1"; "--"; "/usr/bin/touch"; ran ] in
+  Alcotest.check status_t "status" (`Exited 69) status;
   Alcotest.(check bool)
     "says why" true
-    (let needle = "missing --" in
-     let rec find i =
-       i + String.length needle <= String.length output
-       && (String.equal (String.sub output i (String.length needle)) needle
-          || find (i + 1))
-     in
-     find 0)
+    (contains ~needle:"bactrian __sandbox-user: " output);
+  Alcotest.(check bool) "the agent did not start" false (Sys.file_exists ran)
 
 (* The agent cannot add lines to the violation log: its descriptor 3 is
    /dev/null, while a relay failure still reaches the log. *)
@@ -594,6 +782,7 @@ let () =
         [
           Alcotest.test_case "accepts" `Quick parses;
           Alcotest.test_case "rejects" `Quick rejects;
+          Alcotest.test_case "__sandbox-user" `Quick parses_user;
         ] );
       ( "relay",
         [
@@ -622,6 +811,10 @@ let () =
           Alcotest.test_case "signal death" `Quick signal_death_is_128_plus;
           Alcotest.test_case "SIGTERM is forwarded" `Quick sigterm_reaches_agent;
           Alcotest.test_case "SIGINT is forwarded" `Quick sigint_reaches_agent;
+          Alcotest.test_case "SIGTERM through the signal pipe" `Quick
+            signal_pipe_terminates_agent;
+          Alcotest.test_case "the signal pipe's end asks nothing" `Quick
+            closed_signal_pipe_asks_nothing;
           Alcotest.test_case "signal reaches the group" `Quick
             signal_reaches_whole_group;
           Alcotest.test_case "environment" `Quick environment_loses_log_variable;
@@ -632,10 +825,17 @@ let () =
           Alcotest.test_case "ending the run kills the group" `Quick
             ending_the_run_kills_the_group;
         ] );
+      ("dns", [ Alcotest.test_case "port 53 refused" `Quick dns_needs_port_53 ]);
       ( "subcommand",
         [
           Alcotest.test_case "runs the agent" `Quick subcommand_runs_the_agent;
           Alcotest.test_case "rejects bad arguments" `Quick
             subcommand_rejects_bad_arguments;
+          Alcotest.test_case "the agent cannot read the signal pipe" `Quick
+            subcommand_hides_the_signal_pipe;
+          Alcotest.test_case "__sandbox-user rejects bad arguments" `Quick
+            sandbox_user_rejects_bad_arguments;
+          Alcotest.test_case "__sandbox-user needs a user namespace" `Quick
+            sandbox_user_needs_a_namespace;
         ] );
     ]

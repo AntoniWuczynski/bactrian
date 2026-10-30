@@ -495,13 +495,13 @@ let raw_arguments name =
   | _ :: args -> args
   | [] -> []
 
-(* The violation log's descriptor, inherited from bactrian: its number, and the
-   descriptor reopened through /dev/fd with close-on-exec, because OCaml cannot
-   name an inherited descriptor by its number. The inherited one was marked
-   close-on-exec at start. *)
-let inherited_log ~sw ~who =
+(* A descriptor inherited from bactrian and named by [variable]: its number,
+   and the descriptor reopened through /dev/fd with close-on-exec, because
+   OCaml cannot name an inherited descriptor by its number. The inherited one
+   was marked close-on-exec at start. *)
+let inherited ~sw ~who ~variable ~what flags =
   let number =
-    Option.bind (Sys.getenv_opt Sandbox_init.log_variable) (fun v ->
+    Option.bind (Sys.getenv_opt variable) (fun v ->
         match int_of_string_opt v with
         | Some n when n > 2 -> Some n
         | Some _ | None -> None)
@@ -509,25 +509,30 @@ let inherited_log ~sw ~who =
   let fd =
     Option.bind number (fun n ->
         match
-          Unix.openfile
-            (Printf.sprintf "/dev/fd/%d" n)
-            [ O_WRONLY; O_APPEND; O_CLOEXEC ]
-            0
+          Unix.openfile (Printf.sprintf "/dev/fd/%d" n) (O_CLOEXEC :: flags) 0
         with
         | fd -> Some (Eio_unix.Fd.of_unix ~sw ~close_unix:true fd)
         | exception Unix.Unix_error (e, _, _) ->
             prerr_endline
-              (Printf.sprintf "bactrian %s: no violation log: %s" who
+              (Printf.sprintf "bactrian %s: no %s: %s" who what
                  (Unix.error_message e));
             None)
   in
   (number, fd)
 
+let inherited_log ~sw ~who =
+  inherited ~sw ~who ~variable:Sandbox_init.log_variable ~what:"violation log"
+    [ O_WRONLY; O_APPEND ]
+
 let sandbox_init_cmd =
   let args =
     Arg.(value & pos_all string [] & info [] ~docv:"PORT=SOCKET... -- AGENT...")
   in
-  let run (_ : string list) =
+  (* Declared so that cmdliner lets it through: the raw arguments are read. *)
+  let dns =
+    Arg.(value & opt (some string) None & info [ "dns" ] ~docv:"UID:GID")
+  in
+  let run (_ : string option) (_ : string list) =
     match Sandbox_init.parse (raw_arguments "__sandbox-init") with
     | Error e ->
         prerr_endline
@@ -542,9 +547,16 @@ let sandbox_init_cmd =
         Eio.Switch.run @@ fun sw ->
         (* Standard input, output and error are the agent's own, and the
            agent gets /dev/null in place of the log's descriptor. *)
-        let fd_number, log = inherited_log ~sw ~who:"__sandbox-init" in
+        let log_fd, log = inherited_log ~sw ~who:"__sandbox-init" in
+        let signal_fd, signals =
+          inherited ~sw ~who:"__sandbox-init"
+            ~variable:Sandbox_init.signal_variable ~what:"signal pipe"
+            [ O_RDONLY ]
+        in
         match
-          Sandbox_init.run ?log ?hidden_fd:fd_number ~net:(Eio.Stdenv.net env)
+          Sandbox_init.run ?log ?signals
+            ~hidden_fds:(Option.to_list log_fd @ Option.to_list signal_fd)
+            ~net:(Eio.Stdenv.net env)
             ~process_mgr:(Eio.Stdenv.process_mgr env)
             config
         with
@@ -557,6 +569,37 @@ let sandbox_init_cmd =
   let info =
     Cmd.info "__sandbox-init" ~docs:Manpage.s_none ~exits:Cli.exits
       ~doc:"Internal: the forwarder bactrian runs inside the Linux sandbox"
+  in
+  Cmd.v info Term.(const run $ dns $ args)
+
+(* Single-threaded: it runs before any Eio loop, as unshare requires. *)
+let sandbox_user_cmd =
+  let args =
+    Arg.(value & pos_all string [] & info [] ~docv:"UID:GID -- AGENT...")
+  in
+  let run (_ : string list) =
+    let fail code m =
+      prerr_endline ("bactrian __sandbox-user: " ^ m);
+      code
+    in
+    match Sandbox_init.parse_user (raw_arguments "__sandbox-user") with
+    | Error m -> fail Exit_code.usage m
+    | Ok (id, exe, args) -> (
+        match Sandbox_init.enter_user_namespace id with
+        | Error m -> fail Exit_code.environment m
+        | Ok () -> (
+            let failed code e = fail code (exe ^ ": " ^ Unix.error_message e) in
+            Launch_env.keep_dev_null_on_exec ();
+            (* A shell's codes for a missing and an unusable command. *)
+            try Unix.execvp exe (Array.of_list (exe :: args)) with
+            | Unix.Unix_error ((ENOENT as e), _, _) -> failed 127 e
+            | Unix.Unix_error (e, _, _) -> failed 126 e))
+  in
+  let info =
+    Cmd.info "__sandbox-user" ~docs:Manpage.s_none ~exits:Cli.exits
+      ~doc:
+        "Internal: starts the agent in a user namespace of its own inside the \
+         Linux sandbox"
   in
   Cmd.v info Term.(const run $ args)
 
@@ -629,6 +672,7 @@ let cmd =
       Serve_mcp_cmd.cmd ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;
+      sandbox_user_cmd;
       vm_bridge_cmd;
       sandbox_probe_cmd;
     ]

@@ -77,6 +77,6 @@ An agent in the virtual machine sees no host process at all, so the launch-envir
 
 Each run is a container. On OrbStack a whole `record` with a small Node agent took about 0.7 seconds in the virtual machine, against 2.7 under Seatbelt, which waits for the system log to settle. The first run builds the relay. The agent must run in an image that holds its runtime and its packages, and its command and files must be inside the project. A Python agent's virtual environment built on macOS cannot run in Linux, so it has to be built for the image (the acceptance test runs `uv sync --locked` in the uv image for that).
 
-What a denied write or read looks like is the agent's own error (`EROFS`, `ENOENT`, `ENETUNREACH`), as on Linux, and the violations are relay failures only.
+What a denied write or read looks like is the agent's own error (`EROFS`, `ENOENT`, `ENETUNREACH`), as on Linux, and the violations are relay failures only (Linux also records DNS lookups, decision record 0019).
 
 On macOS the checkers still run under Seatbelt, so a checker can read the launch environment of the user's other processes. A checker gets no network and no keys, so what it reads can only reach its own output, which goes into the run's results. A checker is a command the project names, so this is the trust the project already has.

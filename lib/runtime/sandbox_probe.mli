@@ -22,6 +22,10 @@ type report = {
           read something: a masked file can read as empty. *)
   netns : string option;
       (** The probe's network namespace ([/proc/self/ns/net]), on Linux. *)
+  capabilities : string option;
+      (** On Linux, the capability sets of [/proc/self/status] that are not
+          empty, such as ["CapEff=0000000000000400"], and [""] for none. [None]
+          where there is no [/proc]. *)
 }
 
 val greeting : string
@@ -45,4 +49,5 @@ val judge :
 (** Every check with the wrong result, described. The public connection must
     fail with Seatbelt's [EPERM] (or [EACCES]) on macOS, so a host that is
     merely offline is not taken for a sandbox, and on Linux the probe's network
-    namespace must differ from [host_netns], bactrian's own. *)
+    namespace must differ from [host_netns], bactrian's own, and the probe must
+    hold no capability, because the forwarder that starts it does. *)

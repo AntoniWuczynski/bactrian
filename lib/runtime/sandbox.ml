@@ -62,6 +62,13 @@ type engine = Seatbelt | Bubblewrap of string | Vm of Sandbox_vm.t
 
 type host = {
   engine : engine;
+  dns_as : (int * int) option;
+      (** Whom the forwarder starts the agent as when it answers DNS: bactrian's
+          own IDs, with a bubblewrap that is not set-user-ID, run by a user
+          other than root. *)
+  drop_capabilities : bool;
+      (** bactrian runs as root, whose capabilities bubblewrap would otherwise
+          leave to the command. *)
   bactrian_exe : string;
   home : string;
   project_root : string;
@@ -173,8 +180,8 @@ let platform = function
   | Seatbelt -> Policy.Macos
   | Bubblewrap _ | Vm _ -> Linux
 
-let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
-    Policy.input =
+let input_of ?(dns = false) (host : host) ~state_dir ~temp_dir ~listeners ~tag
+    ~preload agent : Policy.input =
   {
     platform = platform host.engine;
     home = host.home;
@@ -188,12 +195,14 @@ let input_of (host : host) ~state_dir ~temp_dir ~listeners ~tag ~preload agent :
     agent;
     bactrian_exe = host.bactrian_exe;
     preload;
+    dns_as = (if dns then host.dns_as else None);
+    drop_capabilities = host.drop_capabilities;
     tag;
   }
 
-let command host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
+let command ?dns host ~state_dir ~temp_dir ~listeners ~tag ~preload agent =
   let input =
-    input_of host ~state_dir ~temp_dir ~listeners ~tag ~preload agent
+    input_of ?dns host ~state_dir ~temp_dir ~listeners ~tag ~preload agent
   in
   match Policy.generate ~resolve:resolved ~exists:kind input with
   | Error e -> Error (Policy.describe_error e)
@@ -363,7 +372,7 @@ let probe ~env (host : host) =
         Ok (Some path)
   in
   let* argv =
-    command host ~state_dir:(Some state_dir) ~temp_dir
+    command ~dns:true host ~state_dir:(Some state_dir) ~temp_dir
       ~listeners:[ { port; socket } ]
       ~tag:(Sandbox_log.tag ("probe-" ^ id))
       ~preload:None
@@ -416,12 +425,28 @@ let host_engine ~env : [ `Seatbelt | `Bubblewrap ] -> (engine, string) result =
       if Sys.file_exists "/proc/self/ns/net" then bubblewrap ~env
       else Error "backend bubblewrap needs Linux"
 
+(* A set-user-ID bubblewrap makes no user namespace and grants no capability,
+   and the dynamic loader runs it in secure mode. *)
+let setuid path =
+  match Unix.stat path with
+  | st -> st.st_perm land 0o4000 <> 0
+  | exception Unix.Unix_error _ -> false
+
+(* Root's agent under [__sandbox-user] would be root of its own user namespace,
+   with every capability there, which the probe refuses. *)
 let make_host ~env settings engine =
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700
     Eio.Path.(Eio.Stdenv.fs env / Proc_util.absolute settings.bactrian_dir);
   let bactrian_dir = resolved settings.bactrian_dir in
+  let root = Unix.geteuid () = 0 in
   {
     engine;
+    dns_as =
+      (match engine with
+      | Bubblewrap path when not (root || setuid path) ->
+          Some (Unix.geteuid (), Unix.getegid ())
+      | Bubblewrap _ | Seatbelt | Vm _ -> None);
+    drop_capabilities = root;
     bactrian_exe = resolved settings.bactrian_exe;
     home = resolved (home ());
     project_root = Filename.dirname bactrian_dir;
@@ -430,16 +455,32 @@ let make_host ~env settings engine =
     deny_read = List.map resolved settings.deny_read;
   }
 
-let check_host ~env settings backend =
+let check_host ~env ~warn settings backend =
   let* engine = host_engine ~env backend in
   let host = make_host ~env settings engine in
+  let explain cause =
+    match engine with
+    | Bubblewrap path when apparmor_restricted () ->
+        Error (cause ^ ". " ^ apparmor_fix path)
+    | Bubblewrap _ | Seatbelt | Vm _ -> Error cause
+  in
   match probe ~env host with
   | Ok () -> Ok host
   | Error cause -> (
-      match engine with
-      | Bubblewrap path when apparmor_restricted () ->
-          Error (cause ^ ". " ^ apparmor_fix path)
-      | Bubblewrap _ | Seatbelt | Vm _ -> Error cause)
+      match host.dns_as with
+      | None -> explain cause
+      | Some _ -> (
+          (* A host that refuses the agent a user namespace of its own, or the
+             forwarder its capabilities, may still run the sandbox without
+             DNS. *)
+          let plain = { host with dns_as = None } in
+          match probe ~env plain with
+          | Ok () ->
+              warn
+                ("sandbox: DNS lookups are not recorded, because the sandbox \
+                  that answers them failed its check (" ^ cause ^ ")");
+              Ok plain
+          | Error plain_cause -> explain plain_cause))
 
 (* The deny-list with what is at each path, as the virtual machine masks it. *)
 let vm_layout ?(extra = []) ?(read_only = []) (host : host) : Sandbox_vm.layout
@@ -558,7 +599,7 @@ let preflight ?(seatbelt_hint = true) ~env ~warn settings =
                   ("sandbox: strict, but the sandbox is unavailable: " ^ cause))
       in
       let on_host backend =
-        sandboxed (guard (fun () -> check_host ~env settings backend))
+        sandboxed (guard (fun () -> check_host ~env ~warn settings backend))
       in
       (* Under auto a virtual machine that does not work gives way to the
          host's own sandbox. *)
@@ -647,11 +688,13 @@ type session = {
   env : (string * string) list;
   replaces_env : bool;
   fds : (int * Eio_unix.Fd.t) list;
+  terminate : (unit -> unit) option;
 }
 
 type coverage = Sandbox_violations.coverage =
   | Seatbelt_log
   | Relay_failures_only
+  | Relay_failures_and_dns
 
 let coverage_name = Sandbox_violations.coverage_name
 let coverage_of_name = Sandbox_violations.coverage_of_name
@@ -675,12 +718,14 @@ type started =
       path : string;
       writer : Eio_unix.sink_ty Eio.Resource.t;
       drained : bool Eio.Promise.or_exn;
+      coverage : coverage;
+      gaps : string list;
     }
 
 (* The forwarder's or the bridge's violation log: they get the write end of a
    pipe, not the file, so a process that reopens its descriptor through /proc
    can at most add lines, never truncate or rewrite them. *)
-let relay_log ~sw run ~argv ~env ~replaces_env =
+let relay_log ?signals ?(gaps = []) ~sw run ~argv ~env ~replaces_env ~coverage =
   let path = Filename.concat run.run_dir "sandbox.log" in
   let* fd =
     match
@@ -700,16 +745,63 @@ let relay_log ~sw run ~argv ~env ~replaces_env =
   Ok
     ( {
         argv;
-        env = env @ [ (Sandbox_init.log_variable, "3") ];
+        env =
+          env
+          @ [ (Sandbox_init.log_variable, "3") ]
+          @ Option.fold ~none:[]
+              ~some:(fun _ -> [ (Sandbox_init.signal_variable, "4") ])
+              signals;
         replaces_env;
-        fds = [ (3, Eio_unix.Resource.fd writer) ];
+        fds =
+          (3, Eio_unix.Resource.fd writer)
+          :: Option.fold ~none:[]
+               ~some:(fun (reader, _) -> [ (4, reader) ])
+               signals;
+        terminate = Option.map snd signals;
       },
-      Relay_log { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained } )
+      Relay_log
+        {
+          path;
+          writer :> Eio_unix.sink_ty Eio.Resource.t;
+          drained;
+          coverage;
+          gaps;
+        } )
+
+(* The forwarder's signal pipe: bubblewrap's new session keeps a signal to its
+   process group from the forwarder, so SIGTERM is asked for through the pipe
+   (see {!Sandbox_init.signal_variable}). A forwarder already gone has nothing
+   left to signal. *)
+let signal_pipe ~sw =
+  let reader, writer = Eio_unix.pipe sw in
+  let terminate () =
+    try Eio.Flow.copy_string "t" writer with Eio.Io _ -> ()
+  in
+  (Eio_unix.Resource.fd reader, terminate)
+
+(* What the forwarder's DNS coverage misses on this host. *)
+let dns_gaps () =
+  match Sandbox_dns.unrecorded_resolvers () with
+  | [] -> []
+  | resolvers ->
+      [
+        Printf.sprintf
+          "a DNS lookup sent to %s (from /etc/resolv.conf) is not recorded"
+          (String.concat " or " resolvers);
+      ]
 
 let start ~sw t run agent =
   match t with
   | Unsandboxed _ ->
-      Ok ({ argv = agent; env = []; replaces_env = false; fds = [] }, Nothing)
+      Ok
+        ( {
+            argv = agent;
+            env = [];
+            replaces_env = false;
+            fds = [];
+            terminate = None;
+          },
+          Nothing )
   | Sandboxed { host; mode = _ } -> (
       let tag = Sandbox_log.tag run.run_id in
       match host.engine with
@@ -722,18 +814,31 @@ let start ~sw t run agent =
           in
           let marker = Filename.concat run.temp_dir "sandbox-end-marker" in
           Ok
-            ( { argv; env = []; replaces_env = false; fds = [] },
+            ( {
+                argv;
+                env = [];
+                replaces_env = false;
+                fds = [];
+                terminate = None;
+              },
               Seatbelt_log { tag; since; marker } )
       | Bubblewrap _ ->
           let* dir = socket_dir ~sw in
           let socket = Filename.concat dir "model.sock" in
           let* () = run.listen_unix socket in
           let* argv =
-            command host ~state_dir:(Some run.state_dir) ~temp_dir:run.temp_dir
+            command ~dns:true host ~state_dir:(Some run.state_dir)
+              ~temp_dir:run.temp_dir
               ~listeners:[ { port = run.port; socket = Some socket } ]
               ~tag ~preload:run.preload agent
           in
+          let coverage, gaps =
+            match host.dns_as with
+            | None -> (Relay_failures_only, [])
+            | Some _ -> (Relay_failures_and_dns, dns_gaps ())
+          in
           relay_log ~sw run ~argv ~env:[] ~replaces_env:false
+            ~signals:(signal_pipe ~sw) ~coverage ~gaps
       | Vm vm ->
           let* bridge =
             Sandbox_vm.start ~sw vm (vm_layout host)
@@ -743,7 +848,7 @@ let start ~sw t run agent =
               ~port:run.port ~agent_env:run.agent_env agent
           in
           relay_log ~sw run ~argv:bridge.argv ~env:bridge.env ~replaces_env:true
-      )
+            ~coverage:Relay_failures_only)
 
 (* A checker reaches nothing (no listener), writes only to its temporary
    directory ([allow_write] does not apply) and reads nothing of any run. *)
@@ -761,10 +866,7 @@ let checker t ~temp_dir argv =
         ~preload:None argv
 
 let strips_preload = function
-  | Sandboxed { host = { engine = Bubblewrap path; _ }; _ } -> (
-      match Unix.stat path with
-      | st -> st.st_perm land 0o4000 <> 0
-      | exception Unix.Unix_error _ -> false)
+  | Sandboxed { host = { engine = Bubblewrap path; _ }; _ } -> setuid path
   | Sandboxed { host = { engine = Seatbelt | Vm _; _ }; _ } | Unsandboxed _ ->
       false
 
@@ -823,5 +925,5 @@ let collect ~env = function
   | Nothing -> Sandbox_violations.unsandboxed_violations
   | Seatbelt_log { tag; since; marker } ->
       Sandbox_violations.seatbelt ~env ~tag ~since ~marker
-  | Relay_log { path; writer; drained } ->
-      Sandbox_violations.relay ~env ~path ~writer ~drained
+  | Relay_log { path; writer; drained; coverage; gaps } ->
+      Sandbox_violations.relay ~env ~path ~writer ~drained ~coverage ~gaps
