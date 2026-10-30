@@ -135,10 +135,16 @@ let invalid_length request =
 let unusable_framing request =
   invalid_length request
   ||
-  match Http.Request.has_body request with
-  | `Unknown ->
+  match Http.Header.get_transfer_encoding (Http.Request.headers request) with
+  | Unknown ->
       present request "transfer-encoding" || present request "content-length"
-  | `No | `Yes -> false
+  | Fixed _ -> present request "transfer-encoding"
+  | Chunked -> false
+
+(* Neither length header: the body is empty (RFC 9112, section 6.3), whatever
+   else cohttp takes for a length, such as a [Content-Range]. *)
+let unframed request =
+  not (present request "transfer-encoding" || present request "content-length")
 
 (* Both length headers: the connection must end after the answer (RFC 9112,
    section 6.1). *)
@@ -563,13 +569,13 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
   (* A request with neither Content-Length nor Transfer-Encoding has no body
      (RFC 9112, section 6.3), where cohttp would read one until the client
-     closes the connection. A
+     closes the connection, or for as many bytes as a Content-Range says. A
      body of unusable length is not read at all, and the connection ends after
      the answer, as it does when the request has both headers or has a body
      on a method cohttp reads none for, so that no byte is parsed as a next
      request. *)
   let body =
-    if invalid_length request then Eio.Flow.string_source ""
+    if invalid_length request || unframed request then Eio.Flow.string_source ""
     else
       match Http.Request.has_body request with
       | `Unknown -> Eio.Flow.string_source ""

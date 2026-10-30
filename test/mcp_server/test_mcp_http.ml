@@ -739,6 +739,27 @@ let test_bodyless_method_with_body () =
         framings)
     [ "GET"; "HEAD"; "TRACE" ]
 
+(* A [Content-Range] is not a body length: without a length header the body is
+   empty, so the next request is answered. *)
+let test_content_range () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
+  let first =
+    "POST /mcp HTTP/1.1\r\n"
+    ^ String.concat ""
+        (List.map
+           (fun (k, v) -> k ^ ": " ^ v ^ "\r\n")
+           ((("Host", Printf.sprintf "127.0.0.1:%d" port) :: call_headers "echo")
+           @ [ ("Content-Range", "bytes 0-999/1000") ]))
+    ^ "\r\n"
+  in
+  let last =
+    H.request ~port (call_headers "echo")
+      (H.body ~id:11 "tools/call" (call_params "echo"))
+  in
+  let got = H.answers (until_closed ~port (first ^ last)) in
+  Alcotest.(check (list (option int)))
+    "the next request is answered" [ None; Some 11 ] (List.map answer_id got)
+
 (* A connection that sends refused requests and never reads the answers, until
    the server stops reading them: its writes stall, or it has closed the
    connection. *)
@@ -813,5 +834,7 @@ let () =
           Alcotest.test_case "a body of unusable length" `Quick test_bad_framing;
           Alcotest.test_case "a body on GET, HEAD and TRACE" `Quick
             test_bodyless_method_with_body;
+          Alcotest.test_case "a Content-Range is no length" `Quick
+            test_content_range;
         ] );
     ]
