@@ -10,17 +10,10 @@
 
 open Bactrian_core
 
-type provider =
-  | Openai
-  | Anthropic
-  | Gemini
-  | Openrouter
-      (** Path segments "openai", "anthropic", "gemini", "openrouter". Default
-          upstreams: https://api.openai.com, https://api.anthropic.com,
-          https://generativelanguage.googleapis.com, https://openrouter.ai. *)
+type provider = Provider.t = Openai | Anthropic | Gemini | Openrouter
 
 val default_upstream : provider -> Uri.t
-(** The default upstreams listed above. *)
+(** {!Provider.default_upstream}. *)
 
 type timing =
   | Fast

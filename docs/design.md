@@ -80,6 +80,7 @@ One binary, one process. Pure logic and input and output live in separate librar
 | Module | Responsibility |
 |---|---|
 | `Model_proxy` | One HTTP listener. Routes by run token in the path (`/r/<token>/...`). Record, replay and passthrough, including streams. MCP traffic shares the listener and the run registry through `Mcp_proxy` (decision 0006), so one port and one token cover models and tools. |
+| `Provider` | The four model providers: their path segments, default upstreams and key headers, and whether a request to the proxy presents a key the run accepts. |
 | `Mcp_proxy`, `Mcp_shim` | MCP endpoints on the listener for Streamable HTTP servers, and `bactrian mcp-shim <name>` for stdio servers that the agent launches itself. |
 | `Egress_proxy`, `Ca` (planned) | HTTP `CONNECT` proxy. The run ID arrives as the proxy username. Mints a leaf certificate per host from the project certificate authority (CA) and terminates Transport Layer Security (TLS) with a fresh single-certificate configuration per connection. Applies per-host policy. Its own process environment is scrubbed of `SSL_CERT_FILE` so its upstream trust is never replaced by its own CA. |
 | `Agent_driver` | The command protocol and the HTTP protocol, environment assembly, a fresh state directory, fixture seeding, turn and total timeouts, and killing the whole process group. |
