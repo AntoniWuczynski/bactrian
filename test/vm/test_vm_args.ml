@@ -400,6 +400,18 @@ let test_every_file_mask () =
     ]
     m
 
+let entry_kind =
+  Alcotest.testable
+    (fun ppf (k : Vm_args.entry_kind) ->
+      Format.pp_print_string ppf
+        (match k with
+        | File -> "file"
+        | Dir -> "directory"
+        | Special -> "special"
+        | Link_to_file target -> "link to " ^ target
+        | Other_link -> "other link"))
+    Vm_args.equal_entry_kind
+
 (* The entries bound again by path, which the caller looks at once more just
    before the container is created: Docker's files, container's directories
    (its files are hard links, checked when made), and none for a masked file's
@@ -431,9 +443,12 @@ let test_rebound () =
     List.assoc "/p/src"
       (invocation (input ~deny:[ ("/p/.env", `File) ] ~listing ())).rebound
   in
-  Alcotest.(check bool)
-    "with the entry the listing gave" true
-    (entry = dir "src")
+  let given = dir "src" in
+  Alcotest.(check string) "the entry's name" given.name entry.name;
+  Alcotest.check entry_kind "its kind" given.kind entry.kind;
+  Alcotest.(check (option (pair int int)))
+    "its identity" given.identity entry.identity;
+  Alcotest.(check bool) "not a masked name" given.masked_file entry.masked_file
 
 (* In the virtual machine all of .bactrian is masked: the run's own
    directories and allow_write paths come back, except in another run or the

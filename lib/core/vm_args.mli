@@ -41,6 +41,9 @@ type entry_kind =
       (** A symbolic link to a regular file, at this resolved path. *)
   | Other_link  (** A symbolic link to anything else, or to nothing. *)
 
+val equal_entry_kind : entry_kind -> entry_kind -> bool
+(** Same constructor, and for a link to a file the same resolved path. *)
+
 type entry = {
   name : string;
   kind : entry_kind;

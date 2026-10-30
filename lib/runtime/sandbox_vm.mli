@@ -80,6 +80,20 @@ val recheck :
     is created, which is as late as this process can: the runtime then resolves
     the paths itself, and a swap between this check and that is not seen. *)
 
+val launch :
+  t ->
+  layout ->
+  run_dir:string ->
+  name:string ->
+  Bactrian_core.Vm_args.invocation ->
+  (string list, string) result
+(** The command the bridge runs for [invocation] (the container named [name]),
+    given by {!start}. Docker's is the invocation's own. For container the
+    staging directories are made, the container created and its image checked.
+    Before either runtime commits to the command, the entries bound again are
+    looked at once more ({!recheck}), and one that changed stops it with
+    [Error]. *)
+
 type session = {
   argv : string list;
       (** [bactrian __vm-bridge forward=PORT container=NAME heartbeat=FILE --

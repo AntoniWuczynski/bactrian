@@ -150,13 +150,6 @@ let masked_identities deny =
     (fun (p, k) -> match k with `File -> identity p | `Dir | `Absent -> None)
     deny
 
-let kind_tag : Vm_args.entry_kind -> string = function
-  | File -> "file"
-  | Dir -> "directory"
-  | Special -> "special"
-  | Link_to_file target -> "link to " ^ target
-  | Other_link -> "other link"
-
 let recheck ~deny rebound =
   let masked = masked_identities deny in
   let same_identity a b =
@@ -171,7 +164,7 @@ let recheck ~deny rebound =
       let dir = Filename.dirname path in
       let now = describe ~masked dir listed.name in
       if
-        String.equal (kind_tag now.kind) (kind_tag listed.kind)
+        Vm_args.equal_entry_kind now.kind listed.kind
         && same_identity now.identity listed.identity
         && not now.masked_file
       then Ok ()

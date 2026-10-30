@@ -11,6 +11,12 @@ type probe = {
 type command = Agent of string list | Probe of probe
 type entry_kind = File | Dir | Special | Link_to_file of string | Other_link
 
+let equal_entry_kind a b =
+  match (a, b) with
+  | File, File | Dir, Dir | Special, Special | Other_link, Other_link -> true
+  | Link_to_file x, Link_to_file y -> String.equal x y
+  | (File | Dir | Special | Link_to_file _ | Other_link), _ -> false
+
 type entry = {
   name : string;
   kind : entry_kind;
