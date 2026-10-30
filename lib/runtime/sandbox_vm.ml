@@ -106,6 +106,22 @@ let allow_write_kinds paths =
 
 let staging_dir ~run_dir = Filename.concat run_dir "staging"
 
+(* The file the bridge touches and the relay watches, in a directory of its
+   own that the container mounts read-only. *)
+let heartbeat_dir ~run_dir = Filename.concat run_dir "heartbeat"
+let heartbeat_file ~run_dir = Filename.concat (heartbeat_dir ~run_dir) "beat"
+
+let make_heartbeat ~run_dir =
+  match
+    Unix.mkdir (heartbeat_dir ~run_dir) 0o755;
+    write_file ~perm:0o644 (heartbeat_file ~run_dir) ""
+  with
+  | () -> Ok ()
+  | exception (Unix.Unix_error _ | Sys_error _) ->
+      Error
+        (Printf.sprintf "the heartbeat file %s cannot be made"
+           (heartbeat_file ~run_dir))
+
 (* Who made a staging directory, "PID\tHOST", in a file beside the numbered
    directories, which no mount shows. *)
 let owner_file ~run_dir = Filename.concat (staging_dir ~run_dir) "owner"
@@ -154,6 +170,7 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          workdir = cwd;
          env_file;
          relay = t.relay;
+         heartbeat_dir = heartbeat_dir ~run_dir;
          project_root = layout.project_root;
          bactrian_dir = layout.bactrian_dir;
          runs_dir = Filename.concat layout.bactrian_dir "runs";
@@ -272,8 +289,10 @@ let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
 (* The container and container's staging directories, once the run is over. *)
 let clean_up t ~run_dir ~name =
   remove t name;
-  try Proc_util.remove_tree (staging_dir ~run_dir)
-  with Unix.Unix_error _ | Sys_error _ -> ()
+  List.iter
+    (fun dir ->
+      try Proc_util.remove_tree dir with Unix.Unix_error _ | Sys_error _ -> ())
+    [ staging_dir ~run_dir; heartbeat_dir ~run_dir ]
 
 let client_env t =
   List.filter_map
@@ -307,6 +326,7 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
   and temp_dir = Filename.concat dir "tmp" in
   Fun.protect ~finally:(fun () -> clean_up t ~run_dir:dir ~name) @@ fun () ->
   let* env_file = write_env_file ~dir [] in
+  let* () = make_heartbeat ~run_dir:dir in
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let listener =
@@ -327,7 +347,9 @@ let probe ~env t layout ~dir (paths : Vm_args.probe) =
     match
       Eio.Time.with_timeout t.clock probe_timeout (fun () ->
           Ok
-            (Vm_bridge.run ~net ~clock:t.clock ~process_mgr:t.process_mgr
+            (Vm_bridge.run
+               ~beat:(heartbeat_file ~run_dir:dir)
+               ~net ~clock:t.clock ~process_mgr:t.process_mgr
                ~env:(Vm_runtime.client_env t.runtime)
                ~forwards:[ port ]
                ~stdin:(Eio.Flow.string_source "")
@@ -397,6 +419,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
   Eio.Switch.on_release sw (fun () ->
       clean_up t ~run_dir ~name;
       remove_file env_file);
+  let* () = make_heartbeat ~run_dir in
   let* invocation =
     invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
       ~forwards:[ port ] (Agent agent)
@@ -410,6 +433,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
           "__vm-bridge";
           "forward=" ^ string_of_int port;
           "container=" ^ name;
+          "heartbeat=" ^ heartbeat_file ~run_dir;
         ]
         @ (match Vm_runtime.kind t.runtime with
           | `Docker -> []

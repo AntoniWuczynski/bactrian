@@ -83,6 +83,7 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
       (match kind with
       | `Docker -> "/c/relay"
       | `Container -> "/c/relay-1a2b-arm64");
+    heartbeat_dir = "/p/.bactrian/runs/r1/heartbeat";
     project_root = project;
     bactrian_dir = "/p/.bactrian";
     runs_dir = "/p/.bactrian/runs";
@@ -193,6 +194,8 @@ let test_command_line () =
       "--mount";
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
       "--mount";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
+      "--mount";
       "type=bind,source=/p,target=/p,readonly";
       "--mount";
       "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
@@ -200,6 +203,8 @@ let test_command_line () =
       "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
       "--";
       "node:24@sha256:abc";
+      "--heartbeat";
+      "/bactrian-heartbeat/beat";
       "--forward";
       "4242";
       "--";
@@ -228,6 +233,8 @@ let test_probe () =
   Alcotest.check strings "the probe instead of an agent"
     [
       "node:24@sha256:abc";
+      "--heartbeat";
+      "/bactrian-heartbeat/beat";
       "--forward";
       "4242";
       "--probe";
@@ -239,12 +246,13 @@ let test_probe () =
       "/probe";
       "/p/.bactrian/runs/x/w";
     ]
-    (List.filteri (fun i _ -> i >= List.length a - 11) a)
+    (List.filteri (fun i _ -> i >= List.length a - 13) a)
 
 let test_masks () =
   Alcotest.check strings "masks where the mounts show the path, by depth"
     [
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "/p:ro,mode=0755";
       "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
       "type=bind,source=/p/agent.js,target=/p/agent.js,readonly";
@@ -345,6 +353,7 @@ let test_nested_masks () =
   Alcotest.check strings "each directory once, parents first"
     [
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "/p:ro,mode=0755";
       "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
       "/p/sub:ro,mode=0755";
@@ -380,6 +389,7 @@ let test_every_file_mask () =
   Alcotest.check strings "no masked file under any name"
     [
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "/h:ro,mode=0755";
       "/p:ro,mode=0755";
       "type=bind,source=/h/.profile,target=/h/.profile";
@@ -418,6 +428,7 @@ let test_bactrian_masked () =
   Alcotest.check strings "the run's own directories alone come back"
     [
       "type=bind,source=/c/relay,target=/bactrian/relay,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "/p:ro,mode=0755";
       "/p/.bactrian:ro,mode=0755";
       "type=bind,source=/p/a.js,target=/p/a.js,readonly";
@@ -559,6 +570,8 @@ let test_container_command_line () =
       "--mount";
       "type=bind,source=/c,target=/bactrian,readonly";
       "--mount";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
+      "--mount";
       "type=bind,source=/p,target=/p,readonly";
       "--mount";
       "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";
@@ -566,6 +579,8 @@ let test_container_command_line () =
       "type=bind,source=/p/.bactrian/runs/r1/tmp,target=/p/.bactrian/runs/r1/tmp";
       "--";
       "node:24@sha256:abc";
+      "--heartbeat";
+      "/bactrian-heartbeat/beat";
       "--forward";
       "4242";
       "--";
@@ -634,6 +649,7 @@ let test_container_masks () =
   Alcotest.check strings "a staging directory over the masked file's directory"
     [
       "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "type=bind,source=/p/.bactrian/runs/r1/staging/0,target=/p,readonly";
       "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
       "type=bind,source=/p/src,target=/p/src,readonly";
@@ -679,6 +695,7 @@ let test_container_nested () =
   Alcotest.check strings "each stage once, parents first"
     [
       "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "type=bind,source=/p/.bactrian/runs/r1/staging/0,target=/p,readonly";
       "type=bind,source=/p/.bactrian,target=/p/.bactrian,readonly";
       "/p/secret:rw,mode=0755,size=1m";
@@ -716,6 +733,7 @@ let test_container_read_only () =
   Alcotest.check strings "staged over the read-only directory"
     [
       "type=bind,source=/c,target=/bactrian,readonly";
+      "type=bind,source=/p/.bactrian/runs/r1/heartbeat,target=/bactrian-heartbeat,readonly";
       "type=bind,source=/p,target=/p,readonly";
       "/p/.bactrian:rw,mode=0755,size=1m";
       "type=bind,source=/p/.bactrian/runs/r1/state,target=/p/.bactrian/runs/r1/state";

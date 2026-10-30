@@ -229,8 +229,19 @@ let rec heartbeat ~clock ~send =
   Eio.Time.sleep clock Frame.heartbeat_interval;
   heartbeat ~clock ~send
 
-let run ?stderr ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv
-    =
+(* The same sign of life out of band: the relay, started with --heartbeat,
+   watches this file's modification time. Frames queue behind whatever the
+   agent has not read yet, so a bactrian waiting on an agent that reads
+   nothing sends none the relay can see, and a dead one looks the same. The
+   touch is a fiber of its own, never behind [send]. Setting the times to 0
+   means now. *)
+let rec beat ~clock path =
+  (try Unix.utimes path 0. 0. with Unix.Unix_error _ -> ());
+  Eio.Time.sleep clock Frame.heartbeat_interval;
+  beat ~clock path
+
+let run ?stderr ?beat:beat_file ~net ~clock ~process_mgr ~env ~forwards ~stdin
+    ~stdout ~log argv =
   Eio.Switch.run @@ fun sw ->
   let to_relay_r, to_relay_w = Eio_unix.pipe sw in
   let from_relay_r, from_relay_w = Eio_unix.pipe sw in
@@ -247,9 +258,13 @@ let run ?stderr ~net ~clock ~process_mgr ~env ~forwards ~stdin ~stdout ~log argv
         Eio.Fiber.first
           (fun () -> demux ~net ~send ~log ~forwards ~stdout from_relay_r)
           (fun () ->
-            Eio.Fiber.both
-              (fun () -> pump_stdin ~send stdin)
-              (fun () -> heartbeat ~clock ~send);
+            Eio.Fiber.all
+              ([
+                 (fun () -> pump_stdin ~send stdin);
+                 (fun () -> heartbeat ~clock ~send);
+               ]
+              @ Option.to_list
+                  (Option.map (fun path () -> beat ~clock path) beat_file));
             Eio.Fiber.await_cancel ())
       in
       (* The relay takes the end of its input for bactrian's death and kills
@@ -266,6 +281,7 @@ type config = {
   container : string;
   kill_signals : bool;
   staging : string option;
+  heartbeat : string option;
   argv : string list;
 }
 
@@ -290,21 +306,27 @@ let parse args =
         match
           ( value ~prefix:"forward=" a,
             value ~prefix:"container=" a,
-            value ~prefix:"staging=" a )
+            value ~prefix:"staging=" a,
+            value ~prefix:"heartbeat=" a )
         with
-        | Some p, _, _ -> (
+        | Some p, _, _, _ -> (
             match int_of_string_opt p with
             | Some port when port >= 1 && port <= 65535 ->
                 go { c with forwards = port :: c.forwards } rest
             | Some _ | None -> Error (Printf.sprintf "%S is not a port" p))
-        | None, Some name, _ when not (String.equal name "") ->
+        | None, Some name, _, _ when not (String.equal name "") ->
             go { c with container = name } rest
         (* Only a run's own staging directory, which the bridge removes. *)
-        | None, None, Some dir
+        | None, None, Some dir, _
           when (not (Filename.is_relative dir))
                && String.equal (Filename.basename dir) "staging" ->
             go { c with staging = Some dir } rest
-        | None, (Some _ | None), (Some _ | None) ->
+        (* Only a run's heartbeat file, which the bridge touches. *)
+        | None, None, None, Some file
+          when (not (Filename.is_relative file))
+               && String.equal (Filename.basename file) "beat" ->
+            go { c with heartbeat = Some file } rest
+        | None, (Some _ | None), (Some _ | None), (Some _ | None) ->
             Error (Printf.sprintf "unexpected argument %S" a))
   in
   go
@@ -313,6 +335,7 @@ let parse args =
       container = "";
       kill_signals = false;
       staging = None;
+      heartbeat = None;
       argv = [];
     }
     args
@@ -400,9 +423,10 @@ let main ~env ~log config =
     Eio.Fiber.first
       (fun () ->
         `Done
-          (run ~net:(Eio.Stdenv.net env) ~clock ~process_mgr ~env:vars
-             ~forwards:config.forwards ~stdin:(Eio.Stdenv.stdin env)
-             ~stdout:(Eio.Stdenv.stdout env) ~log:write_log config.argv))
+          (run ?beat:config.heartbeat ~net:(Eio.Stdenv.net env) ~clock
+             ~process_mgr ~env:vars ~forwards:config.forwards
+             ~stdin:(Eio.Stdenv.stdin env) ~stdout:(Eio.Stdenv.stdout env)
+             ~log:write_log config.argv))
       (fun () ->
         Eio.Fiber.first
           (fun () -> watch_parent ~clock parent)

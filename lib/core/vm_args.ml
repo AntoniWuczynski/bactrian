@@ -29,6 +29,7 @@ type input = {
   workdir : string;
   env_file : string;
   relay : string;
+  heartbeat_dir : string;
   project_root : string;
   bactrian_dir : string;
   runs_dir : string;
@@ -123,6 +124,8 @@ let describe_error = function
 
 let relay_path = "/bactrian/relay"
 let relay_dir = "/bactrian"
+let heartbeat_dir = "/bactrian-heartbeat"
+let heartbeat_file = heartbeat_dir ^ "/beat"
 
 (* Fixed limits, so an agent that forks without end or fills memory or /tmp
    starves neither the virtual machine's other containers nor, on Linux, the
@@ -441,6 +444,7 @@ let argv i =
       ([
          ("the working directory", i.workdir);
          ("the relay", i.relay);
+         ("the heartbeat directory", i.heartbeat_dir);
          ("the project root", i.project_root);
          ("the state directory", i.state_dir);
          ("the temporary directory", i.temp_dir);
@@ -537,8 +541,14 @@ let argv i =
         @ flags @ [ "--workdir"; i.workdir ]
         @ [ "--env-file"; i.env_file; "--entrypoint"; entrypoint ]
         @ [ "--mount"; relay_mount ]
+        @ [
+            "--mount";
+            bind_value ~source:i.heartbeat_dir ~target:heartbeat_dir
+              ~writable:false;
+          ]
         @ List.concat_map (mount_args i.kind ~stage_of) mounts
         @ [ "--"; i.image ]
+        @ [ "--heartbeat"; heartbeat_file ]
         @ List.concat_map (fun p -> [ "--forward"; string_of_int p ]) i.forwards
         @ tail;
       stages;

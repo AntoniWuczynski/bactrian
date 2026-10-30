@@ -69,6 +69,9 @@ type input = {
   env_file : string;  (** The file {!val-env_file} wrote. *)
   relay : string;
       (** The relay binary on the host. container mounts its directory. *)
+  heartbeat_dir : string;
+      (** A directory of the run's own, on the host, holding the file [beat]
+          that the bridge touches ({!heartbeat_file}). Mounted read-only. *)
   project_root : string;
   bactrian_dir : string;
       (** [.bactrian]. A mask over it leaves the run's own [state_dir] and
@@ -129,6 +132,13 @@ val relay_path : string
 val relay_dir : string
 (** [/bactrian], where container mounts the relay's directory. *)
 
+val heartbeat_dir : string
+(** [/bactrian-heartbeat], where both runtimes mount [input.heartbeat_dir]
+    read-only. *)
+
+val heartbeat_file : string
+(** [/bactrian-heartbeat/beat], the file the relay watches ([--heartbeat]). *)
+
 type link = {
   name : string;  (** In the staging directory. *)
   source : string;  (** The host file it is a hard link of. *)
@@ -179,6 +189,10 @@ val argv : input -> (invocation, error) result
     under any name, other links, sockets, pipes and devices. Each directory
     beside the file is bound again. An [allow_write] file is
     [Error File_allow_write].
+
+    Both runtimes also mount [heartbeat_dir] read-only at {!val-heartbeat_dir}
+    right after the relay, and start the relay with
+    [--heartbeat /bactrian-heartbeat/beat] before its [--forward]s.
 
     Mounts are given in order of depth, as the runtime applies them, then of
     path. A directory mask is [--tmpfs PATH:ro,mode=0755] for Docker. For a file

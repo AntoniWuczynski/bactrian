@@ -71,10 +71,10 @@ val make_stages :
 
 type session = {
   argv : string list;
-      (** [bactrian __vm-bridge forward=PORT container=NAME -- RUNTIME run ...],
-          or for container
-          [... container=NAME signals=kill staging=DIR -- container start -a -i
-           NAME]. *)
+      (** [bactrian __vm-bridge forward=PORT container=NAME heartbeat=FILE --
+           RUNTIME run ...], or for container
+          [... container=NAME heartbeat=FILE signals=kill staging=DIR --
+           container start -a -i NAME]. *)
   env : (string * string) list;  (** The bridge's whole environment. *)
 }
 
@@ -97,8 +97,10 @@ val start :
     agent in a container named [bactrian-RUN_ID] with [port] forwarded to the
     host's loopback. For container it first makes the staging directories
     ({!Bactrian_core.Vm_args.stage}) under [run_dir], creates the container and
-    checks its image ({!image_id}). When [sw] ends the container is removed,
-    even if the bridge was killed, and so are [agent.env] and the staging
-    directories. If bactrian is killed instead, the bridge removes the container
-    and the staging directories, and if the bridge is killed too, the next
-    preflight does ({!Vm_runtime.remove_stale}, {!remove_stale_staging}). *)
+    checks its image ({!image_id}). The heartbeat file ([heartbeat/beat] in
+    [run_dir]) is made for the bridge to touch and the relay to watch. When [sw]
+    ends the container is removed, even if the bridge was killed, and so are
+    [agent.env] and the staging directories. If bactrian is killed instead, the
+    bridge removes the container and the staging directories, and if the bridge
+    is killed too, the next preflight does ({!Vm_runtime.remove_stale},
+    {!remove_stale_staging}). *)
