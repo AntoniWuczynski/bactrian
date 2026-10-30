@@ -29,8 +29,6 @@ from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Annotated, Literal
 
-import httpx
-import requests
 from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -117,11 +115,17 @@ class City(BaseModel):
 
 def fetch_weather(url: str, client: str, arguments_json: str) -> str:
     """get_weather over HTTPS: the service's answer, or its status and body."""
+    # Each client is imported where it is used: urllib3, under requests, binds a
+    # socket at import to probe for IPv6, which a sandbox reports as a violation.
     params = {"city": City.model_validate_json(arguments_json).city}
     if client == "requests":
+        import requests
+
         reply = requests.get(url, params=params, timeout=30)
         status, text = reply.status_code, reply.text
     else:
+        import httpx
+
         answer = httpx.get(url, params=params, timeout=30)
         status, text = answer.status_code, answer.text
     return text if 200 <= status < 300 else f"weather service: HTTP {status}: {text}"
