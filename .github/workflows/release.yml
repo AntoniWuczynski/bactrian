@@ -24,11 +24,18 @@ jobs:
           fetch-depth: 0
       - name: The tagged commit is on main
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      # A tag pushed with its commit finds CI still running, so wait for the
+      # newest CI run of the commit (up to ten minutes for it to appear).
       - name: Its CI run passed
         run: |
-          passed=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
-          echo "passing ci runs for $GITHUB_SHA: $passed"
-          test "$passed" -ge 1
+          for _ in $(seq 20); do
+            run=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run" ]; then break; fi
+            sleep 30
+          done
+          if [ -z "$run" ]; then echo "no ci run for $GITHUB_SHA"; exit 1; fi
+          gh run watch "$run" --exit-status --interval 60
+          test "$(gh run view "$run" --json conclusion --jq .conclusion)" = success
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
