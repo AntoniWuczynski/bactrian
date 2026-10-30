@@ -401,18 +401,25 @@ static void t_hardening(void) {
   CHECK(relay_exit(&r, 5000) == 0);
 }
 
-/* The agent's descriptors above 2 are closed. */
+/* The agent's descriptors above 2 are closed. A descriptor above 2 may point
+   at an executable (an emulator such as Rosetta holds the ones it runs open)
+   and at /proc, but at nothing else: no pipe, socket or relay file. */
 static void t_fds_closed(void) {
   struct relay r;
-  char *argv[] = {"relay", "--", "sh", "-c", "ls /proc/self/fd | wc -l", NULL};
+  char *argv[] = {"relay", "--", "sh", "-c",
+                  "for f in /proc/self/fd/*; do case ${f##*/} in 0|1|2) ;; "
+                  "*) readlink \"$f\" 2>/dev/null;; esac; done; true",
+                  NULL};
   start_relay(&r, argv);
-  unsigned char data[32];
+  unsigned char data[1024];
   size_t n;
   int eof;
   CHECK(collect(&r, data, &n, &eof, 10000) == 0);
   data[n] = '\0';
-  /* 0, 1, 2 and the directory handle ls itself holds. */
-  CHECK(atoi((char *)data) <= 4);
+  for (char *line = strtok((char *)data, "\n"); line != NULL;
+       line = strtok(NULL, "\n"))
+    CHECK(strncmp(line, "/proc/", 6) == 0 || strncmp(line, "/usr/bin/", 9) == 0 ||
+          strncmp(line, "/bin/", 5) == 0);
   CHECK(relay_exit(&r, 5000) == 0);
 }
 
@@ -835,7 +842,7 @@ static void t_usage(void) {
   char *probe_two[] = {"relay", "--forward", "1", "--forward", "2",  "--probe",
                        "a", "b", "c", "d", "e", "f", "g", NULL};
   char *probe_short[] = {"relay", "--forward", "1", "--probe", "a", "b", NULL};
-  char ports[17][8];
+  char ports[17][12];
   for (int i = 0; i < 17; i++)
     snprintf(ports[i], sizeof ports[i], "%d", 9000 + i);
   /* One more forward than MAX_FORWARDS. */
