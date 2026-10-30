@@ -65,9 +65,45 @@ let test_admit () =
   check "not bearer" 401 (replace "authorization" ("Basic " ^ token) good);
   check "not JSON" 415 (replace "content-type" "text/plain" good);
   check "no content type" 415 (without "content-type" good);
+  check "an allowed origin in another case" 200
+    (("origin", "HTTP://LOCALHOST:5173") :: good);
+  let preflight =
+    [ ("host", "127.0.0.1:4000"); ("origin", "http://localhost:5173") ]
+  in
+  check "a preflight from an allowed origin" 204 ~meth:`OPTIONS preflight;
+  check "a preflight from another origin" 403 ~meth:`OPTIONS
+    (replace "origin" "http://evil.example" preflight);
+  check "OPTIONS without an origin" 405 ~meth:`OPTIONS (without "origin" good);
   (* Origin before the token: a page learns nothing about the token. *)
   check "a bad origin without the token" 403
     (("origin", "http://evil.example") :: without "authorization" good)
+
+let test_origin () =
+  let check what expected v =
+    Alcotest.(check (option string))
+      what expected
+      (Result.to_option (Mcp_http.origin v))
+  in
+  check "a host and port" (Some "http://localhost:5173") "http://localhost:5173";
+  check "in lower case" (Some "https://example.com") "HTTPS://Example.COM";
+  check "IPv6" (Some "http://[::1]:8080") "http://[::1]:8080";
+  List.iter
+    (fun v -> check v None v)
+    [
+      "http://localhost:5173/";
+      "http://localhost:5173/app";
+      "*";
+      "null";
+      "localhost:5173";
+      "ftp://example.com";
+      "http://";
+      "http://a:0";
+      "http://a:65536";
+      "http://a:";
+      "http://a:b";
+      "http://user@a";
+      "http://[]";
+    ]
 
 let test_header_value () =
   let check what expected v =
@@ -460,6 +496,58 @@ let test_too_long () =
     "as it says" [ Some "close" ]
     (List.map (fun r -> H.header r "connection") got)
 
+(* A page from an allowed origin gets through its preflight and can read the
+   answers. *)
+let test_cors () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  let page = ("Origin", "http://localhost:5173") in
+  let preflight =
+    client ~port (fun ~port ->
+        H.send ~meth:"OPTIONS" ~port
+          [
+            page;
+            ("Access-Control-Request-Method", "POST");
+            ( "Access-Control-Request-Headers",
+              "authorization, content-type, mcp-method, mcp-name" );
+          ]
+          "")
+  in
+  Alcotest.(check int) "the preflight" 204 preflight.status;
+  let header what expected r name =
+    Alcotest.(check (option string)) what expected (H.header r name)
+  in
+  header "the origin may read" (Some "http://localhost:5173") preflight
+    "access-control-allow-origin";
+  header "and POST" (Some "POST") preflight "access-control-allow-methods";
+  header "with the headers it asked for"
+    (Some "authorization, content-type, mcp-method, mcp-name") preflight
+    "access-control-allow-headers";
+  let post headers =
+    client ~port (fun ~port ->
+        H.send ~port headers (H.body ~id:1 "tools/call" (call_params "echo")))
+  in
+  let from_page = post (page :: call_headers "echo") in
+  Alcotest.(check int) "the POST" 200 from_page.status;
+  header "its answer is readable" (Some "http://localhost:5173") from_page
+    "access-control-allow-origin";
+  header "and varies by origin" (Some "Origin") from_page "vary";
+  let refused =
+    post
+      (page
+      :: List.filter
+           (fun (k, _) -> not (String.equal k "Authorization"))
+           (call_headers "echo"))
+  in
+  Alcotest.(check int) "no token" 401 refused.status;
+  header "a refusal is readable too" (Some "http://localhost:5173") refused
+    "access-control-allow-origin";
+  header "nothing for a client without an origin" None
+    (post (call_headers "echo"))
+    "access-control-allow-origin";
+  header "nor for a foreign origin" None
+    (post (("Origin", "http://evil.example") :: call_headers "echo"))
+    "access-control-allow-origin"
+
 let test_endless_head () =
   with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
   let pad =
@@ -476,6 +564,7 @@ let () =
       ( "checks",
         [
           Alcotest.test_case "admission" `Quick test_admit;
+          Alcotest.test_case "origins" `Quick test_origin;
           Alcotest.test_case "header values" `Quick test_header_value;
           Alcotest.test_case "headers and eras" `Quick test_era_of_request;
           Alcotest.test_case "statuses" `Quick test_status;
@@ -488,5 +577,6 @@ let () =
           Alcotest.test_case "an endless head" `Quick test_endless_head;
           Alcotest.test_case "a refused body" `Quick test_refused_body;
           Alcotest.test_case "a body too long" `Quick test_too_long;
+          Alcotest.test_case "CORS" `Quick test_cors;
         ] );
     ]

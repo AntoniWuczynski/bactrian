@@ -72,8 +72,16 @@ let refusals () =
     (discover
        ~headers:(set "Origin" (Printf.sprintf "http://127.0.0.1:%d" port))
        s);
-  status "an allowed origin" 200
-    (discover ~headers:(set "Origin" "http://localhost:5173") s);
+  let page = "http://localhost:5173" in
+  let allowed = discover ~headers:(set "Origin" page) s in
+  status "an allowed origin" 200 allowed;
+  Alcotest.(check (option string))
+    "its page may read the answer" (Some page)
+    (H.header allowed "access-control-allow-origin");
+  status "the page's preflight" 204
+    (H.send ~meth:"OPTIONS" ~port
+       [ ("Origin", page); ("Access-Control-Request-Method", "POST") ]
+       "");
   status "a rebound host name" 403
     (discover ~headers:(set "Host" (Printf.sprintf "evil.example:%d" port)) s);
   let get = H.send ~meth:"GET" ~port [ H.auth s ] "" in

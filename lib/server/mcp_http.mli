@@ -29,21 +29,25 @@ type config = {
   token : string;  (** The bearer token every request must carry. *)
   allowed_origins : string list;
       (** Origins allowed besides [http://127.0.0.1:PORT] and
-          [http://localhost:PORT]. *)
+          [http://localhost:PORT], as {!origin} gives them. *)
 }
 
-type rejection = {
-  status : int;
-  headers : (string * string) list;
-  body : string;
-}
-(** An HTTP answer that refuses a request before its message is read. *)
+type early = { status : int; headers : (string * string) list; body : string }
+(** An HTTP answer given before the message is read: a refusal, or the answer to
+    a CORS preflight. *)
 
-val admit : config -> Http.Request.t -> (unit, rejection) result
+val origin : string -> (string, string) result
+(** An origin a user allows, as [Origin] carries it: [http] or [https], [://]
+    and a host, with a port or not, in lower case. [Error] says what is wrong
+    with anything else, such as a path, a trailing slash or [*]. *)
+
+val admit : config -> Http.Request.t -> (unit, early) result
 (** The checks on [Host], [Origin], the path, the method, [Authorization] and
     [Content-Type], in that order. A refused [Host] or [Origin] is answered with
     a JSON-RPC error that has no id, a missing or wrong token with
-    [WWW-Authenticate: Bearer]. *)
+    [WWW-Authenticate: Bearer]. An [OPTIONS] request with an allowed [Origin] is
+    a CORS preflight, answered with 204, [Access-Control-Allow-Methods: POST]
+    and the headers it asks for in [Access-Control-Allow-Headers]. *)
 
 val header_value : string -> string option
 (** A header value as the client meant it: the decoded UTF-8 of
@@ -93,7 +97,9 @@ val serve :
     [Accept] lists [text/event-stream], with JSON otherwise, and the client
     closing the connection before the answer cancels the call. A notification is
     accepted with 202, a message that is not JSON-RPC is 400 and GET and DELETE
-    are 405. [log] gets a line for each error of a connection.
+    are 405. Every answer to a request whose [Origin] is allowed carries it in
+    [Access-Control-Allow-Origin], so a page from there can read it. [log] gets
+    a line for each error of a connection.
 
     At most 64 connections are open at once, and a request's head holds at most
     64 KiB. Until a request is admitted, a connection has [head_timeout] seconds

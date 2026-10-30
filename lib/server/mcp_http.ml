@@ -6,12 +6,7 @@ let endpoint = "/mcp"
 let max_body = 16 * 1024 * 1024
 
 type config = { port : int; token : string; allowed_origins : string list }
-
-type rejection = {
-  status : int;
-  headers : (string * string) list;
-  body : string;
-}
+type early = { status : int; headers : (string * string) list; body : string }
 
 let local_hosts port =
   [ Printf.sprintf "127.0.0.1:%d" port; Printf.sprintf "localhost:%d" port ]
@@ -44,6 +39,70 @@ let path resource =
   | Some i -> String.sub resource 0 i
   | None -> resource
 
+let origin v =
+  let o = String.lowercase_ascii v in
+  let digit c = c >= '0' && c <= '9' in
+  let host_char c = digit c || (c >= 'a' && c <= 'z') || c = '-' || c = '.' in
+  let port p =
+    String.equal p ""
+    || String.length p > 1
+       && Char.equal p.[0] ':'
+       &&
+       let d = String.sub p 1 (String.length p - 1) in
+       String.length d <= 5
+       && String.for_all digit d
+       && Option.fold ~none:false
+            ~some:(fun n -> n >= 1 && n <= 65535)
+            (int_of_string_opt d)
+  in
+  let split i a = (String.sub a 0 i, String.sub a i (String.length a - i)) in
+  let authority =
+    List.find_map
+      (fun scheme ->
+        if String.starts_with ~prefix:scheme o then
+          Some
+            (String.sub o (String.length scheme)
+               (String.length o - String.length scheme))
+        else None)
+      [ "http://"; "https://" ]
+  in
+  let valid =
+    match authority with
+    | None -> false
+    | Some a when String.starts_with ~prefix:"[" a -> (
+        match String.index_opt a ']' with
+        | Some i ->
+            let host, rest = split (i + 1) a in
+            String.length host > 2
+            && String.for_all
+                 (fun c -> Char.equal c ':' || Char.equal c '.' || host_char c)
+                 (String.sub host 1 (String.length host - 2))
+            && port rest
+        | None -> false)
+    | Some a ->
+        let host, rest =
+          match String.index_opt a ':' with
+          | Some i -> split i a
+          | None -> (a, "")
+        in
+        (not (String.equal host ""))
+        && String.for_all host_char host
+        && port rest
+  in
+  if valid then Ok o
+  else
+    Error
+      (Printf.sprintf
+         "%s is not an origin: give scheme://host or scheme://host:port, with \
+          http or https and no path, such as http://localhost:5173"
+         v)
+
+let allowed config o =
+  List.exists
+    (String.equal (String.lowercase_ascii o))
+    (List.map (( ^ ) "http://") (local_hosts config.port)
+    @ config.allowed_origins)
+
 (* The media type before its parameters. *)
 let media_type v =
   match String.split_on_char ';' v with
@@ -67,11 +126,7 @@ let admit config request =
   let* () =
     match get "origin" with
     | None -> Ok ()
-    | Some o
-      when List.exists (String.equal o)
-             (List.map (( ^ ) "http://") (local_hosts config.port)
-             @ config.allowed_origins) ->
-        Ok ()
+    | Some o when allowed config o -> Ok ()
     | Some o ->
         refuse_rpc 403
           (Printf.sprintf
@@ -84,12 +139,27 @@ let admit config request =
     else refuse_text 404 ("Not Found: the MCP endpoint is " ^ endpoint)
   in
   let* () =
-    if Http.Method.compare (Http.Request.meth request) `POST = 0 then Ok ()
-    else
-      refuse_text
-        ~headers:[ ("allow", "POST") ]
-        405
-        ("Method Not Allowed: POST each JSON-RPC message to " ^ endpoint)
+    match (Http.Request.meth request, get "origin") with
+    | `POST, _ -> Ok ()
+    | `OPTIONS, Some _ ->
+        (* The preflight of a page from an allowed origin, whose POST carries
+           the token and JSON. The headers it may send are the MCP ones, whose
+           Mcp-Param-* names vary, so they are allowed as asked. *)
+        refuse 204
+          ~headers:
+            ([
+               ("access-control-allow-methods", "POST");
+               ("access-control-max-age", "600");
+             ]
+            @ Option.fold ~none:[]
+                ~some:(fun h -> [ ("access-control-allow-headers", h) ])
+                (get "access-control-request-headers"))
+          ""
+    | _, (Some _ | None) ->
+        refuse_text
+          ~headers:[ ("allow", "POST") ]
+          405
+          ("Method Not Allowed: POST each JSON-RPC message to " ^ endpoint)
   in
   let* () =
     let bearer v =
@@ -257,8 +327,7 @@ let fixed ~status ~headers body : answer =
       Eio.Buf_write.string oc body;
       Eio.Buf_write.flush oc )
 
-let of_rejection (r : rejection) =
-  fixed ~status:r.status ~headers:r.headers r.body
+let of_early (r : early) = fixed ~status:r.status ~headers:r.headers r.body
 
 let message ~status m =
   fixed ~status ~headers:[ json ] (Mcp_msg.encode ~short_floats:true m)
@@ -320,6 +389,19 @@ let read_body body =
         (unidentified (-32600)
            (Printf.sprintf "Invalid Request: longer than %d bytes" max_body))
 
+(* What a page from an allowed origin needs to read an answer. *)
+let with_cors config request ((response, write) : answer) : answer =
+  match Http.Header.get (Http.Request.headers request) "origin" with
+  | Some o when allowed config o ->
+      ( {
+          response with
+          headers =
+            Http.Header.add_list response.headers
+              [ ("access-control-allow-origin", o); ("vary", "Origin") ];
+        },
+        write )
+  | Some _ | None -> (response, write)
+
 (* Ends a connection. *)
 exception Hang_up
 
@@ -341,8 +423,8 @@ let max_refused_body = 64 * 1024
 
 let refused body r =
   match Eio.Buf_read.(take_all (of_flow ~max_size:max_refused_body body)) with
-  | (_ : string) -> of_rejection r
-  | exception Eio.Buf_read.Buffer_limit_exceeded -> closing (of_rejection r)
+  | (_ : string) -> of_early r
+  | exception Eio.Buf_read.Buffer_limit_exceeded -> closing (of_early r)
 
 let max_connections = 64
 
@@ -384,7 +466,7 @@ let guarded = Eio.Flow.Pi.source (module Guarded)
 
 let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
   match read with
-  | Error r -> closing (of_rejection r)
+  | Error r -> closing (of_early r)
   | Ok text -> (
       match Mcp_msg.decode text with
       | Error e -> message ~status:400 (Mcp_dispatch.undecodable e)
@@ -420,6 +502,8 @@ let admitted_answer ~server ~(handlers : Mcp_dispatch.handlers) request read =
 
 let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
+  with_cors config request
+  @@
   match admit config request with
   | Error r -> refused body r
   | Ok () ->

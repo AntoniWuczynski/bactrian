@@ -228,10 +228,12 @@ let cmd ~bactrian_exe =
       value & opt_all string []
       & info [ "http-allow-origin" ] ~docv:"ORIGIN"
           ~doc:
-            "Also accept requests whose $(b,Origin) header is $(docv), such as \
-             $(b,http://localhost:5173) for a browser-based client. \
-             Repeatable. A page from that origin can then drive the server if \
-             it has the token.")
+            "Also accept requests whose $(b,Origin) header is $(docv), \
+             $(i,SCHEME)$(b,://)$(i,HOST) with an optional $(b,:)$(i,PORT) and \
+             no path, such as $(b,http://localhost:5173) for a client that \
+             runs in a browser. The server answers the browser's CORS \
+             preflight and lets a page from that origin read its answers, so \
+             the page can drive the server if it has the token. Repeatable.")
   in
   Cmd.v info
     Term.(
@@ -241,10 +243,19 @@ let cmd ~bactrian_exe =
           | Some port, _ when port < 0 || port > 65535 ->
               usage "--http needs a port from 0 to 65535"
           | None, _ :: _ -> usage "--http-allow-origin needs --http"
-          | Some port, _ ->
-              serve ~bactrian_exe
-                { Policy.allow_unsandboxed; trust_project; max_jobs }
-                (Http { port; allowed_origins })
+          | Some port, _ -> (
+              match
+                List.fold_right
+                  (fun o acc ->
+                    Result.bind acc (fun os ->
+                        Result.map (fun o -> o :: os) (Mcp_http.origin o)))
+                  allowed_origins (Ok [])
+              with
+              | Error m -> usage ("--http-allow-origin: " ^ m)
+              | Ok allowed_origins ->
+                  serve ~bactrian_exe
+                    { Policy.allow_unsandboxed; trust_project; max_jobs }
+                    (Http { port; allowed_origins }))
           | None, [] ->
               serve ~bactrian_exe
                 { Policy.allow_unsandboxed; trust_project; max_jobs }
