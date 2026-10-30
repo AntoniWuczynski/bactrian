@@ -145,6 +145,19 @@ let unusable_framing request =
 let ambiguous_framing request =
   present request "transfer-encoding" && present request "content-length"
 
+(* A body that the headers frame on a method cohttp reads no body for (GET,
+   HEAD, TRACE and CONNECT). RFC 9112 (section 6.3) frames a body by its
+   headers, not by the method, so these bytes are never read here and must not
+   be parsed as the next request: the connection ends after the answer. *)
+let unread_body request =
+  (not (Http.Method.body_allowed (Http.Request.meth request)))
+  && (present request "transfer-encoding"
+     || List.exists
+          (String.exists (fun c -> not (Char.equal c '0')))
+          (Http.Header.get_multi
+             (Http.Request.headers request)
+             "content-length"))
+
 let admit config request =
   let get = Http.Header.get (Http.Request.headers request) in
   let* () =
@@ -550,9 +563,11 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
     body =
   (* A request with neither Content-Length nor Transfer-Encoding has no body
      (RFC 9112, section 6.3), where cohttp would read one until the client
-     closes the connection. A body of unusable length is not read at all, and
-     the connection ends after the answer, as it does when the request has both
-     headers, so that no byte is parsed as a next request. *)
+     closes the connection. A
+     body of unusable length is not read at all, and the connection ends after
+     the answer, as it does when the request has both headers or has a body
+     on a method cohttp reads none for, so that no byte is parsed as a next
+     request. *)
   let body =
     if invalid_length request then Eio.Flow.string_source ""
     else
@@ -561,7 +576,10 @@ let answer ~server ~(handlers : Mcp_dispatch.handlers) ~guard config request
       | `No | `Yes -> body
   in
   let ending =
-    if unusable_framing request || ambiguous_framing request then closing
+    if
+      unusable_framing request || ambiguous_framing request
+      || unread_body request
+    then closing
     else Fun.id
   in
   with_cors config request

@@ -693,6 +693,52 @@ let test_bad_framing () =
             ])
           call))
 
+(* A GET, HEAD or TRACE cohttp reads no body for may still carry one by its
+   headers. It is never parsed as the next request, so exactly one answer
+   arrives (the hidden request would add a second) and the connection ends. *)
+let test_bodyless_method_with_body () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ~release:_ ->
+  let inner =
+    H.request ~port (call_headers "echo")
+      (H.body ~id:9 "tools/call" (call_params "echo"))
+  in
+  let framings =
+    [
+      ( "Content-Length",
+        [ ("Content-Length", string_of_int (String.length inner)) ],
+        inner );
+      ( "chunked",
+        [ ("Transfer-Encoding", "chunked") ],
+        Printf.sprintf "%x\r\n%s\r\n0\r\n\r\n" (String.length inner) inner );
+    ]
+  in
+  let outer meth headers body =
+    let head =
+      String.concat ""
+        (List.map
+           (fun (k, v) -> k ^ ": " ^ v ^ "\r\n")
+           (("Host", Printf.sprintf "127.0.0.1:%d" port) :: headers))
+    in
+    until_closed ~port (meth ^ " /mcp HTTP/1.1\r\n" ^ head ^ "\r\n" ^ body)
+  in
+  List.iter
+    (fun meth ->
+      List.iter
+        (fun (name, framing, body) ->
+          let check what extra expected =
+            let got = H.answers (outer meth (framing @ extra) body) in
+            let label = String.concat ", " [ meth; name; what ] in
+            Alcotest.(check (list int)) label expected (status_list got);
+            Alcotest.(check (list (option string)))
+              (label ^ ": and the connection ends")
+              [ Some "close" ]
+              (List.map (fun r -> H.header r "connection") got)
+          in
+          check "refused" [ ("Origin", "https://evil.example") ] [ 403 ];
+          check "admitted" (call_headers "echo") [ 405 ])
+        framings)
+    [ "GET"; "HEAD"; "TRACE" ]
+
 (* A connection that sends refused requests and never reads the answers, until
    the server stops reading them: its writes stall, or it has closed the
    connection. *)
@@ -765,5 +811,7 @@ let () =
           Alcotest.test_case "a POST without a length" `Quick test_no_length;
           Alcotest.test_case "clients that never read" `Quick test_stalled;
           Alcotest.test_case "a body of unusable length" `Quick test_bad_framing;
+          Alcotest.test_case "a body on GET, HEAD and TRACE" `Quick
+            test_bodyless_method_with_body;
         ] );
     ]
