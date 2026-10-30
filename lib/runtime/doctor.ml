@@ -46,11 +46,16 @@ type target = {
   backend : Sandbox.backend;
   image : string option;
   runtime : Experiment.sandbox_runtime option;
+  deny_read : string list;
   faketime : bool;
+  faketime_requested : bool;
   funded : (P.provider * string) list;
 }
 
 let target ~dir (e : Experiment.t) =
+  let in_dir path =
+    if Filename.is_relative path then Filename.concat dir path else path
+  in
   {
     agent = e.agent;
     dir;
@@ -58,7 +63,9 @@ let target ~dir (e : Experiment.t) =
     backend = e.sandbox_backend;
     image = e.sandbox_image;
     runtime = e.sandbox_runtime;
+    deny_read = List.map in_dir e.sandbox_deny_read;
     faketime = e.faketime;
+    faketime_requested = e.faketime_requested;
     funded = Live_preflight.funded e.caps_usd;
   }
 
@@ -354,30 +361,45 @@ let reason_text : Clock_label.reason -> string = function
   | Http_mode -> "bactrian does not start an HTTP-mode agent"
   | Vm -> "the agent runs in the virtual machine sandbox"
 
-let clock_check ~linux ~library_override ~path target =
-  let contract_only reason =
-    check "clock" (reason_status reason)
-      (Printf.sprintf "contract-only (%s): %s"
+(* A contract-only clock that is the expected state of the host is [Pass] or
+   [Skip], but not when the experiment names [faketime: auto]: that asked for
+   what this host cannot give. [requested] is never true with the reason
+   [Faketime_off]. *)
+let clock_check ~linux ~library_override ~path ~hidden target =
+  let contract_only ?(requested = false) reason =
+    let status, note =
+      match (reason_status reason, requested) with
+      | (Pass | Skip), true ->
+          (Warn, ", though the experiment asks for clock: {faketime: auto}")
+      | ((Pass | Skip | Warn | Fail) as status), _ -> (status, "")
+    in
+    check "clock" status
+      (Printf.sprintf "contract-only (%s): %s%s"
          (Clock_label.reason_name reason)
-         (reason_text reason))
+         (reason_text reason) note)
   in
   match target with
-  | Some { agent = Http _; _ } -> contract_only Http_mode
-  | Some ({ agent = Command { argv; _ }; dir; faketime; _ } as t) -> (
+  | Some ({ agent = Http _; _ } as t) ->
+      contract_only ~requested:t.faketime_requested Http_mode
+  | Some
+      ({ agent = Command { argv; _ }; dir; faketime; faketime_requested; _ } as
+       t) -> (
       let label =
         Agent_clock.label
           (Agent_clock.decide
              ~vm:(uses_vm ~macos:(not linux) t)
+             ~hidden:
+               (match t.sandbox with
+               | `Off -> fun _ -> false
+               | `Auto | `Strict -> hidden)
              ~linux ~faketime ~library_override
              ~env:(match path with Some p -> [ ("PATH", p) ] | None -> [])
              ~cwd:dir ~agent:argv ~sim_now:any_sim_now ())
       in
       match label with
-      | Enforced ->
-          check "clock" Pass
-            "enforced (libfaketime is preloaded, unless the experiment's \
-             sandbox.deny_read hides it)"
-      | Contract_only reason -> contract_only reason)
+      | Enforced -> check "clock" Pass "enforced (libfaketime is preloaded)"
+      | Contract_only reason ->
+          contract_only ~requested:faketime_requested reason)
   | None -> (
       if not linux then contract_only Macos
       else
@@ -462,7 +484,21 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       vm_check ~host:vm target;
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
-        ~path target;
+        ~path
+        ~hidden:
+          (Sandbox.library_masked
+             {
+               mode = `Auto;
+               backend = `Auto;
+               image = None;
+               runtime = None;
+               allow_write = [];
+               deny_read =
+                 (match target with Some t -> t.deny_read | None -> []);
+               bactrian_exe;
+               bactrian_dir = Filename.concat (Sys.getcwd ()) ".bactrian";
+             })
+        target;
       tls_check ~available:tls_available ~upstream target;
     ]
   @ egress_checks

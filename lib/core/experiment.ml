@@ -57,6 +57,7 @@ type t = {
   sandbox_allow_write : string list;
   sandbox_deny_read : string list;
   faketime : bool;
+  faketime_requested : bool;
   caps_usd : (string * float) list;
   pricing : string option;
   seed : int;
@@ -305,10 +306,14 @@ let intercept =
          ("egress", `Egress);
        ])
 
+(* The mode, and whether the file asks for [auto] by name. *)
 let clock ~path c =
   object_ ~path c (fun r ->
-      default r "faketime" true
-        (enum ~what:"faketime mode" [ ("auto", true); ("off", false) ]))
+      let+ mode =
+        optional r "faketime"
+          (enum ~what:"faketime mode" [ ("auto", true); ("off", false) ])
+      in
+      (Option.value mode ~default:true, Option.equal Bool.equal mode (Some true)))
 
 let confidence ~path c =
   let* f = float ~path c in
@@ -564,7 +569,7 @@ let decode c =
       and+ normalise = default r "normalise" [] (list regex)
       and+ redact = default r "redact" [] (list regex)
       and+ sandbox_block = sandbox_r
-      and+ faketime = default r "clock" true clock
+      and+ faketime, faketime_requested = default r "clock" (true, false) clock
       and+ caps_usd = default r "caps_usd" [] caps_usd
       and+ pricing = optional r "pricing" non_empty_string
       and+ seed = default r "seed" 0 int
@@ -590,6 +595,7 @@ let decode c =
         sandbox_allow_write = sandbox_block.allow_write;
         sandbox_deny_read = sandbox_block.deny_read;
         faketime;
+        faketime_requested;
         caps_usd;
         pricing;
         seed;

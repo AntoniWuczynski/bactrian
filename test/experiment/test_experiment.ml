@@ -139,6 +139,7 @@ let test_defaults () =
   Alcotest.(check bool) "no mcp" true (t.mcp = []);
   Alcotest.(check bool) "sandbox auto" true (t.sandbox = `Auto);
   Alcotest.(check bool) "faketime auto" true t.faketime;
+  Alcotest.(check bool) "by default, not requested" false t.faketime_requested;
   Alcotest.(check bool) "no caps" true (t.caps_usd = []);
   Alcotest.(check (option string)) "pricing" None t.pricing;
   Alcotest.(check strings) "passthrough" [] t.env_passthrough;
@@ -146,6 +147,18 @@ let test_defaults () =
   match t.agent with
   | Command { turn_timeout = 120.0; total_timeout = 600.0; _ } -> ()
   | Command _ | Http _ -> Alcotest.fail "default timeouts"
+
+let test_faketime_requested () =
+  let requested json = (decoded (doc json)).faketime_requested in
+  Alcotest.(check bool)
+    "auto by name" true
+    (requested {|, "clock": {"faketime": "auto"}|});
+  Alcotest.(check bool)
+    "off is not a request" false
+    (requested {|, "clock": {"faketime": "off"}|});
+  Alcotest.(check bool)
+    "an empty clock block" false
+    (requested {|, "clock": {}|})
 
 let test_compare_defaults () =
   match (decoded (doc {|, "compare": {"baseline": "a"}|})).compare with
@@ -433,6 +446,7 @@ let () =
         [
           Alcotest.test_case "full document" `Quick test_full;
           Alcotest.test_case "defaults" `Quick test_defaults;
+          Alcotest.test_case "faketime requested" `Quick test_faketime_requested;
           Alcotest.test_case "compare defaults" `Quick test_compare_defaults;
           Alcotest.test_case "http agent and durations" `Quick test_http;
           Alcotest.test_case "millisecond durations" `Quick test_ms_duration;

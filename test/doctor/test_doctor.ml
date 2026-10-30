@@ -35,8 +35,20 @@ let http url : Experiment.agent =
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
-    ?(funded = []) ~dir agent : Doctor.target =
-  { agent; dir; sandbox; backend; image; runtime = None; faketime; funded }
+    ?(faketime_requested = false) ?(deny_read = []) ?(funded = []) ~dir agent :
+    Doctor.target =
+  {
+    agent;
+    dir;
+    sandbox;
+    backend;
+    image;
+    runtime = None;
+    deny_read;
+    faketime;
+    faketime_requested;
+    funded;
+  }
 
 (* Keys *)
 
@@ -189,9 +201,13 @@ let test_clock () =
   write lib "";
   write (at "dyn") (E.elf [ (E.pt_interp, E.interp) ]);
   write (at "stat") (E.elf [ (E.pt_load, "code") ]);
-  let clock ?(linux = true) ?(faketime = true) ?(override = Some lib) agent =
+  let clock ?(linux = true) ?(faketime = true) ?faketime_requested ?sandbox
+      ?(hidden = fun (_ : string) -> false) ?(override = Some lib) agent =
     Doctor.clock_check ~linux ~library_override:override ~path:(Some dir)
-      (Some (target ~faketime ~dir (command ~argv:[ agent ] ())))
+      ~hidden
+      (Some
+         (target ~faketime ?faketime_requested ?sandbox ~dir
+            (command ~argv:[ agent ] ())))
   in
   let c = clock "dyn" in
   check_status "enforced" Pass c;
@@ -208,15 +224,80 @@ let test_clock () =
   check_status "agent not found" Warn (clock "absent");
   check_status "http agent" Skip
     (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~hidden:(fun _ -> false)
        (Some (target ~dir (http "http://127.0.0.1:9/a"))));
+  (* Only the sandbox can hide the library, and only when it applies. *)
+  let hides_lib p = String.equal p lib in
+  let hidden = clock ~sandbox:`Auto ~hidden:hides_lib "dyn" in
+  check_status "hidden by deny_read" Warn hidden;
+  Alcotest.(check bool)
+    "names the reason" true
+    (contains ~sub:"library-hidden" hidden.message);
+  check_status "hidden under strict too" Warn
+    (clock ~sandbox:`Strict ~hidden:hides_lib "dyn");
+  check_status "no sandbox, nothing hides it" Pass
+    (clock ~sandbox:`Off ~hidden:hides_lib "dyn");
+  check_status "another path is not hidden" Pass
+    (clock ~sandbox:`Auto ~hidden:(String.equal "/elsewhere") "dyn");
+  (* An explicit faketime: auto is a request the host may not meet. *)
+  check_status "macOS by default" Pass (clock ~linux:false "dyn");
+  let asked = clock ~linux:false ~faketime_requested:true "dyn" in
+  check_status "macOS when asked for" Warn asked;
+  Alcotest.(check bool)
+    "says why" true
+    (contains ~sub:"asks for clock: {faketime: auto}" asked.message);
+  check_status "enforced when asked for" Pass
+    (clock ~faketime_requested:true "dyn");
+  check_status "no library when asked for" Warn
+    (clock ~faketime_requested:true ~override:(Some (at "none")) "dyn");
+  check_status "http agent when asked for" Warn
+    (Doctor.clock_check ~linux:true ~library_override:(Some lib) ~path:None
+       ~hidden:(fun _ -> false)
+       (Some
+          (target ~faketime_requested:true ~dir (http "http://127.0.0.1:9/a"))));
   let host ~linux ~override =
-    Doctor.clock_check ~linux ~library_override:override ~path:None None
+    Doctor.clock_check ~linux ~library_override:override ~path:None
+      ~hidden:(fun _ -> false)
+      None
   in
   check_status "no experiment, macOS" Pass (host ~linux:false ~override:None);
   check_status "no experiment, library found" Pass
     (host ~linux:true ~override:(Some lib));
   check_status "no experiment, library missing" Warn
     (host ~linux:true ~override:(Some (at "none")))
+
+(* The deny-list, asked of settings alone: nothing is made on disk. *)
+let test_library_masked () =
+  with_dir @@ fun dir ->
+  let project = Filename.concat dir "project" in
+  let bactrian_dir = Filename.concat project ".bactrian" in
+  let masked deny_read library =
+    Sandbox.library_masked
+      {
+        mode = `Auto;
+        backend = `Auto;
+        image = None;
+        runtime = None;
+        allow_write = [];
+        deny_read;
+        bactrian_exe = "bactrian";
+        bactrian_dir;
+      }
+      library
+  in
+  let lib = "/opt/faketime/libfaketimeMT.so.1" in
+  Alcotest.(check bool) "nothing denied" false (masked [] lib);
+  Alcotest.(check bool)
+    "its directory is denied" true
+    (masked [ "/opt/faketime" ] lib);
+  Alcotest.(check bool) "the file itself" true (masked [ lib ] lib);
+  Alcotest.(check bool)
+    "a sibling directory with the same prefix" false
+    (masked [ "/opt/fake" ] lib);
+  Alcotest.(check bool)
+    "under .bactrian/blobs, which is always denied" true
+    (masked [] (Filename.concat bactrian_dir "blobs/libfaketimeMT.so.1"));
+  Alcotest.(check bool) "no .bactrian made" false (Sys.file_exists bactrian_dir)
 
 (* TLS and egress *)
 
@@ -359,6 +440,7 @@ let () =
           Alcotest.test_case "sandbox" `Quick test_sandbox;
           Alcotest.test_case "virtual machine" `Quick test_vm;
           Alcotest.test_case "clock" `Quick test_clock;
+          Alcotest.test_case "library masked" `Quick test_library_masked;
           Alcotest.test_case "tls and egress" `Quick test_tls;
           Alcotest.test_case "upstream overrides" `Quick test_upstream_checks;
           Alcotest.test_case "loopback" `Quick test_loopback;

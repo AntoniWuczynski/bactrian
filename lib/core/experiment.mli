@@ -67,6 +67,9 @@ type t = {
   sandbox_deny_read : string list;
       (** More unreadable paths, relative to the experiment file. *)
   faketime : bool;  (** [clock: {faketime: auto}], [false] for [off]. *)
+  faketime_requested : bool;
+      (** The file says [faketime: auto] by name, as opposed to leaving the mode
+          to its default. [doctor] tells the two apart. *)
   caps_usd : (string * float) list;
   pricing : string option;  (** Price file, relative to the experiment file. *)
   seed : int;

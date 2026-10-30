@@ -802,22 +802,46 @@ let mcp_warning t (servers : Mcp_proxy.config list) =
       None
 
 (* A deny-list mask is applied after the library is bound, so a library under
-   one is hidden again. Only bubblewrap binds the library at all. *)
+   one is hidden again. Only bubblewrap binds the library at all. The deny-list
+   reads only these four things, so [doctor] can ask without a host. *)
+let masked_by_deny_list ~home ~bactrian_dir ~deny_read library =
+  let input : Policy.input =
+    {
+      platform = Linux;
+      home;
+      project_root = Filename.dirname bactrian_dir;
+      bactrian_dir;
+      state_dir = None;
+      temp_dir = bactrian_dir;
+      allow_write = [];
+      deny_read;
+      listeners = [];
+      agent = [ "agent" ];
+      bactrian_exe = "";
+      preload = None;
+      tag = "";
+    }
+  in
+  List.exists
+    (fun denied ->
+      String.equal denied library
+      || String.starts_with ~prefix:(denied ^ "/") library)
+    (Policy.deny_list ~resolve:resolved input)
+
 let preload_hidden t library =
   match t with
   | Unsandboxed _ -> false
   | Sandboxed { host = { engine = Seatbelt | Vm _; _ }; _ } -> false
   | Sandboxed { host = { engine = Bubblewrap _; _ } as host; _ } ->
-      let dir = host.bactrian_dir in
-      let input =
-        input_of host ~state_dir:(Some dir) ~temp_dir:dir ~listeners:[] ~tag:""
-          ~preload:None [ "agent" ]
-      in
-      List.exists
-        (fun denied ->
-          String.equal denied library
-          || String.starts_with ~prefix:(denied ^ "/") library)
-        (Policy.deny_list ~resolve:resolved input)
+      masked_by_deny_list ~home:host.home ~bactrian_dir:host.bactrian_dir
+        ~deny_read:host.deny_read library
+
+let library_masked (settings : settings) library =
+  masked_by_deny_list
+    ~home:(resolved (home ()))
+    ~bactrian_dir:(resolved settings.bactrian_dir)
+    ~deny_read:(List.map resolved settings.deny_read)
+    library
 
 let collect ~env = function
   | Nothing -> Sandbox_violations.unsandboxed_violations

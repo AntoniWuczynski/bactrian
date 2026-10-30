@@ -30,7 +30,12 @@ type target = {
   backend : Sandbox.backend;
   image : string option;
   runtime : Experiment.sandbox_runtime option;
+  deny_read : string list;
+      (** [sandbox.deny_read], each path absolute (relative ones resolved
+          against [dir]). *)
   faketime : bool;
+  faketime_requested : bool;
+      (** The experiment says [faketime: auto] by name ({!Experiment.t}). *)
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
 }
@@ -110,11 +115,17 @@ val clock_check :
   linux:bool ->
   library_override:string option ->
   path:string option ->
+  hidden:(string -> bool) ->
   target option ->
   check
 (** With a target, the label its command agent would get
-    ({!Agent_clock.decide}). Without, whether this host can enforce the clock at
-    all. Contract-only on macOS is expected, so it is [Pass]. *)
+    ({!Agent_clock.decide}). [hidden] says whether the sandbox's deny-list masks
+    a library path ({!Sandbox.library_masked}), and counts only when the
+    experiment sandboxes the agent. Without a target, whether this host can
+    enforce the clock at all. Contract-only on macOS is expected, so it is
+    [Pass], unless the experiment names [clock: {faketime: auto}] itself: then
+    it is [Warn], as is any other reason the host cannot meet (an HTTP-mode
+    agent, the virtual machine). *)
 
 val tls_check :
   available:bool ->
