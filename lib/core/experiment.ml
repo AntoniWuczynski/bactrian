@@ -62,6 +62,7 @@ type t = {
   pricing : string option;
   seed : int;
   env_passthrough : string list;
+  real_keys : bool;
   compare : compare option;
 }
 
@@ -87,6 +88,11 @@ let policy_of_name name =
     policies
 
 let policy = enum ~what:"policy" policies
+
+let real_keys_strict_reason =
+  "the real provider keys would be in the agent's environment inside the \
+   sandbox, which strict promises they never are (use auto or off, or drop \
+   real_keys)"
 
 let valid_url url =
   let after prefix =
@@ -118,8 +124,9 @@ let agent ~path c =
   object_ ~path c (fun r ->
       let common =
         let+ timeouts = default r "timeouts" (120.0, 600.0) timeouts
-        and+ env = default r "env_passthrough" [] (list string) in
-        (timeouts, env)
+        and+ env = default r "env_passthrough" [] (list string)
+        and+ real_keys = default r "real_keys" false bool in
+        (timeouts, env, real_keys)
       in
       match
         required r "protocol"
@@ -133,14 +140,16 @@ let agent ~path c =
           let+ argv = required r "command" (non_empty_list string)
           and+ () = forbidden r "url" ~protocol:"command"
           and+ () = forbidden r "namespace_header" ~protocol:"command"
-          and+ (turn_timeout, total_timeout), env = common in
-          (Command { argv; turn_timeout; total_timeout }, env)
+          and+ (turn_timeout, total_timeout), env, real_keys = common in
+          (Command { argv; turn_timeout; total_timeout }, env, real_keys)
       | Ok `Http ->
           let+ url = required r "url" agent_url
           and+ namespace_header = required r "namespace_header" non_empty_string
           and+ () = forbidden r "command" ~protocol:"http"
-          and+ (turn_timeout, total_timeout), env = common in
-          (Http { url; namespace_header; turn_timeout; total_timeout }, env))
+          and+ (turn_timeout, total_timeout), env, real_keys = common in
+          ( Http { url; namespace_header; turn_timeout; total_timeout },
+            env,
+            real_keys ))
 
 let env_vars = assoc string
 
@@ -525,12 +534,25 @@ let baseline_exists (variants : variant list) = function
 (* bactrian does not start an HTTP agent, so it cannot put it in a sandbox. *)
 let http_agent_unsandboxed agent_r sandbox_r =
   match (agent_r, sandbox_r) with
-  | Ok (Http _, _), Ok { mode = `Strict; _ } ->
+  | Ok (Http _, _, _), Ok { mode = `Strict; _ } ->
       fail ~path:"sandbox"
         "strict cannot be met with agent.protocol http: bactrian does not \
          start the agent, so it cannot sandbox it (use auto or off)"
-  | Ok (Command _, _), Ok { mode = `Auto | `Strict | `Off; _ }
-  | Ok (Http _, _), Ok { mode = `Auto | `Off; _ }
+  | Ok (Command _, _, _), Ok { mode = `Auto | `Strict | `Off; _ }
+  | Ok (Http _, _, _), Ok { mode = `Auto | `Off; _ }
+  | Error _, _
+  | Ok _, Error _ ->
+      Ok ()
+
+(* [strict] promises the whole sandbox contract, which includes that the real
+   keys stay out of the agent's environment (design §5.3). *)
+let real_keys_strict agent_r sandbox_r =
+  match (agent_r, sandbox_r) with
+  | Ok (_, _, true), Ok { mode = `Strict; _ } ->
+      fail ~path:"agent.real_keys"
+        ("sandbox: strict cannot be met with agent.real_keys: "
+       ^ real_keys_strict_reason)
+  | Ok (_, _, (true | false)), Ok { mode = `Auto | `Strict | `Off; _ }
   | Error _, _
   | Ok _, Error _ ->
       Ok ()
@@ -552,12 +574,13 @@ let decode c =
               ()
           | Ok (vs, mapping_form), Error _ -> env_not_reserved ~mapping_form vs
           | Error _, (Ok _ | Error _) -> Ok ()
-        and+ () = http_agent_unsandboxed agent_r sandbox_r in
+        and+ () = http_agent_unsandboxed agent_r sandbox_r
+        and+ () = real_keys_strict agent_r sandbox_r in
         ()
       in
       let+ _version = required r "version" (version 1)
       and+ name = required r "name" non_empty_string
-      and+ agent, env_passthrough = agent_r
+      and+ agent, env_passthrough, real_keys = agent_r
       and+ scenarios = required r "scenarios" (non_empty_list non_empty_string)
       and+ variants, _ = variants_r
       and+ repeats = default r "repeats" 1 (int_at_least 1)
@@ -600,6 +623,7 @@ let decode c =
         pricing;
         seed;
         env_passthrough;
+        real_keys;
         compare;
       })
 

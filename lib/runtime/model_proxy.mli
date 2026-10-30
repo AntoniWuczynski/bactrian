@@ -57,7 +57,13 @@ type run = {
           request and response), so the run's trace has the model calls, plus
           the live-tail exchanges under Until_divergence. *)
   ledger : Ledger.t;
-  keys : (provider * string) list;  (** Real keys, never sent to the agent. *)
+  keys : (provider * string) list;
+      (** Real keys, never sent to the agent unless {!field-real_keys}. *)
+  real_keys : bool;
+      (** The agent's environment holds the real key of each provider in
+          {!field-keys} instead of the placeholder (design §5.2), so the proxy
+          accepts that key as the agent's credential too. Any other key is
+          refused as before. *)
   upstream : provider -> Uri.t;  (** Tests point this at the fake upstream. *)
   connector : Upstream.connector;
   normalise : Re.re list;

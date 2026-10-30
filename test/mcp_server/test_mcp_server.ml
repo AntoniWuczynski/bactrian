@@ -892,7 +892,21 @@ let test_policy () =
     in
     Alcotest.(check bool)
       "checkers in an experiment with sandbox off name --trust-project" true
-      (mentions "--trust-project" (Canon.to_string status)) );
+      (mentions "--trust-project" (Canon.to_string status));
+    write "pol2/s.json" {|{"version": 1, "id": "s", "turns": [{"user": "hi"}]}|};
+    write "polx/real-keys.json"
+      {|{"version": 1, "name": "x",
+        "agent": {"protocol": "command", "command": ["true"], "real_keys": true},
+        "scenarios": ["../pol2/*.json"], "variants": {"a": {}}, "repeats": 1,
+        "caps_usd": {"openai": 1}}|};
+    let status =
+      finished context.env call
+        (call "run_start" (Some {|{"experiment":"polx/real-keys.json"}|}))
+    in
+    Alcotest.(check bool)
+      "real keys in an experiment name --trust-project" true
+      (mentions "agent.real_keys" (Canon.to_string status)
+      && mentions "--trust-project" (Canon.to_string status)) );
   with_context
     ~policy:
       { Policy.default with allow_unsandboxed = true; trust_project = true }

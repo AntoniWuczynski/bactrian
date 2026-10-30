@@ -67,6 +67,7 @@ let meta (r : R.run) : Yojson.Safe.t =
       ("cost_usd", number (fun c -> `Float c) r.cost);
       ("latency_ms", number (fun l -> `Float l) r.latency_ms);
       ("tokens", number (fun n -> `Int n) r.tokens);
+      ("real_keys", `Bool r.real_keys);
     ]
 
 let divergences (r : R.run) : Yojson.Safe.t =

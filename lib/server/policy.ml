@@ -84,6 +84,11 @@ let experiment t root ~sandbox (c : Bactrian_runtime.Executor.contents) =
       "passes variables of the server's environment to the agent"
       e.env_passthrough
   in
+  let* () =
+    gate t ~field:"agent.real_keys"
+      "puts the user's real provider keys in the agent's environment"
+      (if e.real_keys then [ "real_keys" ] else [])
+  in
   let servers = if List.mem `Mcp e.intercept then e.mcp else [] in
   let* () =
     all
@@ -137,12 +142,14 @@ let describe t =
       "Checkers (in check and in experiments) run in the sandbox too, with no \
        network and writes only to a temporary directory of their own.";
       (if t.trust_project then
-         "MCP servers, passed environment variables, writable paths outside \
-          this directory and checkers in sandbox auto or off are allowed: they \
-          run or reach outside the sandbox."
+         "MCP servers, passed environment variables, real provider keys in the \
+          agent's environment (agent.real_keys), writable paths outside this \
+          directory and checkers in sandbox auto or off are allowed: they run \
+          or reach outside the sandbox."
        else
-         "MCP servers, passed environment variables, writable paths outside \
-          this directory and checkers in sandbox auto or off are refused (the \
-          user allows them by starting serve-mcp with --trust-project).");
+         "MCP servers, passed environment variables, real provider keys in the \
+          agent's environment (agent.real_keys), writable paths outside this \
+          directory and checkers in sandbox auto or off are refused (the user \
+          allows them by starting serve-mcp with --trust-project).");
       Printf.sprintf "At most %d jobs run at once." t.max_jobs;
     ]

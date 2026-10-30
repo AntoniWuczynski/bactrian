@@ -49,6 +49,7 @@ type config = {
   timezone : string;
   replay : replay option;
   env_passthrough : string list;
+  real_keys : bool;
   variant_env : (string * string) list;
   checks : checks option;
   unenforced : string list;
@@ -268,10 +269,18 @@ let home_env ~state_dir ~temp_dir =
 let merge vars =
   List.fold_left (fun acc (k, v) -> (k, v) :: List.remove_assoc k acc) [] vars
 
+(* The placeholder, or with [real_keys] the real key when bactrian has one: a
+   provider without a key keeps the placeholder, which the proxy accepts either
+   way. *)
+let agent_key config ~keys ~token p =
+  match (config.real_keys, List.assoc_opt p keys) with
+  | true, Some key -> key
+  | true, None | false, _ -> "bactrian-" ^ token
+
 (* What bactrian sets for one run (design §5 step 2), with the variant's own
    variables. A command agent gets them as its environment and an HTTP agent in
    the [env] of its [start] message (design §5.1), so the two cannot differ. *)
-let run_variables config ~proxy ~port ~token ~run_id ~state_dir ~sim_now =
+let run_variables config ~keys ~proxy ~port ~token ~run_id ~state_dir ~sim_now =
   let ours =
     [
       ("SIM_NOW", sim_now);
@@ -283,7 +292,7 @@ let run_variables config ~proxy ~port ~token ~run_id ~state_dir ~sim_now =
         (fun (p, _, url_var) ->
           [
             (url_var, P.base_url proxy ~port ~token p);
-            (key_variable p, "bactrian-" ^ token);
+            (key_variable p, agent_key config ~keys ~token p);
           ])
         table
     @ (match config.mcp with
@@ -403,6 +412,7 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
               (fun (name, url) -> (name, `String (Uri.to_string url)))
               upstreams) );
        ("sandbox", Sandbox.label_json (Sandbox.label config.sandbox));
+       ("real_keys", `Bool config.real_keys);
        ("sandbox_violations", Sandbox.violations_json violations);
        ("outcome", `String (outcome_kind outcome));
        ( "reason",
@@ -560,8 +570,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     | Command _ | Http _ -> Ok (P.port proxy)
   in
   let variables =
-    run_variables config ~proxy ~port ~token ~run_id ~state_dir:state_dir_path
-      ~sim_now
+    run_variables config ~keys ~proxy ~port ~token ~run_id
+      ~state_dir:state_dir_path ~sim_now
   in
   let agent_process_env =
     process_env config variables ~state_dir:state_dir_path
@@ -645,6 +655,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         cassette = writer;
         ledger;
         keys;
+        real_keys = config.real_keys;
         upstream;
         connector;
         normalise;

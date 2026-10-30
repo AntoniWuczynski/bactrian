@@ -143,6 +143,66 @@ let test_mcp_environment =
     "no URL for a stdio server" "<unset>"
     (value "BACTRIAN_MCP_HTTP_CALENDAR")
 
+(* [agent.real_keys]: the agent holds the real key of a provider bactrian has
+   one for, the proxy takes it as the agent's credential, and it still reaches
+   neither the cassette nor the trace. *)
+let test_real_keys =
+  with_ctx "real-keys" @@ fun ctx ->
+  let plain = ok (execute ctx (config ())) in
+  Alcotest.(check string) "plain outcome" "passed" (outcome_name plain);
+  Alcotest.(check bool)
+    "labelled false by default" false
+    Yojson.Safe.Util.(
+      to_bool
+        (member "real_keys" (Yojson.Safe.from_file (file plain "meta.json"))));
+  let r = ok (execute ctx { (config ()) with real_keys = true }) in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check int)
+    "the proxy accepted the agent's key" 0 r.findings.refused_keys;
+  let env =
+    Yojson.Safe.Util.to_assoc (Yojson.Safe.from_file (file r "state/env.json"))
+  in
+  let value k = Yojson.Safe.Util.to_string (List.assoc k env) in
+  Alcotest.(check string)
+    "the real key" real_openai_key (value "OPENAI_API_KEY");
+  Alcotest.(check bool)
+    "a provider without a key keeps its placeholder" true
+    (String.starts_with ~prefix:"bactrian-" (value "ANTHROPIC_API_KEY"));
+  Alcotest.(check bool)
+    "labelled in meta.json" true
+    Yojson.Safe.Util.(
+      to_bool (member "real_keys" (Yojson.Safe.from_file (file r "meta.json"))));
+  List.iter
+    (fun name ->
+      Alcotest.(check bool)
+        (name ^ " has no real key")
+        false
+        (contains (read (file r name)) real_openai_key))
+    [ "cassette.jsonl"; "trace.jsonl"; "meta.json" ];
+  (* A replay of it needs no key at all. *)
+  let replay : Run.replay =
+    { from = r.run_id; matcher = Strict; allow_reorder = false; timing = Fast }
+  in
+  let replayed =
+    ok
+      (Run.execute ~random_bytes ~keys:[] ~env:ctx.env ~proxy:ctx.proxy
+         ~store:ctx.store
+         ~ledger:
+           (Ledger.create
+              ~path:Eio.Path.(ctx.dir / "ledger-replay.jsonl")
+              ~caps:(caps 100.))
+         { (config ~replay ~turns:[] ()) with real_keys = true })
+  in
+  Alcotest.(check string) "replay outcome" "passed" (outcome_name replayed);
+  let replay_env =
+    Yojson.Safe.Util.to_assoc
+      (Yojson.Safe.from_file (file replayed "state/env.json"))
+  in
+  Alcotest.(check bool)
+    "without a key, the placeholder" true
+    (String.starts_with ~prefix:"bactrian-"
+       (Yojson.Safe.Util.to_string (List.assoc "OPENAI_API_KEY" replay_env)))
+
 let test_environment =
   with_ctx "env" @@ fun ctx ->
   Unix.putenv "PARENT_ONLY_SECRET" "leak";
@@ -685,6 +745,7 @@ let () =
           Alcotest.test_case "records and derives the trace" `Slow test_record;
           Alcotest.test_case "environment is the allowlist" `Slow
             test_environment;
+          Alcotest.test_case "agent.real_keys" `Slow test_real_keys;
           Alcotest.test_case "MCP variables" `Slow test_mcp_environment;
         ] );
       ( "replay",

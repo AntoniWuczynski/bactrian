@@ -158,6 +158,34 @@ let test_load =
         s2)
     [ "a"; "b" ]
 
+(* A run's meta.json says whether its agent held the real keys, and a run from
+   before the field existed did not. *)
+let test_real_keys =
+  with_experiment "real-keys" @@ fun ctx ->
+  let l = load ctx in
+  List.iter
+    (fun (r : D.run) -> Alcotest.(check bool) "placeholders" false r.real_keys)
+    l.runs;
+  let chosen = List.hd l.runs in
+  let id = Option.get chosen.run_id in
+  let meta_path = Eio.Path.(ctx.root / "runs" / id / "meta.json") in
+  let meta =
+    match Yojson.Safe.from_string (Eio.Path.load meta_path) with
+    | `Assoc fields ->
+        `Assoc
+          (("real_keys", `Bool true) :: List.remove_assoc "real_keys" fields)
+    | _ -> Alcotest.fail "meta.json is not an object"
+  in
+  Eio.Path.save ~create:(`Or_truncate 0o600) meta_path
+    (Yojson.Safe.to_string meta);
+  let reloaded = load ctx in
+  Alcotest.(check (list bool))
+    "only the edited run"
+    (List.map
+       (fun (r : D.run) -> Option.equal String.equal r.run_id (Some id))
+       reloaded.runs)
+    (List.map (fun (r : D.run) -> r.real_keys) reloaded.runs)
+
 let test_settings =
   with_experiment "settings" @@ fun ctx ->
   let l = load ctx in
@@ -383,6 +411,7 @@ let () =
       ( "load",
         [
           Alcotest.test_case "runs, checks and measures" `Slow test_load;
+          Alcotest.test_case "real keys" `Slow test_real_keys;
           Alcotest.test_case "errors" `Slow test_errors;
           Alcotest.test_case "bad or missing experiment file" `Slow
             test_bad_experiment_file;

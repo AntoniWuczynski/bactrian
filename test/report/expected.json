@@ -20,6 +20,7 @@
   "unsandboxed_runs": 2,
   "checkers_unsandboxed_runs": 2,
   "clock_unenforced_runs": 4,
+  "real_keys_runs": 2,
   "exit": 3,
   "metrics": [
     {
@@ -436,6 +437,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": 0.01,
       "latency_ms": 930.0,
@@ -542,6 +544,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": 0.01,
       "latency_ms": 960.0,
@@ -639,6 +642,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": 0.01,
       "latency_ms": 990.0,
@@ -736,6 +740,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": 0.011,
       "latency_ms": 640.0,
@@ -820,6 +825,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": null,
       "latency_ms": null,
@@ -839,6 +845,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null,
       "cost_usd": 0.012,
       "latency_ms": 680.0,
@@ -925,6 +932,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -938,6 +946,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -951,6 +960,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -964,6 +974,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -977,6 +988,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -990,6 +1002,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1003,6 +1016,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1016,6 +1030,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1029,6 +1044,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1042,6 +1058,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1055,6 +1072,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1068,6 +1086,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1081,6 +1100,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1094,6 +1114,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1107,6 +1128,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1120,6 +1142,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1133,6 +1156,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1146,6 +1170,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1159,6 +1184,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1172,6 +1198,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1185,6 +1212,7 @@
       "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "checkers_unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "clock_unenforced": "static-binary",
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1198,6 +1226,7 @@
       "unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "checkers_unsandboxed": "unavailable: bubblewrap (bwrap) is not installed",
       "clock_unenforced": "static-binary",
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1211,6 +1240,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": "static-binary",
+      "real_keys": false,
       "sandbox_violations": "at least 2 (the system log can drop denials, so this is a lower bound)"
     },
     {
@@ -1224,6 +1254,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": "static-binary",
+      "real_keys": false,
       "sandbox_violations": "at least 2 (the system log can drop denials, so this is a lower bound)"
     },
     {
@@ -1237,6 +1268,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": true,
       "sandbox_violations": null
     },
     {
@@ -1250,6 +1282,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": true,
       "sandbox_violations": null
     },
     {
@@ -1263,6 +1296,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1276,6 +1310,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1289,6 +1324,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1302,6 +1338,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1315,6 +1352,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1328,6 +1366,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1341,6 +1380,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1354,6 +1394,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1367,6 +1408,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1380,6 +1422,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1393,6 +1436,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1406,6 +1450,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1419,6 +1464,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1432,6 +1478,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1445,6 +1492,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1458,6 +1506,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1471,6 +1520,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1484,6 +1534,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1497,6 +1548,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1510,6 +1562,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1523,6 +1576,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1536,6 +1590,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1549,6 +1604,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1562,6 +1618,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1575,6 +1632,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1588,6 +1646,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1601,6 +1660,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1614,6 +1674,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1627,6 +1688,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1640,6 +1702,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1653,6 +1716,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1666,6 +1730,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1679,6 +1744,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     },
     {
@@ -1692,6 +1758,7 @@
       "unsandboxed": null,
       "checkers_unsandboxed": null,
       "clock_unenforced": null,
+      "real_keys": false,
       "sandbox_violations": null
     }
   ]

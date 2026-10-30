@@ -64,6 +64,7 @@ let config c ~turns ~replay ~mcp sandbox : Run.config =
     timezone = c.timezone;
     replay;
     env_passthrough = c.env_passthrough;
+    real_keys = false;
     variant_env = [];
     fixtures = None;
     normalise = [];

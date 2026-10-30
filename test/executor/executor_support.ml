@@ -67,7 +67,8 @@ let scenario_json
     id weather_turn assertions checkers extra
 
 let experiment_json ctx ?(repeats = 2) ?(concurrency = 2)
-    ?(caps = {|{"openai": 100}|}) ?(seed = 3) ?(extra = "") ?(prelude = "") () =
+    ?(caps = {|{"openai": 100}|}) ?(seed = 3) ?(extra = "") ?(prelude = "")
+    ?(agent_extra = "") () =
   let variant name =
     Printf.sprintf
       {|%S: {"env": {"AGENT_LOG": %S, "AGENT_BLOCK": %S, "VARIANT_NAME": %S}}|}
@@ -75,13 +76,13 @@ let experiment_json ctx ?(repeats = 2) ?(concurrency = 2)
   in
   Printf.sprintf
     {|{"version": 1, "name": "demo",
- "agent": {"protocol": "command", "command": ["python3", "-I", "-c", %s]},
+ "agent": {"protocol": "command", "command": ["python3", "-I", "-c", %s]%s},
  "scenarios": ["scenarios/*.json"],
  "variants": {%s, %s},
  "repeats": %d, "concurrency": %d, "caps_usd": %s, "seed": %d%s}|}
     (Yojson.Safe.to_string
        (`String (prelude ^ agent_prefix ^ Weather_agent.script)))
-    (variant "a") (variant "b") repeats concurrency caps seed extra
+    agent_extra (variant "a") (variant "b") repeats concurrency caps seed extra
 
 let with_ctx name ?(scenarios = [ "s1"; "s2" ]) f () =
   Eio_main.run @@ fun env ->

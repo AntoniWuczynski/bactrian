@@ -12,7 +12,7 @@ type t = {
       (** [--trust-project]: the project's files may run commands and reach
           outside the sandbox (MCP servers, passed environment variables,
           writable paths outside the root, checkers in a mode other than
-          [strict]). *)
+          [strict], [agent.real_keys]). *)
   max_jobs : int;
       (** The most jobs ([run_start], [record_start], [replay_start]) running at
           once ([--max-jobs]). *)
@@ -59,12 +59,12 @@ val experiment :
   Bactrian_runtime.Executor.contents ->
   (unit, string) result
 (** Refuses an experiment loaded for [run_start] that the policy does not allow:
-    [env_passthrough], MCP servers, checkers in its scenarios unless the mode
-    (the result of {!sandbox}, else the experiment's own) is [strict], a
-    [sandbox.allow_write] path outside the root, [sandbox.backend: seatbelt]
-    (see {!backend}). Whatever the policy, it refuses an MCP stdio server's
-    [cwd] or a scenario's [fixtures] outside the root. The error names the key.
-*)
+    [env_passthrough], [agent.real_keys], MCP servers, checkers in its scenarios
+    unless the mode (the result of {!sandbox}, else the experiment's own) is
+    [strict], a [sandbox.allow_write] path outside the root,
+    [sandbox.backend: seatbelt] (see {!backend}). Whatever the policy, it
+    refuses an MCP stdio server's [cwd] or a scenario's [fixtures] outside the
+    root. The error names the key. *)
 
 val describe : t -> string
 (** The policy in a few sentences, for the server's instructions. *)

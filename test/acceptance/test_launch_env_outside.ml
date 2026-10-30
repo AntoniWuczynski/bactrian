@@ -230,6 +230,7 @@ let config ~sandbox ~go ?(mcp = []) ?checks () : Run.config =
     timezone = "UTC";
     replay = None;
     env_passthrough = [];
+    real_keys = false;
     variant_env = [ ("GO_FILE", go) ];
     fixtures = None;
     normalise = [];

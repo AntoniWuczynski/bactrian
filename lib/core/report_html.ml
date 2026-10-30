@@ -138,6 +138,7 @@ let warning = function
   | Some text -> [ para ~cls:[ "warning" ] text ]
 
 let clock_warning (d : D.t) = warning (F.clock_warning d)
+let real_keys_warning (d : D.t) = warning (F.real_keys_warning d)
 
 let violations_note (d : D.t) =
   match F.violations_note d with
@@ -662,7 +663,7 @@ let page (d : D.t) =
            ([ header d ]
            @ unsandboxed_warning d
            @ warning (F.checkers_warning d)
-           @ clock_warning d @ violations_note d
+           @ clock_warning d @ real_keys_warning d @ violations_note d
            @ [
                section "verdicts" "Verdicts"
                  (verdict_table d

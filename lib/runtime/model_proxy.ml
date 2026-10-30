@@ -59,6 +59,7 @@ type run = {
   cassette : Store.writer option;
   ledger : Ledger.t;
   keys : (provider * string) list;
+  real_keys : bool;
   upstream : provider -> Uri.t;
   connector : Upstream.connector;
   normalise : Re.re list;
@@ -795,15 +796,29 @@ let handle ?only t ((conn_sw, _), _) request body : response =
                 ~type_:"bactrian_unknown_provider"
                 ("unknown provider " ^ provider)
           | Some p -> (
-              let placeholder = "bactrian-" ^ st.run.token in
+              (* What the agent may present as its key: the placeholder, and
+                 for a run that put the real key in its environment
+                 ([real_keys]) that key too. *)
+              let accepted =
+                ("bactrian-" ^ st.run.token)
+                ::
+                (if st.run.real_keys then
+                   Option.to_list (List.assoc_opt p st.run.keys)
+                 else [])
+              in
               let in_header =
                 Option.map
-                  (String.equal (key_value p placeholder))
+                  (fun presented ->
+                    List.exists
+                      (fun key -> String.equal (key_value p key) presented)
+                      accepted)
                   (Http.Header.get headers (key_header p))
               and in_query =
                 match p with
                 | Gemini ->
-                    Option.map (String.equal placeholder)
+                    Option.map
+                      (fun presented ->
+                        List.exists (String.equal presented) accepted)
                       (Uri.get_query_param uri "key")
                 | Openai | Anthropic | Openrouter -> None
               in

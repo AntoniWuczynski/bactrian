@@ -127,6 +127,7 @@ let make ~index ~scenario ~variant ~repeat : R.run =
     checkers_unsandboxed = unsandboxed;
     clock_unenforced =
       (if scenario = "search" && repeat <= 2 then Some "static-binary" else None);
+    real_keys = scenario = "search" && repeat = 3;
     sandbox_violations =
       (if scenario = "search" && repeat = 2 then
          Some

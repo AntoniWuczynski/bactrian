@@ -331,6 +331,37 @@ let http_agent_strict ~experiment_file ~find experiment sandbox_override =
   | Ok { agent = Command _; _ }, _ | Ok _, (None | Some (`Auto | `Off)) -> []
   | Error _, _ -> []
 
+(* Likewise [agent.real_keys] under [--sandbox strict]. *)
+let real_keys_strict ~experiment_file ~find experiment sandbox_override =
+  match (experiment, sandbox_override) with
+  | Ok ({ real_keys = true; _ } : Experiment.t), Some `Strict ->
+      [
+        at_key ~experiment_file ~find "agent.real_keys"
+          ("--sandbox strict cannot be met with agent.real_keys: "
+         ^ Experiment.real_keys_strict_reason
+         ^ ". The MCP server allows auto and off when started with \
+            --allow-unsandboxed, and real_keys with --trust-project");
+      ]
+  | Ok { real_keys = true | false; _ }, (None | Some (`Auto | `Off))
+  | Ok { real_keys = false; _ }, Some `Strict
+  | Error _, _ ->
+      []
+
+(* What the user has accepted by writing [agent.real_keys] (design §5.2). *)
+let real_keys_warning ~applied ~keys =
+  let variables =
+    String.concat ", " (List.map (fun (p, _) -> Run.key_variable p) keys)
+  in
+  Printf.sprintf
+    "agent.real_keys: the agent's environment holds the real %s, not \
+     placeholders. %s It can also write a key into its replies, its trace and \
+     its standard error. The runs are labelled real_keys."
+    variables
+    (if applied then
+       "The sandbox still stops it from sending a key anywhere but to \
+        bactrian's proxy, but it can read it."
+     else "Nothing stops it from reading a key or sending it anywhere.")
+
 (* Every stage reports, so one round shows every mistake: the experiment, its
    globs, each scenario and the price file. A stage that needs a field of an
    experiment that did not decode reads it straight from the document. *)
@@ -399,6 +430,7 @@ let load ~fs ~experiment_file ~sandbox_override =
              loaded_scenarios;
            duplicate_ids ~fs ~dir scenarios;
            http_agent_strict ~experiment_file ~find experiment sandbox_override;
+           real_keys_strict ~experiment_file ~find experiment sandbox_override;
            (match pricing with Ok _ -> [] | Error es -> es);
          ])
   in
@@ -470,6 +502,7 @@ let run_config ~fs ~sandbox ~checker_sandbox (l : loaded)
     timezone = Option.value scenario.timezone ~default:"UTC";
     replay = None;
     env_passthrough = l.experiment.env_passthrough;
+    real_keys = l.experiment.real_keys;
     variant_env = variant.env;
     checks =
       Some
@@ -678,6 +711,8 @@ let run_experiment ?seatbelt_hint ?root
   on_sandbox (Sandbox.label sandbox);
   if has_checkers then on_checker_sandbox (Sandbox.label checker_sandbox);
   Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
+  if experiment.real_keys && not (List.is_empty keys) then
+    warn (real_keys_warning ~applied:(Sandbox.label sandbox).applied ~keys);
   let* jobs =
     List.mapi
       (fun i (p : planned) ->

@@ -49,6 +49,10 @@ type run = {
       (** Why the run's clock was contract-only, from its [meta.json] (a
           {!Clock_label.reason_name}). [None] when it was enforced or the run
           left no [meta.json]. *)
+  real_keys : bool;
+      (** The agent's environment held the real provider keys, from its
+          [meta.json] ([agent.real_keys]). [false] when it held placeholders or
+          the run left no [meta.json]. *)
   sandbox_violations : string option;
       (** What the sandbox recorded denying, in one line that says how far it
           can be trusted ("at least 2 (the system log can drop denials, ...)"),
@@ -211,10 +215,12 @@ val to_json : t -> Yojson.Safe.t
     ["schema_version"]. *)
 
 (** Each run carries ["unsandboxed"], ["checkers_unsandboxed"],
-    ["clock_unenforced"] and ["sandbox_violations"] (the text, or [null]) and
-    the header ["unsandboxed_runs"], ["checkers_unsandboxed_runs"] and
-    ["clock_unenforced_runs"], the number of runs outside the sandbox, with
-    checkers outside it and with a contract-only clock. *)
+    ["clock_unenforced"] and ["sandbox_violations"] (the text, or [null]),
+    ["real_keys"] (a boolean) and the header ["unsandboxed_runs"],
+    ["checkers_unsandboxed_runs"], ["clock_unenforced_runs"] and
+    ["real_keys_runs"], the number of runs outside the sandbox, with checkers
+    outside it, with a contract-only clock and with the real keys in the agent's
+    environment. *)
 
 val summary_json : t -> Yojson.Safe.t
 (** {!to_json} without behaviours, failures (and their traces) and the execution

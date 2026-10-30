@@ -287,6 +287,44 @@ let test_unenforced_warned_and_recorded =
            J.(to_list (member "unenforced" (run_meta ctx id)))))
     (run_ids s)
 
+(* [agent.real_keys]: the user is warned once, every run says so in its
+   meta.json, and the run works. Under [--sandbox strict] it is refused. *)
+
+let test_real_keys =
+  with_ctx "real-keys" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx ~agent_extra:{|, "real_keys": true|} ());
+  let warnings = ref [] in
+  let s = ok (go ~warn:(fun w -> warnings := w :: !warnings) ctx) in
+  Alcotest.(check (list string))
+    "all passed"
+    (List.init (List.length (run_ids s)) (fun _ -> "passed"))
+    (kinds s);
+  (match
+     List.filter (String.starts_with ~prefix:"agent.real_keys") !warnings
+   with
+  | [ w ] ->
+      mentions "OPENAI_API_KEY" w;
+      mentions "Nothing stops it" w
+  | l -> Alcotest.failf "expected one warning, got %d" (List.length l));
+  List.iter
+    (fun id ->
+      Alcotest.(check bool)
+        "labelled" true
+        J.(to_bool (member "real_keys" (run_meta ctx id))))
+    (run_ids s)
+
+let test_real_keys_refused_under_strict =
+  with_ctx "real-keys-strict" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx ~agent_extra:{|, "real_keys": true|} ());
+  match go ~sandbox:(Some `Strict) ctx with
+  | Error (E.Configuration [ e ]) ->
+      Alcotest.(check string) "path" "agent.real_keys" e.path;
+      mentions "--sandbox strict" e.message
+  | Ok _ | Error (E.Configuration _ | E.Environment _ | E.Usage _) ->
+      Alcotest.fail "expected one configuration error"
+
 (* Duplicate scenario IDs are configuration errors, reported with the
    others. *)
 
@@ -395,6 +433,9 @@ let () =
       ( "settings",
         [
           Alcotest.test_case "sandbox strict" `Quick test_sandbox_strict;
+          Alcotest.test_case "real keys" `Slow test_real_keys;
+          Alcotest.test_case "real keys under strict" `Quick
+            test_real_keys_refused_under_strict;
           Alcotest.test_case "unenforced settings" `Slow
             test_unenforced_warned_and_recorded;
         ] );

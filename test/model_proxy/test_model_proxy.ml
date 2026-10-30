@@ -252,6 +252,85 @@ let gemini_query_key =
   let findings = P.unregister ctx.proxy ~token:token_a in
   Alcotest.(check int) "refused keys" 1 findings.refused_keys
 
+let contains s sub =
+  let n = String.length sub in
+  let rec go i =
+    i + n <= String.length s
+    && (String.equal (String.sub s i n) sub || go (i + 1))
+  in
+  go 0
+
+(* A run whose agent holds the real keys *)
+
+let agent_with_real_keys =
+  Alcotest.test_case "a run with real_keys also accepts its real key" `Quick
+  @@ with_ctx "real-keys"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  let run =
+    make_run ~agent_has_real_keys:true ctx ~token:token_a
+      ~upstream:(F.base_url up)
+  in
+  P.register ctx.proxy run;
+  let real = send_fixture ctx ~token:token_a ~key:"real-openai-key" f in
+  check_ok real;
+  Alcotest.(check int) "the real key" f.status real.status;
+  let placeholder = send_fixture ctx ~token:token_a f in
+  Alcotest.(check int) "the placeholder still works" f.status placeholder.status;
+  let other = send_fixture ctx ~token:token_a ~key:"real-anthropic-key" f in
+  Alcotest.(check int) "another provider's key" 403 other.status;
+  Alcotest.(check int)
+    "both reached the upstream, with the real key" 2
+    (List.length
+       (List.filter
+          (fun (r : F.request) ->
+            List.assoc_opt "authorization" r.headers
+            = Some "Bearer real-openai-key")
+          (F.requests up)));
+  let findings = P.unregister ctx.proxy ~token:token_a in
+  Alcotest.(check int) "one refusal" 1 findings.refused_keys;
+  let recorded = recording ctx run in
+  Alcotest.(check bool)
+    "the real key is not in the cassette" false
+    (List.exists
+       (fun (e : Cassette.exchange) ->
+         contains (Cassette.exchange_line e) "real-openai-key")
+       recorded.exchanges)
+
+let real_key_refused_without_real_keys =
+  Alcotest.test_case "a run without real_keys refuses the real key" `Quick
+  @@ with_ctx "real-keys-refused"
+  @@ fun ctx ->
+  let f = fixture "openai_chat" "luna_nonstream" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy (make_run ctx ~token:token_a ~upstream:(F.base_url up));
+  let r = send_fixture ctx ~token:token_a ~key:"real-openai-key" f in
+  Alcotest.(check int) "refused" 403 r.status;
+  Alcotest.(check int) "nothing forwarded" 0 (List.length (F.requests up))
+
+let gemini_real_key_in_the_query =
+  Alcotest.test_case "Gemini accepts the real key in the key query" `Quick
+  @@ with_ctx "gemini-real-key"
+  @@ fun ctx ->
+  let f = fixture "gemini_generate" "flash_stream_json" in
+  let up = fake ctx (F.Fixtures fixtures_root) in
+  P.register ctx.proxy
+    (make_run ~agent_has_real_keys:true ctx ~token:token_a
+       ~upstream:(F.base_url up));
+  let r =
+    send ctx ~token:token_a ~provider:P.Gemini ~meth:f.meth f.path
+      ~query:
+        (f.query
+        ^ (if String.equal f.query "" then "" else "&")
+        ^ "key=real-gemini-key")
+      ~headers:f.request_headers f.request
+  in
+  check_ok r;
+  Alcotest.(check int) "status" f.status r.status;
+  let sent = only (F.requests up) in
+  Alcotest.(check string) "key removed from the query" f.query sent.query
+
 (* Errors in findings *)
 
 let errors_in_findings =
@@ -516,14 +595,6 @@ let routing =
   ignore (P.unregister ctx.proxy ~token:token_a);
   Alcotest.(check int) "nothing forwarded" 0 (List.length (F.requests up))
 
-let contains s sub =
-  let n = String.length sub in
-  let rec go i =
-    i + n <= String.length s
-    && (String.equal (String.sub s i n) sub || go (i + 1))
-  in
-  go 0
-
 (* Run settings: normalise, redact, pricing *)
 
 let with_text text body =
@@ -742,7 +813,16 @@ let () =
     [
       ("record", record_cases);
       ("streaming", [ streaming; dropped_stream; agent_disconnect; late_finish ]);
-      ("keys", [ placeholder_keys; gemini_query_key; unknown_model; routing ]);
+      ( "keys",
+        [
+          placeholder_keys;
+          gemini_query_key;
+          agent_with_real_keys;
+          real_key_refused_without_real_keys;
+          gemini_real_key_in_the_query;
+          unknown_model;
+          routing;
+        ] );
       ("after the request", [ failed_after_send; refused_connection ]);
       ( "errors",
         [ scripted_429; errors_in_findings; unattributed_count; body_limit ] );

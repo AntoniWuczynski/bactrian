@@ -144,6 +144,17 @@ let clock_warning (d : Report_data.t) =
                come from the clock."
             else ""))
 
+let real_keys_warning (d : Report_data.t) =
+  match List.filter (fun (r : Report_data.run) -> r.real_keys) d.order with
+  | [] -> None
+  | runs ->
+      Some
+        (Printf.sprintf
+           "%d of %d runs had the real provider keys in the agent's \
+            environment (agent.real_keys), so the agent could read them and \
+            could have written one into its replies or its standard error."
+           (List.length runs) (List.length d.order))
+
 let violations_note (d : Report_data.t) =
   match
     List.filter_map (fun (r : Report_data.run) -> r.sandbox_violations) d.order

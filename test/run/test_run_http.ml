@@ -130,6 +130,24 @@ let test_clock =
        (fun k -> k = "LD_PRELOAD" || String.starts_with ~prefix:"FAKETIME" k)
        (List.map fst s.env))
 
+(* [agent.real_keys]: the key travels in the start message to the server the
+   user started, which then calls the proxy with it. *)
+let test_real_keys =
+  with_ctx "http-real-keys" @@ fun ctx ->
+  with_agent ctx @@ fun agent ->
+  let r =
+    ok (execute ctx { (http_config (H.url agent)) with real_keys = true })
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  let s = List.hd (H.sessions agent) in
+  Alcotest.(check string)
+    "the real key in the env" real_openai_key
+    (List.assoc "OPENAI_API_KEY" s.env);
+  Alcotest.(check (option int)) "the proxy took it" (Some 200) s.model_status;
+  Alcotest.(check bool)
+    "it is not in the trace" false
+    (contains (read (file r "trace.jsonl")) real_openai_key)
+
 let test_concurrent_runs =
   with_ctx "http-concurrent" @@ fun ctx ->
   with_agent ~start_delay:0.3 ctx @@ fun agent ->
@@ -200,6 +218,7 @@ let () =
       ( "http mode",
         [
           Alcotest.test_case "the env contract" `Slow test_env_contract;
+          Alcotest.test_case "agent.real_keys" `Slow test_real_keys;
           Alcotest.test_case "the clock is a contract" `Slow test_clock;
           Alcotest.test_case "concurrent runs" `Slow test_concurrent_runs;
           Alcotest.test_case "unreachable server" `Slow test_unreachable;

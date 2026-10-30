@@ -80,6 +80,7 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     timezone = "UTC";
     replay;
     env_passthrough = [];
+    real_keys = false;
     variant_env = [];
     fixtures = None;
     normalise = [];
