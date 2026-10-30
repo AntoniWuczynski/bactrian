@@ -350,7 +350,10 @@ let test_tls_refused =
    with
   | exception Tls_eio.Tls_failure _ -> ()
   | _ -> Alcotest.fail "an agent that does not trust the CA fails");
-  let status, _ = connect_status ~creds:(creds token_a) w ~host:"not_a_host" in
+  let status, _ =
+    connect_status ~creds:(creds token_a) ~until_closed:true w
+      ~host:"not_a_host"
+  in
   Alcotest.(check int) "the CONNECT itself is answered" 200 status;
   let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
   Alcotest.(check bool) "the agent's alert is noted" true (noted f "TLS");

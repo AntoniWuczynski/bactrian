@@ -367,8 +367,9 @@ let read_response r =
   let status = (split_response status_line).status in
   { status; head = String.concat "\n" lines; body; ended = true }
 
-(* The status of a refused CONNECT. *)
-let connect_status ?creds w ~host =
+(* The status of a refused CONNECT. With [until_closed], waits for the proxy to
+   end the tunnel, by when it has noted what went wrong inside it. *)
+let connect_status ?creds ?(until_closed = false) w ~host =
   let net = Eio.Stdenv.net w.ctx.env in
   Eio.Switch.run @@ fun sw ->
   let socket =
@@ -393,6 +394,7 @@ let connect_status ?creds w ~host =
     | l -> headers (String.lowercase_ascii l :: acc)
   in
   let hs = headers [] in
+  if until_closed then ignore (Eio.Buf_read.take_all reader);
   ( (match String.split_on_char ' ' status_line with
     | _ :: code :: _ -> int_of_string code
     | _ -> 0),
