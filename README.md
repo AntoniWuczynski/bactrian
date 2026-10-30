@@ -352,19 +352,19 @@ The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the
 
 ## Installing a release
 
-Available once the first release is tagged. Each release on the [releases page](https://github.com/AntoniWuczynski/bactrian/releases) has `bactrian-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-arm64` (both static, so they need no libraries) and `macos-arm64`, plus `SHA256SUMS`.
+Available once the first release is tagged. Each release on the [releases page](https://github.com/AntoniWuczynski/bactrian/releases) has `bactrian-<tag>-<target>.tar.gz`, where `<tag>` is the release tag such as `v0.1.0`, for `linux-x86_64`, `linux-arm64` (both static, so they need no libraries) and `macos-arm64`, plus `SHA256SUMS`.
 
 Download the archive and its `.sha256` file from the same release, check the checksum, and only then extract:
 
 ```sh
-shasum -a 256 -c bactrian-<version>-<target>.tar.gz.sha256   # or sha256sum -c on Linux
-tar -xzf bactrian-<version>-<target>.tar.gz
-./bactrian-<version>-<target>/bactrian doctor
+shasum -a 256 -c bactrian-<tag>-<target>.tar.gz.sha256   # or sha256sum -c on Linux
+tar -xzf bactrian-<tag>-<target>.tar.gz
+./bactrian-<tag>-<target>/bactrian doctor
 ```
 
 Put `bactrian` on your `PATH`. The sandbox, clock and container requirements in [Checking the host](#checking-the-host) still apply.
 
-The macOS binary is signed ad hoc and not notarised. An archive downloaded in a browser is quarantined, and Gatekeeper then refuses the first run. Remove the mark after extracting with `xattr -dr com.apple.quarantine ./bactrian-<version>-macos-arm64`. An archive fetched with `curl` carries no mark.
+The macOS binary is signed ad hoc and not notarised. An archive downloaded in a browser is quarantined, and Gatekeeper then refuses the first run. Remove the mark after extracting with `xattr -dr com.apple.quarantine ./bactrian-<tag>-macos-arm64`. An archive fetched with `curl` carries no mark.
 
 Every pull request builds and checks the three archives without publishing them. A tag publishes them only if the tagged commit is on `main`, its CI run passed and `bactrian --version` equals the tag without its `v`. The release job waits for that CI run if it is still going. If the CI run fails, fix it on `main` and tag the fixed commit, and if it passes on a re-run, re-run the release workflow's failed jobs. A tag with a suffix, such as `v0.1.0-rc.1`, publishes a prerelease. All of this is described in [decision record 0016](docs/decisions/0016-release-binaries.md) describes.
 
