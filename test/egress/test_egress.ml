@@ -104,6 +104,10 @@ let test_flags () =
       (None, [ "=record" ]);
       (None, [ "a=allow" ]);
       (Some "open", []);
+      (None, [ "https://a.example=block" ]);
+      (None, [ "*.a.example=block" ]);
+      (None, [ "a.example/v1=block" ]);
+      (None, [ "a.example=record"; "A.example.=block" ]);
     ]
 
 let test_canonical () =

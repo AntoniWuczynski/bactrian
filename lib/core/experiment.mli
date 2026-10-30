@@ -145,6 +145,15 @@ val mcp_http_clash : http_names:string list -> string -> string option
     another name of [http_names] has the same one, so the agent could not tell
     the two servers apart. *)
 
+val egress_host : string -> (string, string) result
+(** An egress host key in the form the policy compares ({!Trace.host_key}).
+    [Error] unless it is a DNS name or an IP address, with or without a port: a
+    scheme, a wildcard or a path is refused. *)
+
+val egress_host_errors : (string * 'a) list -> (string * string) list
+(** The keys of an egress host list that {!egress_host} refuses, or that name
+    the same host as another key before them, each with its message. *)
+
 val policies : (string * policy) list
 (** Every policy with its name in an experiment file: [record], [replay],
     [passthrough] and [block]. *)

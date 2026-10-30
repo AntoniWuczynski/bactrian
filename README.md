@@ -113,7 +113,7 @@ intercept: [model, mcp, fixtures, egress]
 egress: { default: block, hosts: { "api.weather.example": record, "search.example:8443": passthrough } }
 ```
 
-and for `bactrian record`, `--egress HOST=POLICY` (repeatable) and `--egress-default POLICY`. A host is matched as `host:port` first, then as `host`, without regard to case or a trailing dot. An experiment whose `intercept` leaves out `egress` but lists hosts, or a default other than `block`, gets a warning, also listed under `unenforced`, because its agent's HTTPS then goes direct wherever the sandbox lets it. The policies:
+and for `bactrian record`, `--egress HOST=POLICY` (repeatable) and `--egress-default POLICY`. A host is matched as `host:port` first, then as `host`, without regard to case or a trailing dot. A key is a DNS name or an IP address, with or without a port: a scheme, a wildcard, a path or two keys for the same host is a configuration error. An experiment whose `intercept` leaves out `egress` but lists hosts, or a default other than `block`, gets a warning, also listed under `unenforced`, because its agent's HTTPS then goes direct wherever the sandbox lets it. The policies:
 
 - `record`: called and recorded when recording, answered from the recording in a replay. `bactrian replay` uses the policy the recording was made with.
 - `replay`: always answered from the recording, and refused as a replay miss when there is none.

@@ -67,4 +67,5 @@ val node_env_proxy : string -> (bool, string) result
 val of_flags : default:string option -> string list -> (t, string) result
 (** The policy of [record]'s [--egress-default POLICY] (default [block]) and
     [--egress HOST=POLICY] flags. [Error] names a flag that is not [HOST=POLICY]
-    or a policy that is not [record], [replay], [passthrough] or [block]. *)
+    or a policy that is not [record], [replay], [passthrough] or [block], a host
+    that {!Experiment.egress_host} refuses, and a host named twice. *)

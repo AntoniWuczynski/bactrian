@@ -2,57 +2,14 @@ type policy = Experiment.policy
 type t = { default : policy; hosts : (string * policy) list }
 
 let block_all = { default = Block; hosts = [] }
+let host_port = Trace.host_port
+let authority = Trace.authority
 
-let host_port host port =
-  if String.contains host ':' then Printf.sprintf "[%s]:%d" host port
-  else Printf.sprintf "%s:%d" host port
-
-let port_of text =
-  match int_of_string_opt text with
-  | Some p
-    when p >= 1 && p <= 65535
-         && String.for_all (fun c -> c >= '0' && c <= '9') text ->
-      Ok p
-  | Some _ | None -> Error (Printf.sprintf "%S is not a port" text)
-
-let authority target =
-  let bad () = Error (Printf.sprintf "%S is not host:port" target) in
-  let ( let* ) = Result.bind in
-  let named host port =
-    match Trace.host_name host with "" -> bad () | host -> Ok (host, port)
-  in
-  if String.length target > 0 && Char.equal target.[0] '[' then
-    match String.index_opt target ']' with
-    | Some close
-      when close + 1 < String.length target && Char.equal target.[close + 1] ':'
-      ->
-        let host = String.sub target 1 (close - 1) in
-        let* port =
-          port_of
-            (String.sub target (close + 2) (String.length target - close - 2))
-        in
-        named host port
-    | Some _ | None -> bad ()
-  else
-    match String.rindex_opt target ':' with
-    | Some i when i > 0 && not (String.contains (String.sub target 0 i) ':') ->
-        let* port =
-          port_of (String.sub target (i + 1) (String.length target - i - 1))
-        in
-        named (String.sub target 0 i) port
-    | Some _ | None -> bad ()
-
-(* A key names [host] or [host:port], in any case and with or without the
-   trailing dot. *)
 let policy t ~host ~port =
-  let normal key =
-    match authority key with
-    | Ok (h, p) -> host_port h p
-    | Error _ -> Trace.host_name key
-  in
   let find name =
     List.find_map
-      (fun (k, p) -> if String.equal (normal k) name then Some p else None)
+      (fun (k, p) ->
+        if String.equal (Trace.host_key k) name then Some p else None)
       t.hosts
   in
   let host = Trace.host_name host in
@@ -214,4 +171,6 @@ let of_flags ~default flags =
             Error (Printf.sprintf "--egress %S: expected HOST=POLICY" flag))
       flags (Ok [])
   in
-  Ok { default; hosts }
+  match Experiment.egress_host_errors hosts with
+  | [] -> Ok { default; hosts }
+  | (key, m) :: _ -> Error (Printf.sprintf "--egress %s: %s" key m)
