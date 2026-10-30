@@ -145,6 +145,14 @@ let test_era_of_request () =
   check "Mcp-Name in Base64" "modern"
     (edit (set "Mcp-Name" "=?base64?cnVuX3N0YXJ0?=") "tools/call" call)
     (rpc ~id:1 "tools/call" call);
+  check "MCP-Protocol-Version in Base64" "-32020"
+    (edit
+       (set "MCP-Protocol-Version" "=?base64?MjAyNi0wNy0yOA==?=")
+       "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "Mcp-Method in Base64" "-32020"
+    (edit (set "Mcp-Method" "=?base64?dG9vbHMvY2FsbA==?=") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
   check "an Mcp-Name outside ASCII" "-32020"
     (edit (set "Mcp-Name" "run_start\xc3\xa9") "tools/call" call)
     (rpc ~id:1 "tools/call" call);

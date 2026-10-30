@@ -145,12 +145,13 @@ let mismatch id message : Mcp_msg.message =
       data = None;
     }
 
-(* A header that must be there and equal what the body says. *)
-let matching headers id name ~body =
+(* A header that must be there and equal what the body says. Only [Mcp-Name]
+   may come in Base64. *)
+let matching ?(encoded = false) headers id name ~body =
   match Http.Header.get headers name with
   | None -> Error (mismatch id (name ^ " header is missing"))
   | Some raw -> (
-      match header_value raw with
+      match if encoded then header_value raw else Some raw with
       | None -> Error (mismatch id (name ^ " header holds invalid characters"))
       | Some v when String.equal v body -> Ok ()
       | Some v ->
@@ -190,7 +191,8 @@ let era_of_request headers (msg : Mcp_msg.message) :
           let* () = matching headers id "Mcp-Method" ~body:method_ in
           let* () =
             match Option.bind (named_member method_) str with
-            | Some name -> matching headers id "Mcp-Name" ~body:name
+            | Some name ->
+                matching ~encoded:true headers id "Mcp-Name" ~body:name
             | None -> Ok ()
           in
           Ok Mcp_dispatch.Modern
