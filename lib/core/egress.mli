@@ -27,6 +27,15 @@ val authority : string -> (string * int, string) result
 val host_port : string -> int -> string
 (** [host:port], with brackets around an IPv6 address. *)
 
+val target :
+  host:string -> port:int -> string -> (string * string option, string) result
+(** The path and the query (as sent, without the ['?']) of a request target on a
+    tunnel to [host:port]: the origin form [/path?query], or the absolute form
+    [https://host[:port]/path?query] when it names the tunnel's own host and
+    port (443 when it gives none). [Error] for any other form (another host,
+    user information, another scheme, [*], a fragment), so that a request on a
+    tunnel cannot reach a host other than the one its [CONNECT] named. *)
+
 val canonical :
   authority:string ->
   meth:string ->

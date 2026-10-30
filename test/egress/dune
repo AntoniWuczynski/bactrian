@@ -1,5 +1,5 @@
-(test
- (name test_egress)
+(tests
+ (names test_egress test_egress_requests)
  (package bactrian)
  (libraries
   bactrian.core

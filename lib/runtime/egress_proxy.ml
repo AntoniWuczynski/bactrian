@@ -132,11 +132,14 @@ let exchange r x outcome : Cassette.exchange =
     outcome;
   }
 
-let live r ~authority x ~record ~log =
+(* Built from the CONNECT host and port, never from text the agent sent, so
+   that the request goes nowhere else. *)
+let live r ~host ~port ~authority x ~record ~log =
   let url =
-    Uri.of_string
-      (Printf.sprintf "https://%s%s%s" authority x.path
-         (match x.raw_query with Some q -> "?" ^ q | None -> ""))
+    let base = Uri.with_path (Uri.make ~scheme:"https" ~host ~port ()) x.path in
+    match x.raw_query with
+    | Some q -> Uri.with_query base (Uri.query_of_encoded q)
+    | None -> base
   in
   let head = ref None and chunks = ref [] in
   let result =
@@ -224,8 +227,8 @@ let recorded r ~log (e : Cassette.exchange) =
               | Finished when not complete -> Dropped
               | (Chunk _ | Finished | Dropped) as item -> item))
 
-let normalised_query uri =
-  Uri.query uri
+let normalised_query raw =
+  Uri.query_of_encoded (Option.value raw ~default:"")
   |> List.concat_map (fun (k, vs) ->
       match vs with
       | [] -> [ (k, "") ]
@@ -233,31 +236,39 @@ let normalised_query uri =
   |> List.sort (fun (k1, v1) (k2, v2) ->
       match String.compare k1 k2 with 0 -> String.compare v1 v2 | n -> n)
 
-let handle r ~host ~authority act request body : response =
+let handle r ~host ~port ~authority act request body : response =
   let meth = Http.Method.to_string (Http.Request.meth request) in
-  let uri = Uri.of_string (Http.Request.resource request) in
-  let path = match Uri.path uri with "" -> "/" | p -> p in
+  let resource = Http.Request.resource request in
+  let target = Egress.target ~host ~port resource in
+  let path = match target with Ok (p, _) -> p | Error _ -> resource in
   let headers = Http.Header.to_list (Http.Request.headers request) in
   let t_ms = r.shared.t_ms () in
   let log status = r.logged { t_ms; meth; host; path; status } in
-  match read_body ~max_body:r.max_body body with
-  | Too_large ->
+  match (read_body ~max_body:r.max_body body, target) with
+  | Too_large, _ ->
       log 413;
       r.shared.note
         (Printf.sprintf "egress to %s: request body too large" authority);
       error_response ~status:413 ~type_:"bactrian_payload_too_large"
         (Printf.sprintf "the request body is over %d bytes" r.max_body)
-  | Body _ when Option.is_some (header "upgrade" headers) ->
+  | Body _, _ when Option.is_some (header "upgrade" headers) ->
       log 501;
       r.shared.note
         (Printf.sprintf "egress to %s: an upgrade (WebSocket) was refused"
            authority);
       error_response ~status:501 ~type_:"bactrian_unsupported"
         "bactrian does not intercept WebSocket or other upgraded connections"
-  | Body body -> (
+  | Body _, Error reason ->
+      log 400;
+      r.shared.note (Printf.sprintf "egress to %s: %s" authority reason);
+      error_response ~status:400 ~type_:"bactrian_bad_request" reason
+  | Body body, Ok (_, query) -> (
+      let raw_query = match query with Some "" -> None | q -> q in
       let scrubbed = r.shared.scrub body in
       let query =
-        List.map (fun (k, v) -> (k, r.shared.scrub v)) (normalised_query uri)
+        List.map
+          (fun (k, v) -> (k, r.shared.scrub v))
+          (normalised_query raw_query)
       in
       let canonical =
         r.shared.mask
@@ -270,8 +281,7 @@ let handle r ~host ~authority act request body : response =
         {
           meth;
           path;
-          raw_query =
-            (match Uri.verbatim_query uri with Some "" -> None | q -> q);
+          raw_query;
           headers;
           body;
           scrubbed;
@@ -282,20 +292,20 @@ let handle r ~host ~authority act request body : response =
         }
       in
       match (act, r.shared.serving) with
-      | Forward { record }, _ -> live r ~authority x ~record ~log
+      | Forward { record }, _ -> live r ~host ~port ~authority x ~record ~log
       | From_recording, Replaying { decide } -> (
           match decide ~t_ms x.request with
           | Serve { exchange = e; _ } -> recorded r ~log e
           | Refuse d -> miss r ~log d
-          | Go_live -> live r ~authority x ~record:true ~log)
+          | Go_live -> live r ~host ~port ~authority x ~record:true ~log)
       | No_recording, _ | From_recording, Live _ ->
           miss r ~log (Missing_request { request = x.request; nearest = None }))
 
-let serve r ~conn ~host ~authority act tls =
+let serve r ~conn ~host ~port ~authority act tls =
   let server =
     Cohttp_eio.Server.make_expert
       ~callback:(fun _conn request body ->
-        handle r ~host ~authority act request body)
+        handle r ~host ~port ~authority act request body)
       ()
   in
   try
@@ -351,5 +361,5 @@ let connect r ~conn ~target =
               | Error reason ->
                   r.shared.note
                     (Printf.sprintf "egress to %s: %s" authority reason)
-              | Ok tls -> serve r ~conn ~host ~authority act tls);
+              | Ok tls -> serve r ~conn ~host ~port ~authority act tls);
               raise Tunnel_closed ))

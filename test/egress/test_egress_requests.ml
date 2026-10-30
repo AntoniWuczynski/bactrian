@@ -1,0 +1,109 @@
+(* Requests on an egress tunnel: which request targets reach the tunnel's host
+   and which are refused. *)
+
+open Bactrian_runtime
+open Proxy_support
+open Egress_world
+
+let () = Mirage_crypto_rng_unix.use_default ()
+
+let test_target () =
+  let target = E.target ~host:"api.example.com" ~port:443 in
+  let ok = Alcotest.(result (pair string (option string)) string) in
+  let accepted text expected =
+    Alcotest.check ok text (Ok expected) (target text)
+  in
+  accepted "/v1/x?a=1&b" ("/v1/x", Some "a=1&b");
+  accepted "//other.example/x" ("//other.example/x", None);
+  accepted "/a:@127.0.0.1/x" ("/a:@127.0.0.1/x", None);
+  accepted "https://API.example.com/p?q=1" ("/p", Some "q=1");
+  accepted "https://api.example.com:443" ("/", None);
+  accepted "https://api.example.com?q" ("/", Some "q");
+  List.iter
+    (fun text ->
+      Alcotest.(check bool) text true (Result.is_error (target text)))
+    [
+      "a:@127.0.0.1%3A9/stolen";
+      "@127.0.0.1:9/x";
+      "https://other.example/p";
+      "https://api.example.com:8443/p";
+      "https://x@api.example.com/p";
+      "https://api.example.com@other.example/p";
+      "http://api.example.com/p";
+      "*";
+      "/p#fragment";
+      "api.example.com:443";
+    ];
+  Alcotest.(check bool)
+    "an IPv6 tunnel" true
+    (Result.is_ok (E.target ~host:"::1" ~port:9 "https://[::1]:9/p"))
+
+(* With localhost passed through and 127.0.0.1 blocked, a request on the
+   localhost tunnel must not reach 127.0.0.1, whatever its target says. The
+   fake server answers on both names, so the backend counts what got through. *)
+let test_targets_stay_on_the_tunnel =
+  with_world "targets" @@ fun w ->
+  let _ =
+    register w ~token:token_a (Some (policy [ ("localhost", Passthrough) ]))
+  in
+  let on_localhost ?host_header path =
+    through ~target_host:"localhost" ?host_header ~creds:(creds token_a) w
+      ~meth:"GET" ~path ()
+  in
+  List.iter
+    (fun path ->
+      let a = on_localhost path in
+      Alcotest.(check int) path 400 a.status;
+      Alcotest.(check int)
+        (path ^ ": nothing reached the server")
+        0
+        (List.length (F.requests w.up)))
+    [
+      Printf.sprintf "a:@127.0.0.1%%3A%d/stolen?secret=1" w.https;
+      Printf.sprintf "https://127.0.0.1:%d/stolen" w.https;
+      Printf.sprintf "https://localhost:%d@127.0.0.1:%d/stolen" w.https w.https;
+      Printf.sprintf "@127.0.0.1:%d/stolen" w.https;
+    ];
+  let absolute =
+    on_localhost (Printf.sprintf "https://localhost:%d/abs?x=1" w.https)
+  in
+  Alcotest.(check (pair int string))
+    "the absolute form of the tunnel's own host"
+    (200, {|{"path":"/abs","query":"x=1","body":""}|})
+    (absolute.status, absolute.body);
+  let fronted = on_localhost ~host_header:"127.0.0.1" "/fronted" in
+  Alcotest.(check int) "another Host header is answered" 200 fronted.status;
+  let host_seen =
+    match List.rev (F.requests w.up) with
+    | last :: _ -> List.assoc_opt "host" last.headers
+    | [] -> None
+  in
+  Alcotest.(check (option string))
+    "but sent to the tunnel's host"
+    (Some (Printf.sprintf "localhost:%d" w.https))
+    host_seen;
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check (list (pair string int)))
+    "the trace names the tunnel's host"
+    [
+      ("localhost", 400);
+      ("localhost", 400);
+      ("localhost", 400);
+      ("localhost", 400);
+      ("localhost", 200);
+      ("localhost", 200);
+    ]
+    (List.map
+       (fun (c : Bactrian_core.Trace_builder.http_call) -> (c.host, c.status))
+       f.http_calls)
+
+let () =
+  Alcotest.run "egress requests"
+    [
+      ( "targets",
+        [
+          Alcotest.test_case "request target forms" `Quick test_target;
+          Alcotest.test_case "requests stay on the tunnel's host" `Quick
+            test_targets_stay_on_the_tunnel;
+        ] );
+    ]

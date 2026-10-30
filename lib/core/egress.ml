@@ -52,6 +52,48 @@ let authority target =
         Ok (String.lowercase_ascii (String.sub target 0 i), port)
     | Some _ | None -> bad ()
 
+let split_query text =
+  match String.index_opt text '?' with
+  | None -> (text, None)
+  | Some i ->
+      ( String.sub text 0 i,
+        Some (String.sub text (i + 1) (String.length text - i - 1)) )
+
+let target ~host ~port text =
+  let bad why = Error (Printf.sprintf "request target %S: %s" text why) in
+  let scheme = "https://" in
+  let n = String.length scheme in
+  if String.contains text '#' then bad "a fragment is not sent to a server"
+  else if String.starts_with ~prefix:"/" text then Ok (split_query text)
+  else if
+    String.length text >= n
+    && String.equal (String.lowercase_ascii (String.sub text 0 n)) scheme
+  then
+    let rest = String.sub text n (String.length text - n) in
+    let stop =
+      String.to_seq rest
+      |> Seq.find_index (fun c -> Char.equal c '/' || Char.equal c '?')
+      |> Option.value ~default:(String.length rest)
+    in
+    let named = String.sub rest 0 stop in
+    let path, query =
+      split_query (String.sub rest stop (String.length rest - stop))
+    in
+    let path = if String.equal path "" then "/" else path in
+    let parsed =
+      match authority named with
+      | Ok v -> Ok v
+      | Error _ -> authority (named ^ ":443")
+    in
+    match parsed with
+    | Ok (h, p) when String.equal h (String.lowercase_ascii host) && p = port ->
+        Ok (path, query)
+    | Ok _ | Error _ ->
+        bad
+          (Printf.sprintf "only %s can be asked for on this tunnel"
+             (host_port host port))
+  else bad "only a path, or an https URL of the tunnel's host, is accepted"
+
 let canonical ~authority ~meth ~path ~query ~content_type body =
   let body =
     if String.equal body "" then Canon.null

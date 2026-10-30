@@ -68,6 +68,9 @@ val connect :
 
     A replay miss gets 409 with [bactrian_replay_miss] and the divergence, an
     upstream failure 502 with [bactrian_upstream_error], an [Upgrade] request (a
-    WebSocket) 501 with [bactrian_unsupported]. Forwarded requests go to
-    [https://<target><path>] through the run's TLS connector, without the hop by
-    hop and proxy headers. *)
+    WebSocket) 501 with [bactrian_unsupported], and a request target that is
+    neither a path nor an [https] URL of the tunnel's own host and port
+    ({!Bactrian_core.Egress.target}) 400 with [bactrian_bad_request]. Forwarded
+    requests go to the [CONNECT] host and port, with the request's path and
+    query, through the run's TLS connector, without the hop by hop and proxy
+    headers (the [Host] header is the tunnel's). *)
