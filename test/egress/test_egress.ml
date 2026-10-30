@@ -280,7 +280,17 @@ let test_ca_leaves =
   let recent = leaf ~sim_now:(days_ago 30) "past.example" in
   Alcotest.(check bool)
     "reused for the same SIM_NOW" true
-    (List.hd recent == List.hd (leaf ~sim_now:(days_ago 30) "past.example"))
+    (List.hd recent == List.hd (leaf ~sim_now:(days_ago 30) "past.example"));
+  (* A SIM_NOW in the last week of 9999 is refused with a result, and the CA's
+     lock is still usable afterwards. *)
+  let last_week =
+    Option.get (Ptime.of_date_time ((9999, 12, 30), ((0, 0, 0), 0)))
+  in
+  Alcotest.(check bool)
+    "a SIM_NOW too late to name" true
+    (Result.is_error
+       (Ca.leaf ca ~now:(now ()) ~sim_now:last_week ~host:"late.example"));
+  ignore (leaf "late.example")
 
 (* The proxy *)
 

@@ -53,4 +53,6 @@ val leaf :
     libfaketime reads) to 7 days after the later, and never after the CA. A host
     gets one leaf, reused while it is valid from at least a day before the
     earlier until at least a day after the later, however many fibres ask for it
-    at once. [Error] for a host that is neither a name nor an address. *)
+    at once. [Error] for a host that is neither a name nor an address, and for
+    times so late that the leaf would end after the last time a certificate can
+    name (the end of 9999). *)

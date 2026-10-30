@@ -16,15 +16,14 @@ type origin = Loaded | Created
 
 let msg r = Result.map_error (fun (`Msg m) -> m) r
 
-let days d =
-  match Ptime.Span.of_float_s (float_of_int d *. 86_400.) with
-  | Some s -> s
-  | None -> assert false (* a few days fit in a span *)
-
 let shift now d =
-  match Ptime.add_span now (days d) with
-  | Some t -> t
-  | None -> assert false (* now plus or minus a year is a valid time *)
+  match Ptime.add_span now (Ptime.Span.of_int_s (d * 86_400)) with
+  | Some t -> Ok t
+  | None ->
+      Error
+        (Format.asprintf
+           "%a plus %d days is past the last time a certificate can name"
+           (Ptime.pp_rfc3339 ()) now d)
 
 let dn cn =
   [
@@ -52,9 +51,10 @@ let mint now =
            (singleton Subject_key_id
               (false, X509.Public_key.id (X509.Private_key.public signer)))))
   in
+  let* valid_until = shift now 365 in
   let* cert =
     sign ~issuer:signer ~issuer_dn:name ~subject_key:signer ~subject:name
-      ~extensions ~valid_from:Ptime.epoch ~valid_until:(shift now 365)
+      ~extensions ~valid_from:Ptime.epoch ~valid_until
   in
   Ok (signer, cert)
 
@@ -239,16 +239,19 @@ let leaf t ~now ~sim_now ~host =
   let earliest, latest =
     if Ptime.is_earlier sim_now ~than:now then (sim_now, now) else (now, sim_now)
   in
+  (* Worked out before the lock is taken, so that a time too late to name
+     fails here and not in the critical section. *)
+  let* reuse_from = shift earliest (-1) in
+  let* reuse_until = shift latest 1 in
+  let* valid_from = shift earliest (-2) in
+  let* until = shift latest 7 in
   Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
       match Hosts.find_opt t.leaves host with
-      | Some (chain, from, until)
-        when Ptime.is_earlier from ~than:(shift earliest (-1))
-             && Ptime.is_later until ~than:(shift latest 1) ->
+      | Some (chain, from, cached_until)
+        when Ptime.is_earlier from ~than:reuse_from
+             && Ptime.is_later cached_until ~than:reuse_until ->
           Ok chain
       | Some _ | None ->
-          let valid_from = shift earliest (-2) in
-          let* chain, until =
-            mint_leaf t ~valid_from ~until:(shift latest 7) ~host
-          in
+          let* chain, until = mint_leaf t ~valid_from ~until ~host in
           Hosts.replace t.leaves host (chain, valid_from, until);
           Ok chain)
