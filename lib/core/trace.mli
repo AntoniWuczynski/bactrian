@@ -67,7 +67,7 @@ type event =
   | Http_call of {
       turn : int;
       meth : string;  (** ["method"] on the wire. *)
-      host : string;
+      host : string;  (** In the form {!host_name} gives. *)
       path : string;
       status : int;
     }
@@ -75,6 +75,11 @@ type event =
   | Reply of { turn : int; content : string }
   | Sandbox_violation of { kind : string; detail : string }
   | Done
+
+val host_name : string -> string
+(** A host name as an [Http_call] holds it and [no_egress] compares it:
+    lowercased, without one trailing dot, so that [Example.COM.] is
+    [example.com]. *)
 
 type entry = { seq : int; t_ms : int; event : event }
 

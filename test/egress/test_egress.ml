@@ -19,6 +19,8 @@ let test_authority () =
   Alcotest.check pair "name" ("api.example.com", 443) (ok "API.Example.com:443");
   Alcotest.check pair "address" ("127.0.0.1", 8443) (ok "127.0.0.1:8443");
   Alcotest.check pair "IPv6" ("::1", 9) (ok "[::1]:9");
+  Alcotest.check pair "a trailing dot" ("secret.example", 443)
+    (ok "Secret.Example.:443");
   List.iter
     (fun bad ->
       Alcotest.(check bool) bad true (Result.is_error (E.authority bad)))
@@ -32,6 +34,7 @@ let test_authority () =
       "[::1]";
       "::1:443";
       "[]:1";
+      ".:443";
     ];
   Alcotest.(check string) "host_port" "[::1]:9" (E.host_port "::1" 9)
 
@@ -51,6 +54,27 @@ let test_policy () =
     (at "api.example.com" 8443);
   Alcotest.(check string) "default" "block" (at "other.example.com" 443);
   Alcotest.(check string) "case" "record" (at "API.EXAMPLE.COM" 443);
+  Alcotest.(check string) "a trailing dot" "record" (at "api.example.com." 443);
+  (* A permissive default with one host blocked: the dot must not get past. *)
+  let deny : E.t =
+    {
+      default = Passthrough;
+      hosts = [ ("secret.example", Block); ("other.example.:8443", Block) ];
+    }
+  in
+  let denied host port = name (E.policy deny ~host ~port) in
+  List.iter
+    (fun target ->
+      match E.authority target with
+      | Ok (host, port) ->
+          Alcotest.(check string) target "block" (denied host port)
+      | Error m -> Alcotest.fail m)
+    [
+      "secret.example:443";
+      "SECRET.example:443";
+      "secret.example.:443";
+      "other.example:8443";
+    ];
   match E.of_json (E.to_json t) with
   | Ok back ->
       Alcotest.(check string)

@@ -375,13 +375,12 @@ let limit name ~actual ~max ~show =
          (show max))
 
 let check_egress hosts trace =
-  let wanted = List.map String.lowercase_ascii hosts in
+  let wanted = List.map Trace.host_name hosts in
   let hits =
     List.filter_map
       (fun (e : Trace.entry) ->
         match e.event with
-        | Http_call { host; _ }
-          when List.mem (String.lowercase_ascii host) wanted ->
+        | Http_call { host; _ } when List.mem (Trace.host_name host) wanted ->
             Some host
         | Http_call _ | Run_start _ | Turn_start _ | Model_call _ | Tool_call _
         | Tool_result _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done

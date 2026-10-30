@@ -9,7 +9,7 @@ type t = {
   default : policy;  (** For a host the list does not name. *)
   hosts : (string * policy) list;
       (** Keyed by [host] or [host:port] ([[v6]:port] for an IPv6 address),
-          compared without regard to case. *)
+          compared without regard to case or a trailing dot. *)
 }
 
 val block_all : t
@@ -17,12 +17,13 @@ val block_all : t
 
 val policy : t -> host:string -> port:int -> policy
 (** The entry for [host:port] if there is one, else the one for [host], else
-    [default]. *)
+    [default]. Names are compared as {!Trace.host_name} gives them. *)
 
 val authority : string -> (string * int, string) result
 (** The host, lowercased and without IPv6 brackets, and port of a [CONNECT]
-    request target: [host:port] or [[v6]:port]. The port must be from 1 to
-    65535. *)
+    request target: [host:port] or [[v6]:port]. The host is in the form
+    {!Trace.host_name} gives, so [Example.com.:443] names [example.com]. The
+    port must be from 1 to 65535. *)
 
 val host_port : string -> int -> string
 (** [host:port], with brackets around an IPv6 address. *)

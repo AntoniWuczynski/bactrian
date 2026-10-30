@@ -18,6 +18,7 @@ let test_target () =
   accepted "/a:@127.0.0.1/x" ("/a:@127.0.0.1/x", None);
   accepted "https://API.example.com/p?q=1" ("/p", Some "q=1");
   accepted "https://api.example.com:443" ("/", None);
+  accepted "https://api.example.com.:443/p" ("/p", None);
   accepted "https://api.example.com?q" ("/", Some "q");
   List.iter
     (fun text ->

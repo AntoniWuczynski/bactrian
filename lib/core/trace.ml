@@ -71,6 +71,12 @@ type event =
   | Sandbox_violation of { kind : string; detail : string }
   | Done
 
+let host_name host =
+  let host = String.lowercase_ascii host in
+  if String.ends_with ~suffix:"." host then
+    String.sub host 0 (String.length host - 1)
+  else host
+
 type entry = { seq : int; t_ms : int; event : event }
 
 type error =

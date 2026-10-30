@@ -7,18 +7,6 @@ let host_port host port =
   if String.contains host ':' then Printf.sprintf "[%s]:%d" host port
   else Printf.sprintf "%s:%d" host port
 
-let policy t ~host ~port =
-  let find name =
-    List.find_map
-      (fun (k, p) ->
-        if String.equal (String.lowercase_ascii k) name then Some p else None)
-      t.hosts
-  in
-  let host = String.lowercase_ascii host in
-  match find (host_port host port) with
-  | Some p -> p
-  | None -> Option.value (find host) ~default:t.default
-
 let port_of text =
   match int_of_string_opt text with
   | Some p
@@ -30,6 +18,9 @@ let port_of text =
 let authority target =
   let bad () = Error (Printf.sprintf "%S is not host:port" target) in
   let ( let* ) = Result.bind in
+  let named host port =
+    match Trace.host_name host with "" -> bad () | host -> Ok (host, port)
+  in
   if String.length target > 0 && Char.equal target.[0] '[' then
     match String.index_opt target ']' with
     | Some close
@@ -40,8 +31,7 @@ let authority target =
           port_of
             (String.sub target (close + 2) (String.length target - close - 2))
         in
-        if String.equal host "" then bad ()
-        else Ok (String.lowercase_ascii host, port)
+        named host port
     | Some _ | None -> bad ()
   else
     match String.rindex_opt target ':' with
@@ -49,8 +39,26 @@ let authority target =
         let* port =
           port_of (String.sub target (i + 1) (String.length target - i - 1))
         in
-        Ok (String.lowercase_ascii (String.sub target 0 i), port)
+        named (String.sub target 0 i) port
     | Some _ | None -> bad ()
+
+(* A key names [host] or [host:port], in any case and with or without the
+   trailing dot. *)
+let policy t ~host ~port =
+  let normal key =
+    match authority key with
+    | Ok (h, p) -> host_port h p
+    | Error _ -> Trace.host_name key
+  in
+  let find name =
+    List.find_map
+      (fun (k, p) -> if String.equal (normal k) name then Some p else None)
+      t.hosts
+  in
+  let host = Trace.host_name host in
+  match find (host_port host port) with
+  | Some p -> p
+  | None -> Option.value (find host) ~default:t.default
 
 let split_query text =
   match String.index_opt text '?' with
@@ -86,7 +94,7 @@ let target ~host ~port text =
       | Error _ -> authority (named ^ ":443")
     in
     match parsed with
-    | Ok (h, p) when String.equal h (String.lowercase_ascii host) && p = port ->
+    | Ok (h, p) when String.equal h (Trace.host_name host) && p = port ->
         Ok (path, query)
     | Ok _ | Error _ ->
         bad
