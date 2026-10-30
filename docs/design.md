@@ -2,7 +2,7 @@
 
 This document describes how bactrian is designed. Sections are numbered so that code comments can point at them. Parts of the design that the current build does not implement are marked as planned. The README's Status section says what works today, and [`decisions/`](decisions/) records individual choices with their reasons.
 
-Planned, not yet implemented: interception of HTTPS egress, HTTPS to providers (live calls work only to an `http` upstream, see decision 0012), HTTPS for HTTP-mode agents, the `ca` command and published JSON Schemas.
+Planned, not yet implemented: interception of HTTPS egress, HTTPS to providers (live calls work only to an `http` upstream, see decision 0012), HTTPS for HTTP-mode agents and the `ca` command.
 
 ## 1. Purpose
 
@@ -226,7 +226,7 @@ Labels and violations:
 
 ## 6. File formats
 
-Human-written files are YAML (JSON accepted). Machine-written files are JSON Lines. Every format has a `version`. Hand-written JSON Schemas in `schemas/` are planned. Unknown fields are rejected. Project data lives in `.bactrian/` (runs, blobs, CA, ledger), which users are told to gitignore.
+Human-written files are YAML (JSON accepted). Machine-written files are JSON Lines. Every format has a `version`, except `meta.json`, `verdicts.json` and `ledger.jsonl`, which do not carry one yet. Unknown fields are rejected. Hand-written JSON Schemas (draft 2020-12) in `schemas/` describe each of them, the agent protocol lines, a checker's input and verdict, and the `--json` output of `compare` and `plan`. They are validated in tests only, against real files and fixtures (decision record 0016). Project data lives in `.bactrian/` (runs, blobs, CA, ledger), which users are told to gitignore.
 
 ### Scenario
 
@@ -431,6 +431,7 @@ Crash safety: cassettes and the ledger are append-only JSON Lines, flushed per r
    - sandbox: escape-attempt agents in TypeScript and Python (`test/sandbox/`) make one model call through the proxy, then try a direct HTTPS request ignoring proxy variables, a raw TCP connection, a WebSocket, a DNS lookup, a write to `$HOME` and outside the state directory, a read of a deny-listed path, and a write to the Linux forwarder's violation log through `/proc/<parent>/fd/3`, which must be refused for permission. Every attempt must fail, and each reports its own outcome. On macOS each must also appear as a `sandbox_violation` event. On Linux the operating system logs nothing, so the agent's reported failure is the evidence. The agent dumps its environment, and the test searches it and every file of the run's world for the real provider key, which is set in bactrian's own environment as well. It must find the placeholder and never the key.
    - the virtual machine (gated on a working runtime, required on the Linux runner of continuous integration): the TypeScript and Python example agents' record, replay and divergence cycle in pinned `node` and `uv` images, the escape agents, a `/proc` and process-arguments search for a host sentinel that finds nothing in the container and finds it under Seatbelt, and no container left after a run, SIGINT, a bactrian killed with SIGKILL, or bactrian, the bridge and the `docker` client all killed. The relay alone, with its input open and silent, stops after the 10-second heartbeat timeout, and a labelled container of a dead process is removed by the next preflight. The bridge is also tested against a fake relay on every host, and the frames by property
    - launch environments from outside: while a sandboxed run is live, the test harness reads the launch environment of bactrian (the real binary as `bactrian replay`, started with a sentinel key), the agent, the Linux forwarder, an MCP stdio server and a checker, as another process of the user would (`ps -E` on macOS, `/proc/<pid>/environ` on Linux), and the sentinel must be in none of them. bactrian starts MCP servers and checkers only in live runs, which need the TLS connector, so those two come from a run through the library. A `python3` started with the sentinel is the positive control.
+   - schemas: `dune build @schemas` runs an experiment, a diverging replay, `compare`, `plan` and `check` against a fake upstream, and a uv-managed Python script validates every file they leave behind against `schemas/`. It also validates hand-written fixtures for the variants one run does not reach, rejects the invalid fixtures, and rejects copies of every valid document with an unknown field added to any object (outside the members that hold any JSON) or with its version removed or changed. The scenario and experiment fixtures go through bactrian's own decoders as well, which must reject exactly the invalid ones.
 6. Determinism: the same inputs and seed give a byte-identical JSON report.
 7. Live smoke tests are opt-in, limited by spend caps, and never run in continuous integration, because a public repository's workflows get no secrets.
 8. Continuous integration on GitHub Actions: Ubuntu and macOS arm64, strict warnings in the dev profile, an `ocamlformat` check, a locked opam install, the test layers above, and the example agents built with pnpm and uv.
@@ -450,7 +451,7 @@ The facts below were checked in October 2026 against vendor documentation and lo
 | YAML | yaml 3.2.0 | Vendors libyaml, links statically. |
 | CLI | cmdliner 2.1.1 | 2.x removed prefix matching. |
 | Testing | Alcotest, QCheck 0.91, qcheck-stm 0.10 | |
-| Schemas (planned) | hand-written JSON Schemas, validated in tests | OCaml JSON Schema validators are young, so they would be test-only. |
+| Schemas | hand-written JSON Schemas (2020-12), validated in tests by a uv-managed Python script (jsonschema 4.26) | OCaml JSON Schema validators are young, so they are test-only. |
 | HTML | tyxml 5.0.0 | |
 | Storage | plain files, no SQLite in v1 | `sqlite3` links the system library, which complicates static builds. |
 | Statistics | hand-rolled, tested against SciPy and statsmodels fixtures | Owl's last release was January 2025. `pareto` does not install on OCaml 5. |

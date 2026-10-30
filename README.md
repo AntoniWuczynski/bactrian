@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). Prebuilt binaries are not built yet. Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
 
@@ -350,6 +350,10 @@ claude mcp add bactrian -- bactrian serve-mcp --trust-project
 
 The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the 2025-11-25 revision and earlier for clients that open with `initialize`. Cursor is one of those, as it does not speak 2026-07-28 yet. The reasoning is in [`docs/decisions/0011-mcp-server.md`](docs/decisions/0011-mcp-server.md).
 
+## JSON Schemas
+
+Every file format bactrian reads or writes has a hand-written JSON Schema (draft 2020-12) in [`schemas/`](schemas/): the scenario, experiment and price files you write, and the files a run leaves behind (`cassette.jsonl`, `trace.jsonl`, `meta.json`, `verdicts.json`, `divergences.json`, the experiment's `manifest.json` and `ledger.jsonl`). The agent protocol lines, a checker's input and verdict, and the `--json` output of `compare` and `plan` have one each too. Point an editor at them for completion and checking of your YAML. Unknown fields are rejected, as bactrian itself does. They are validated in tests only: bactrian reads its files with its own strict decoders, and `dune build @schemas` checks that the two agree (see [Building from source](#building-from-source)). `meta.json`, `verdicts.json` and `ledger.jsonl` carry no version field yet, and the other `--json` outputs have no schema yet.
+
 ## Building from source
 
 You need [opam](https://opam.ocaml.org). From the repository root:
@@ -366,6 +370,12 @@ opam exec -- dune test
 pnpm install --frozen-lockfile --dir examples/agents/typescript
 pnpm --dir examples/agents/typescript build
 uv sync --locked --project examples/agents/python
+```
+
+The schemas have an alias of their own, `opam exec -- dune build @schemas`, which needs python3 and uv. The test binary runs an experiment, a diverging replay, `compare`, `plan` and `check` against a fake upstream, and `dev/schemas/validate.py` validates the files they leave behind, then the hand-written fixtures in `dev/schemas/fixtures`, then copies of both with an unknown field added or the version removed, which must be rejected. The fixtures are also fed to bactrian's own decoders, which must reject the same invalid ones. Prepare the validator first:
+
+```sh
+uv sync --locked --project dev/schemas
 ```
 
 The design decisions behind the code are recorded in [`docs/decisions/`](docs/decisions/).
