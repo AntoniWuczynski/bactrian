@@ -135,7 +135,7 @@ jobs:
       - name: Linux binaries are static
         if: runner.os == 'Linux'
         run: |
-          file ./bactrian-*/bactrian
+          file ./bactrian-*/bactrian | tee /dev/stderr | grep -Eq 'statically linked|static-pie linked'
           # No program interpreter and no needed library. ldd is no test, as it
           # exits 0 for a static-pie binary.
           if readelf -lW ./bactrian-*/bactrian | grep INTERP; then exit 1; fi
