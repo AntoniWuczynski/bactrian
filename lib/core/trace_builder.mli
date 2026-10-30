@@ -11,6 +11,17 @@ type agent_event =
       (** Something the sandbox denied: a [Sandbox_violation], placed by time.
       *)
 
+type http_call = {
+  t_ms : int;
+  meth : string;
+  host : string;
+  path : string;
+  status : int;
+}
+(** An HTTPS call the egress proxy saw: refused at [CONNECT] (method [CONNECT],
+    empty path), served from a recording, refused as a replay miss, or
+    forwarded, recorded or not. *)
+
 type input = {
   run_id : string;
   scenario : string;
@@ -20,6 +31,9 @@ type input = {
   cassette : Cassette.t;
   agent : agent_event list;  (** In the order they happened. *)
   resolve : Cassette.payload -> string option;  (** Reads blobs. *)
+  http : http_call list;
+      (** The run's egress calls. Each becomes an [Http_call] of the turn in
+          progress at its [t_ms], placed by time. *)
 }
 
 val build : input -> Trace.entry list

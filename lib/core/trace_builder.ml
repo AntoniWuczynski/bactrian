@@ -5,6 +5,14 @@ type agent_event =
   | Got_error of { t_ms : int; turn : int; message : string }
   | Got_violation of { t_ms : int; kind : string; detail : string }
 
+type http_call = {
+  t_ms : int;
+  meth : string;
+  host : string;
+  path : string;
+  status : int;
+}
+
 type input = {
   run_id : string;
   scenario : string;
@@ -14,6 +22,7 @@ type input = {
   cassette : Cassette.t;
   agent : agent_event list;
   resolve : Cassette.payload -> string option;
+  http : http_call list;
 }
 
 module Int_set = Set.Make (Int)
@@ -306,6 +315,24 @@ let build (i : input) =
             None)
       i.agent
   in
+  let http_of turn =
+    List.filter_map
+      (fun (c : http_call) ->
+        if turn_of_time c.t_ms = turn then
+          Some
+            (Say
+               ( c.t_ms,
+                 Trace.Http_call
+                   {
+                     turn;
+                     meth = c.meth;
+                     host = c.host;
+                     path = c.path;
+                     status = c.status;
+                   } ))
+        else None)
+      i.http
+  in
   let closing_of turn =
     List.filter_map
       (function
@@ -330,7 +357,7 @@ let build (i : input) =
     let timeline =
       List.stable_sort
         (fun a b -> Int.compare (item_time a) (item_time b))
-        (events_of turn @ List.map (fun e -> Exchange e) mine)
+        (events_of turn @ http_of turn @ List.map (fun e -> Exchange e) mine)
     in
     let st, body =
       List.fold_left

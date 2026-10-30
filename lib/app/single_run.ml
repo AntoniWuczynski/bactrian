@@ -53,7 +53,7 @@ let positive_timeouts c =
   let* () = positive "--turn-timeout" c.turn_timeout in
   positive "--total-timeout" c.total_timeout
 
-let config c ~turns ~replay ~mcp sandbox : Run.config =
+let config c ~turns ~replay ~mcp ~egress sandbox : Run.config =
   {
     agent = Command c.agent;
     cwd = c.cwd;
@@ -76,6 +76,7 @@ let config c ~turns ~replay ~mcp sandbox : Run.config =
     mcp;
     sandbox;
     faketime = true;
+    egress = Some egress;
   }
 
 let cap_variable name = "BACTRIAN_CAP_" ^ String.uppercase_ascii name
@@ -187,7 +188,7 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                             in
                             match Live_preflight.https_refusal ~tls mcp with
                             | Some m -> Error (Command_error.Environment m)
-                            | None ->
+                            | None -> (
                                 Option.iter warn
                                   (Sandbox.mcp_warning sandbox config.mcp);
                                 Option.iter warn
@@ -197,10 +198,22 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                                      if live then
                                        Live_preflight.https_funded caps upstream
                                      else []));
-                                Result.map_error
-                                  (fun m -> Command_error.Usage m)
-                                  (Run.execute ~upstream ~connector ~env ~proxy
-                                     ~store ~ledger config)))
+                                match
+                                  match config.egress with
+                                  | None -> Ok None
+                                  | Some _ ->
+                                      Result.map Option.some
+                                        (Features.interception
+                                           (Eio.Stdenv.process_mgr env)
+                                           ~root:(Eio.Path.native_exn root) ())
+                                with
+                                | Error m -> Error (Command_error.Environment m)
+                                | Ok interception ->
+                                    Result.map_error
+                                      (fun m -> Command_error.Usage m)
+                                      (Run.execute ~upstream ~connector
+                                         ?interception ~env ~proxy ~store
+                                         ~ledger config))))
                   with
                   | Error signal ->
                       Error

@@ -607,12 +607,13 @@ let unenforced t =
              cannot reset the server between them";
           ]
       | Command _ -> []);
-      (if List.mem `Egress t.intercept then
-         [
-           "egress: the agent's own network traffic is not recorded, and is \
-            blocked only in a sandboxed run";
-         ]
-       else []);
+      (match t.agent with
+      | Http _ when List.mem `Egress t.intercept ->
+          [
+            "egress: an HTTP-mode agent is a server bactrian does not start, \
+             so its own HTTPS traffic is not intercepted";
+          ]
+      | Http _ | Command _ -> []);
       (match t.mcp with
       | _ :: _ when not (List.mem `Mcp t.intercept) ->
           [

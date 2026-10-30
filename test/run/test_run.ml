@@ -221,6 +221,51 @@ let test_environment =
       ("OPENROUTER_BASE_URL", "openrouter/api/v1");
     ]
 
+(* Egress: the proxy and trust variables, and the bundle in tmp. *)
+let test_egress_environment =
+  with_ctx "egress-env" @@ fun ctx ->
+  let interception : Egress_proxy.interception =
+    {
+      tls =
+        {
+          terminate = (fun ~host:_ _ -> Error "not in this test");
+          failure = (fun _ -> None);
+        };
+      bundle = "-----BEGIN CERTIFICATE-----\n";
+    }
+  in
+  let c = { (config ()) with egress = Some Egress.block_all } in
+  (match execute ctx c with
+  | Error m ->
+      Alcotest.(check bool) "no CA is a setup error" true (contains m "CA")
+  | Ok _ -> Alcotest.fail "egress without an interception must not run");
+  let r = ok (execute ~interception ctx c) in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  let env =
+    Yojson.Safe.Util.to_assoc (Yojson.Safe.from_file (file r "state/env.json"))
+  in
+  let value k = Yojson.Safe.Util.to_string (List.assoc k env) in
+  let token = String.sub (value "OPENAI_API_KEY") 9 32 in
+  let port = Option.get (Uri.port (Uri.of_string (value "OPENAI_BASE_URL"))) in
+  let proxy = Printf.sprintf "http://%s:%s@127.0.0.1:%d" r.run_id token port in
+  Alcotest.(check string) "HTTPS_PROXY" proxy (value "HTTPS_PROXY");
+  Alcotest.(check string) "https_proxy" proxy (value "https_proxy");
+  Alcotest.(check string) "NODE_USE_ENV_PROXY" "1" (value "NODE_USE_ENV_PROXY");
+  List.iter
+    (fun k ->
+      Alcotest.(check string) k (file r "tmp/bactrian-trust.pem") (value k))
+    [ "SSL_CERT_FILE"; "NODE_EXTRA_CA_CERTS"; "REQUESTS_CA_BUNDLE" ];
+  Alcotest.(check bool)
+    "no HTTP_PROXY for the model calls" false
+    (List.mem_assoc "HTTP_PROXY" env);
+  Alcotest.(check bool)
+    "the bundle is deleted at teardown" false
+    (Sys.file_exists (file r "tmp/bactrian-trust.pem"));
+  let meta = Yojson.Safe.from_file (file r "meta.json") in
+  Alcotest.(check string)
+    "meta.json egress" {|{"default":"block","hosts":{}}|}
+    (Yojson.Safe.to_string (Yojson.Safe.Util.member "egress" meta))
+
 (* Replay *)
 
 let strict =
@@ -686,6 +731,7 @@ let () =
           Alcotest.test_case "environment is the allowlist" `Slow
             test_environment;
           Alcotest.test_case "MCP variables" `Slow test_mcp_environment;
+          Alcotest.test_case "egress variables" `Slow test_egress_environment;
         ] );
       ( "replay",
         [

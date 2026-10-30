@@ -92,16 +92,17 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     mcp = [];
     sandbox = Sandbox.off;
     faketime = false;
+    egress = None;
   }
 
-let execute ?connector ?random_bytes:(rb = random_bytes) ?(cap = 100.)
-    ?(ledger_name = string_of_int !counter) ctx config =
+let execute ?connector ?interception ?random_bytes:(rb = random_bytes)
+    ?(cap = 100.) ?(ledger_name = string_of_int !counter) ctx config =
   let ledger =
     Ledger.create
       ~path:Eio.Path.(ctx.dir / ("ledger-" ^ ledger_name ^ ".jsonl"))
       ~caps:(caps cap)
   in
-  Run.execute ?connector ~random_bytes:rb
+  Run.execute ?connector ?interception ~random_bytes:rb
     ~keys:[ (P.Openai, real_openai_key) ]
     ~upstream:(fun _ -> Uri.of_string (F.base_url ctx.up))
     ~env:ctx.env ~proxy:ctx.proxy ~store:ctx.store ~ledger config

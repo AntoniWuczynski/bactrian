@@ -378,6 +378,9 @@ let record_start =
           mcp_stdio = r.mcp_stdio;
           mcp_http = r.mcp_http;
           mcp_policy = r.mcp_policy;
+          (* No tool argument opens egress yet, so every host is blocked. *)
+          egress = [];
+          egress_default = None;
         }
       in
       let* () = usage (Record_command.validate request) in

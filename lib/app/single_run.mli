@@ -48,10 +48,12 @@ val config :
   turns:string list ->
   replay:Run.replay option ->
   mcp:Mcp_proxy.config list ->
+  egress:Bactrian_core.Egress.t ->
   Sandbox.t ->
   Run.config
 (** The run configuration of a command-line run: no checks, fixtures, pricing
-    other than the default table, or variant environment. *)
+    other than the default table, or variant environment, and the agent's egress
+    intercepted under [egress]. *)
 
 val execute :
   ?stop:Interrupt.trigger ->
@@ -70,7 +72,8 @@ val execute :
     lacks, or [vm] without an image, is [Usage]), starts the model proxy and
     runs the configuration the function builds from the store and the
     preflight's decision. [bactrian_exe] is the executable the sandbox re-runs
-    as its probe.
+    as its probe. A configuration that intercepts egress gets the project CA in
+    [.bactrian/ca], made when missing (an [Error] is [Environment]).
 
     Seeds the random generator, and must be called inside [Eio_main.run]. A
     command that starts agents needs a launch environment free of secrets, so

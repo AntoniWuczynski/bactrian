@@ -49,6 +49,7 @@ let run ?stop ~on_progress ~bactrian_exe ~env r =
       Single_run.execute ?stop ~on_progress ~bactrian_exe ~env ~live
         ~sandbox:r.common.sandbox (fun store sandbox ->
           let* mcp = Run.recorded_mcp store ~from:r.from in
+          let* egress = Run.recorded_egress store ~from:r.from in
           Ok
             (Single_run.config r.common ~turns:[]
                ~replay:
@@ -59,7 +60,7 @@ let run ?stop ~on_progress ~bactrian_exe ~env r =
                       allow_reorder = r.allow_reorder;
                       timing = r.timing;
                     })
-               ~mcp sandbox))
+               ~mcp ~egress sandbox))
 
 let exit_code = Single_run.exit_code
 let to_json = Single_run.to_json

@@ -155,8 +155,8 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce (egress, [mcp]
-    servers when [intercept] leaves out [mcp], and the isolation of an [http]
+(** One line per setting this build accepts but does not enforce ([mcp] servers
+    when [intercept] leaves out [mcp], and the isolation and egress of an [http]
     agent), each starting with the setting's name and a colon. The sandbox and
     the clock are enforced where the host allows, and a run they could not cover
     is labelled instead (design §5.3, §5 step 2). *)

@@ -234,8 +234,8 @@ let test_unenforced () =
       (fun w -> List.hd (String.split_on_char ':' w))
       (Experiment.unenforced t)
   in
-  Alcotest.check strings "defaults" [ "egress" ] (names (decoded (doc "")));
-  Alcotest.check strings "mcp servers are enforced" [ "egress" ]
+  Alcotest.check strings "defaults" [] (names (decoded (doc "")));
+  Alcotest.check strings "mcp servers are enforced" []
     (names (decoded (doc {|, "mcp": {"calendar": {"command": ["c"]}}|})));
   Alcotest.check strings "mcp servers that are not intercepted" [ "mcp" ]
     (names
@@ -247,8 +247,7 @@ let test_unenforced () =
        (decoded
           (doc
              {|, "sandbox": "off", "intercept": ["model", "fixtures"], "clock": {"faketime": "off"}|})));
-  Alcotest.check strings "the sandbox and the clock are never listed"
-    [ "egress" ]
+  Alcotest.check strings "the sandbox and the clock are never listed" []
     (names (decoded (doc {|, "sandbox": "strict"|})))
 
 (* The sandbox is a mode or a mapping with more paths. *)

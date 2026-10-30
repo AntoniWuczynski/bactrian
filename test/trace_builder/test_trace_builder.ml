@@ -77,6 +77,7 @@ let input ?(cassette = cassette []) agent : B.input =
     cassette;
     agent;
     resolve;
+    http = [];
   }
 
 let kind (e : Trace.entry) =

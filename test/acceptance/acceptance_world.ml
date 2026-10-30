@@ -278,6 +278,7 @@ let with_world ?vm ?(deny_read = []) ?(rounds = 1) name f =
           | Command _ -> sandbox
           | Http _ -> Sandbox.http_mode `Auto);
         faketime = true;
+        egress = None;
       }
     in
     ok

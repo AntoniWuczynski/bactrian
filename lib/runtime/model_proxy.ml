@@ -1,4 +1,5 @@
 open Bactrian_core
+open Proxy_reply
 
 type provider = Openai | Anthropic | Gemini | Openrouter
 
@@ -66,6 +67,7 @@ type run = {
   pricing : Pricing.table;
   run_started : float;
   mcp : Mcp_proxy.config list;
+  egress : (Egress.t * Egress_proxy.tls) option;
 }
 
 type findings = {
@@ -77,6 +79,7 @@ type findings = {
   masks_fired : int;
   cap_refusals : Ledger.refusal list;
   errors : string list;
+  http_calls : Trace_builder.http_call list;
 }
 
 module Counts = Map.Make (String)
@@ -101,6 +104,7 @@ type state = {
   mutable masks_fired : int;
   mutable cap_refusals : Ledger.refusal list;  (** Newest first. *)
   mutable errors : string list;  (** Newest first. *)
+  mutable http_calls : Trace_builder.http_call list;  (** Newest first. *)
   mutable ended : bool;
       (** The run is unregistered: its cassette is closed, so a call that
           finishes late settles the ledger but records nothing. *)
@@ -136,76 +140,8 @@ let note st message = locked st (fun () -> add_error st message)
 (* Ten minutes covers the slowest long generation. *)
 let upstream_timeout = 600.
 
-(* Responses. Bodies are always written chunk by chunk by hand so that each
-   upstream piece reaches the agent as its own flushed HTTP chunk, and so that
-   a dropped upstream can drop the agent's connection before the terminal
-   chunk. *)
-
-type item = Chunk of string | Finished | Dropped
-
-exception Upstream_dropped
-
-(* A failure of the agent's connection, already noted in its run's errors. *)
-exception Attributed of exn
-
-type response = Http.Response.t * (Eio.Buf_read.t -> Eio.Buf_write.t -> unit)
-
-let respond ?on_exn ~status ~headers (next : unit -> item) : response =
-  let headers =
-    Http.Header.add (Http.Header.of_list headers) "transfer-encoding" "chunked"
-  in
-  ( Http.Response.make ~status:(Http.Status.of_int status) ~headers (),
-    fun _ic oc ->
-      Eio.Buf_write.flush oc;
-      let attribute ex =
-        match on_exn with
-        | None -> ex
-        | Some note_it ->
-            note_it ex;
-            Attributed ex
-      in
-      let rec loop () =
-        match next () with
-        | Chunk "" -> loop ()
-        | Chunk s ->
-            Eio.Buf_write.printf oc "%x\r\n" (String.length s);
-            Eio.Buf_write.string oc s;
-            Eio.Buf_write.string oc "\r\n";
-            Eio.Buf_write.flush oc;
-            loop ()
-        | Finished ->
-            Eio.Buf_write.string oc "0\r\n\r\n";
-            Eio.Buf_write.flush oc
-        | Dropped -> raise Upstream_dropped
-      in
-      try loop () with
-      | (Eio.Cancel.Cancelled _ | Upstream_dropped) as ex -> raise ex
-      | ex -> raise (attribute ex) )
-
 let agent_failed st ex =
   note st ("connection to the agent failed: " ^ Printexc.to_string ex)
-
-let of_list pieces =
-  let rest = ref pieces in
-  fun () ->
-    match !rest with
-    | [] -> Finished
-    | x :: tl ->
-        rest := tl;
-        Chunk x
-
-let obj = Canon.of_fields
-
-let error_response ?(extra = []) ~status ~type_ message =
-  let error =
-    obj
-      (("type", Canon.string type_)
-      :: ("message", Canon.string message)
-      :: extra)
-  in
-  respond ~status
-    ~headers:[ ("content-type", "application/json") ]
-    (of_list [ Canon.to_string (obj [ ("error", error) ]) ])
 
 (* An error response for a request that belongs to a run: noted in its errors. *)
 let refusal_response st ?extra ~status ~type_ message =
@@ -760,16 +696,68 @@ let read_body ~max_body body =
   | s -> Body s
   | exception Eio.Buf_read.Buffer_limit_exceeded -> Too_large
 
-let handle ?only t ((conn_sw, _), _) request body : response =
+(* A socket of one run serves no other: their tokens are unknown there. *)
+let find ?only t token =
+  match only with
+  | Some own when not (String.equal (token_key own) (token_key token)) -> None
+  | Some _ | None -> Runs.find_opt t.runs (token_key token)
+
+(* CONNECT, for egress (decision 0018): the run ID is the proxy user name and
+   the run token its password. *)
+let connect ?only t ~conn st_target request =
+  let credentials =
+    Option.map Cohttp.Auth.credential_of_string
+      (Http.Header.get (Http.Request.headers request) "proxy-authorization")
+  in
+  let forbidden () =
+    unattributed_response t ~status:403 ~type_:"bactrian_forbidden"
+      "unknown or ended run in Proxy-Authorization"
+  in
+  match credentials with
+  | None ->
+      t.unattributed <- t.unattributed + 1;
+      error_response ~status:407
+        ~headers:[ ("proxy-authenticate", "Basic realm=\"bactrian\"") ]
+        ~type_:"bactrian_proxy_auth_required"
+        "the run ID and token are required as proxy credentials"
+  | Some (`Other _) -> forbidden ()
+  | Some (`Basic (run_id, token)) -> (
+      match find ?only t token with
+      | Some st when String.equal st.run.run_id run_id -> (
+          match st.run.egress with
+          | None ->
+              refusal_response st ~status:403
+                ~type_:"bactrian_egress_not_intercepted"
+                "this run does not intercept egress"
+          | Some (policy, tls) ->
+              Egress_proxy.connect
+                {
+                  policy;
+                  tls;
+                  shared = mcp_shared t st;
+                  call = t.call;
+                  max_body = t.max_body;
+                  logged =
+                    (fun c ->
+                      locked st (fun () -> st.http_calls <- c :: st.http_calls));
+                }
+                ~conn ~target:st_target)
+      | Some _ | None -> forbidden ())
+
+let is_connect request =
+  match Http.Request.meth request with
+  | `CONNECT -> true
+  | `GET | `HEAD | `POST | `PUT | `DELETE | `OPTIONS | `TRACE | `PATCH
+  | `Other _ ->
+      false
+
+let handle ?only t (((conn_sw, _) as conn), _) request body : response =
   let headers = Http.Request.headers request in
   let uri = Uri.of_string (Http.Request.resource request) in
-  (* A socket of one run serves no other: their tokens are unknown there. *)
-  let find token =
-    match only with
-    | Some own when not (String.equal (token_key own) (token_key token)) -> None
-    | Some _ | None -> Runs.find_opt t.runs (token_key token)
-  in
+  let find = find ?only t in
   match (read_body ~max_body:t.max_body body, route (Uri.path uri)) with
+  | Body _, _ when is_connect request ->
+      connect ?only t ~conn (Http.Request.resource request) request
   | Too_large, _ ->
       unattributed_response t ~status:413 ~type_:"bactrian_payload_too_large"
         (Printf.sprintf "the request body is over %d bytes" t.max_body)
@@ -826,7 +814,7 @@ let handle ?only t ((conn_sw, _), _) request body : response =
 
 (* Exceptions that reach here could not be attributed to a run. *)
 let on_error t = function
-  | Upstream_dropped | Attributed _ -> ()
+  | Upstream_dropped | Attributed _ | Egress_proxy.Tunnel_closed -> ()
   | Eio.Io _ -> t.unattributed <- t.unattributed + 1
   | ex ->
       t.unattributed <- t.unattributed + 1;
@@ -932,6 +920,7 @@ let register t run =
       masks_fired = 0;
       cap_refusals = [];
       errors = [];
+      http_calls = [];
       ended = false;
       mcp = lazy (Mcp_proxy.create t.mcp_env (mcp_shared t st) run.mcp);
     }
@@ -960,6 +949,7 @@ let unregister t ~token =
             masks_fired = st.masks_fired;
             cap_refusals = List.rev st.cap_refusals;
             errors = List.rev st.errors;
+            http_calls = List.rev st.http_calls;
           })
 
 let base_url ?port t ~token p =

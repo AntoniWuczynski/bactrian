@@ -228,6 +228,7 @@ let make_run ?(connector = Upstream.plain) ?(mode = P.Record) ?(record = true)
     pricing;
     run_started = Eio.Time.now (Eio.Stdenv.clock ctx.env);
     mcp;
+    egress = None;
   }
 
 let recording ctx (run : P.run) =

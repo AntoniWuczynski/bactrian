@@ -126,8 +126,8 @@ let check ?files ~env ~sandbox ~scenario_file (scenario : Scenario.t) =
                ~clock:(Eio.Stdenv.clock env) ~fs:(Eio.Stdenv.fs env) ~sandbox
                ~timeout:checker_timeout
                ~cwd:Eio.Path.(fs / dir)
-               ~date ~assertions:scenario.assertions ~checkers:scenario.checkers
-               entries)
+               ~date ~egress_intercepted:true ~assertions:scenario.assertions
+               ~checkers:scenario.checkers entries)
     in
     Option.map (fun reason -> { trace; expected; reason }) verdict
   in

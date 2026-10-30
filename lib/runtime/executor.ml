@@ -451,6 +451,12 @@ let mcp_config ~fs (l : loaded) (name, (s : Experiment.mcp_server)) :
   in
   { name; server; policy = s.policy }
 
+(* The policy a run intercepts egress with, when [intercept] lists it. *)
+let egress (e : Experiment.t) : Egress.t option =
+  if List.mem `Egress e.intercept then
+    Some { default = e.egress_default; hosts = e.egress_hosts }
+  else None
+
 let mcp_configs ~fs (l : loaded) =
   if List.mem `Mcp l.experiment.intercept then
     List.map (mcp_config ~fs l) l.experiment.mcp
@@ -490,6 +496,7 @@ let run_config ~fs ~sandbox ~checker_sandbox (l : loaded)
     mcp = mcp_configs ~fs l;
     sandbox;
     faketime = l.experiment.faketime;
+    egress = egress l.experiment;
   }
 
 (* The lock files this process holds. A [lockf] lock belongs to the process,
@@ -588,7 +595,7 @@ let start_or_resume ~root ~experiment_file ~random_bytes ~env ~resume
                         id
                         (String.concat ", " changes)))))
 
-let run_experiment ?seatbelt_hint ?root
+let run_experiment ?seatbelt_hint ?root ?interception
     ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
     ?(upstream = P.default_upstream) ?(connector = Upstream.plain) ?sandbox
@@ -730,6 +737,13 @@ let run_experiment ?seatbelt_hint ?root
              ~process_mgr:(Eio.Stdenv.process_mgr env)
              ())
       in
+      let* interception =
+        match (egress experiment, l.agent, interception) with
+        | Some _, Command _, Some load ->
+            Result.map Option.some
+              (Result.map_error (fun m -> Environment m) (load ()))
+        | None, _, _ | Some _, Http _, _ | Some _, Command _, None -> Ok None
+      in
       announce experiment_id;
       List.iter warn (Experiment.unenforced experiment);
       let store = Store.create ~root in
@@ -757,13 +771,19 @@ let run_experiment ?seatbelt_hint ?root
           match status with Done _ -> true | Pending | Interrupted -> !capped
         in
         if not skip then (
+          let config : Run.config =
+            match interception with
+            | Some _ -> config
+            | None -> { config with egress = None }
+          in
           let finish status run_id =
             set i (fun (p, _, _) -> (p, status, run_id))
           in
           (match
              Run.execute ~random_bytes
                ~on_start:(fun id -> set i (fun (p, s, _) -> (p, s, Some id)))
-               ~keys ~upstream ~connector ~env ~proxy ~store ~ledger config
+               ~keys ~upstream ~connector ?interception ~env ~proxy ~store
+               ~ledger config
            with
           | Ok r ->
               (match r.outcome with
