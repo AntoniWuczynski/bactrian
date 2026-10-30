@@ -8,12 +8,8 @@ module Vm_args = Bactrian_core.Vm_args
 
 let hdiutil = "/usr/bin/hdiutil"
 
-let sh fmt =
-  Printf.ksprintf
-    (fun cmd ->
-      if Sys.command (cmd ^ " > /dev/null 2>&1") <> 0 then
-        Alcotest.failf "failed: %s" cmd)
-    fmt
+let quiet fmt =
+  Printf.ksprintf (fun cmd -> Sys.command (cmd ^ " > /dev/null 2>&1") = 0) fmt
 
 let write path text =
   Out_channel.with_open_bin path (fun oc -> output_string oc text)
@@ -22,24 +18,27 @@ let identity path =
   let st = Unix.stat path in
   (st.st_dev, st.st_ino)
 
-(* A scratch directory, and the volume mounted in it. *)
+(* A scratch directory, and the volume mounted in it. The directory and the
+   image are removed however the test ends, and a host where hdiutil exists
+   but will not make or attach an image skips the test. *)
 let with_volume f =
   let root = Filename.temp_dir "bactrian-volume" "" in
   let mount = Filename.concat root "volume"
   and image = Filename.concat root "volume.dmg" in
-  Unix.mkdir mount 0o700;
-  sh "%s create -size 2m -fs HFS+ -volname bactrian-test %s" hdiutil
-    (Filename.quote image);
-  sh "%s attach -nobrowse -noverify -mountpoint %s %s" hdiutil
-    (Filename.quote mount) (Filename.quote image);
   Fun.protect ~finally:(fun () ->
       (* A volume still in use is detached by force: the test owns it. *)
-      ignore
-        (Sys.command
-           (Printf.sprintf "%s detach -force %s > /dev/null 2>&1" hdiutil
-              (Filename.quote mount)));
+      ignore (quiet "%s detach -force %s" hdiutil (Filename.quote mount) : bool);
       Proc_util.remove_tree root)
-  @@ fun () -> f ~root ~mount
+  @@ fun () ->
+  Unix.mkdir mount 0o700;
+  if
+    not
+      (quiet "%s create -size 2m -fs HFS+ -volname bactrian-test %s" hdiutil
+         (Filename.quote image)
+      && quiet "%s attach -nobrowse -noverify -mountpoint %s %s" hdiutil
+           (Filename.quote mount) (Filename.quote image))
+  then Alcotest.skip ();
+  f ~root ~mount
 
 let stage ~over ~identity ~run_dir : Vm_args.stage =
   {
