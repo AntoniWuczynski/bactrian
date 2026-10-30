@@ -1,4 +1,4 @@
-# 0016: Real provider keys in the agent's environment
+# 0018: Real provider keys in the agent's environment
 
 Date: 2026-10-30
 

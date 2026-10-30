@@ -348,7 +348,7 @@ let real_keys_strict ~experiment_file ~find experiment sandbox_override =
       []
 
 (* What the user has accepted by writing [agent.real_keys] (design §5.2, decision
-   0016). A sandbox keeps the agent off the network but for the proxy, and the
+   0018). A sandbox keeps the agent off the network but for the proxy, and the
    proxy forwards what the agent sends: a key written into a prompt or into a
    call to an HTTP MCP server leaves the machine. *)
 let real_keys_warning ~(label : Sandbox.label) ~keys =
