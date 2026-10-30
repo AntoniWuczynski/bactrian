@@ -161,14 +161,24 @@ A command agent's checkers share its sandbox, so they get no line of their own.
   0
   [1]
 
-A scenario that does not load is reported, and does not hide that line.
+A scenario that does not load is one failing check, after the others, which
+still run. It may have checkers, so it does not hide the checkers' line. The
+same holds for a command agent, whose checks do not depend on the scenarios.
 
   $ printf 'version: 1\nsurprise: 1\n' > s/broken.yaml
-  $ run bactrian doctor --experiment http.yaml; echo "exit $?"
-  s/broken.yaml:1:1: id: missing required field
-  s/broken.yaml:1:1: turns: missing required field
-  s/broken.yaml:2:1: surprise: unknown field
-  exit 64
+  $ run bactrian doctor --experiment http.yaml > out.txt; echo "exit $?"
+  exit 69
+  $ grep -c -e ' sandbox-checkers:' -e ' tls:' out.txt
+  2
+  $ sed -n '/ scenarios:/,$p' out.txt
+  fail  scenarios: a scenario does not load:
+        s/broken.yaml:1:1: id: missing required field
+        s/broken.yaml:1:1: turns: missing required field
+        s/broken.yaml:2:1: surprise: unknown field
+  $ rm s/checked.yaml
+  $ run bactrian doctor --experiment exp.yaml | grep -e ' caps:' -e ' scenarios:'
+  fail  caps: no provider has a spend cap above 0: set caps_usd in the experiment
+  fail  scenarios: a scenario does not load:
   $ rm -r s
 
 An experiment with agent.real_keys gets a line of its own, and one with an

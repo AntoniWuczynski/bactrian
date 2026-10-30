@@ -302,7 +302,7 @@ skip  tls: HTTPS support is not built in
 - `tls`: `skip` while this build has no HTTPS support, or `fail` when the experiment calls a provider whose upstream is an `https` URL, or an agent over HTTPS.
 - `ca` and `node`: `skip`, because egress interception is not built.
 
-`--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file, or a scenario that does not load, is reported with its location and exits 64, as for `bactrian run`.
+`--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file is reported with its location and exits 64, as for `bactrian run`. A scenario that does not load is a `fail` line named `scenarios`, with the location of each error, after the other checks, which still run.
 
 ## Comparing variants
 

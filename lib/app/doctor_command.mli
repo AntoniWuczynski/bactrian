@@ -15,7 +15,8 @@ val run :
   (Bactrian_runtime.Doctor.report, Command_error.t) result
 (** Runs the checks; no agent is started and no URL is contacted. The experiment
     file is read through [files] (default the whole filesystem). An invalid
-    experiment file is [Configuration], and an invalid
+    experiment file is [Configuration], a scenario of it that does not load is a
+    failing [scenarios] check after the others, and an invalid
     [BACTRIAN_UPSTREAM_<PROVIDER>] variable ({!Upstream_env}) is [Usage]. Seeds
     the random generator. *)
 
