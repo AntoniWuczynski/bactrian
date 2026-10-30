@@ -159,7 +159,10 @@ jobs:
           pattern: bactrian-*
           merge-multiple: true
       - run: cat ./*.sha256 >SHA256SUMS && cat SHA256SUMS
-      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes ./*.tar.gz ./*.sha256 SHA256SUMS
+      # A tag with a suffix, such as v0.1.0-rc.1, publishes a prerelease.
+      - run: |
+          case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes $pre ./*.tar.gz ./*.sha256 SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
