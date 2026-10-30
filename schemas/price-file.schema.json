@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/price-file.schema.json",
+  "title": "Price file",
+  "description": "Model prices in USD per million tokens (the experiment's pricing file, YAML or JSON). Unknown fields are rejected.",
+  "type": "object",
+  "required": ["version", "prices"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "prices": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "rates": {
+      "type": "object",
+      "required": ["input", "cached_input", "cache_write", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "number", "minimum": 0 },
+        "cached_input": { "type": "number", "minimum": 0 },
+        "cache_write": { "type": "number", "minimum": 0 },
+        "output": { "type": "number", "minimum": 0 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["model", "provider", "rates", "max_output", "max_input"],
+      "additionalProperties": false,
+      "properties": {
+        "model": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+        "provider": { "$ref": "defs.schema.json#/$defs/provider" },
+        "effective_from": { "$ref": "defs.schema.json#/$defs/date" },
+        "rates": { "$ref": "#/$defs/rates" },
+        "long_context": {
+          "type": "object",
+          "required": ["above", "rates"],
+          "additionalProperties": false,
+          "properties": {
+            "above": { "type": "integer", "minimum": 1 },
+            "rates": { "$ref": "#/$defs/rates" }
+          }
+        },
+        "max_output": { "type": "integer", "minimum": 1 },
+        "max_input": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

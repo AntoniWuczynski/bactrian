@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/experiment.schema.json",
+  "title": "Experiment",
+  "description": "An experiment file (YAML or JSON): the agent, scenarios, variants and how to run and compare them. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["version", "name", "agent", "scenarios", "variants"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "name": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+    "agent": { "$ref": "#/$defs/agent" },
+    "scenarios": {
+      "description": "Scenario files or globs, relative to the experiment file.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "defs.schema.json#/$defs/non_empty_string" }
+    },
+    "variants": {
+      "description": "A mapping of variant name to {env}, or a list of {name, env}. At least one, with distinct names.",
+      "oneOf": [
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "env": { "$ref": "defs.schema.json#/$defs/string_map" } }
+          }
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+              "env": { "$ref": "defs.schema.json#/$defs/string_map" }
+            }
+          }
+        }
+      ]
+    },
+    "repeats": { "type": "integer", "minimum": 1 },
+    "concurrency": { "type": "integer", "minimum": 1 },
+    "intercept": {
+      "type": "array",
+      "items": { "enum": ["model", "mcp", "fixtures", "egress"] }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": { "$ref": "defs.schema.json#/$defs/policy" },
+        "hosts": {
+          "type": "object",
+          "additionalProperties": { "$ref": "defs.schema.json#/$defs/policy" }
+        }
+      }
+    },
+    "mcp": {
+      "description": "MCP servers by name (letters, digits, '_' and '-').",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9_-]+$" },
+      "additionalProperties": { "$ref": "#/$defs/mcp_server" }
+    },
+    "normalise": {
+      "type": "array",
+      "items": { "$ref": "defs.schema.json#/$defs/regex" }
+    },
+    "redact": {
+      "type": "array",
+      "items": { "$ref": "defs.schema.json#/$defs/regex" }
+    },
+    "sandbox": { "$ref": "#/$defs/sandbox" },
+    "clock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "faketime": { "enum": ["auto", "off"] } }
+    },
+    "caps_usd": {
+      "type": "object",
+      "propertyNames": { "$ref": "defs.schema.json#/$defs/provider" },
+      "additionalProperties": { "type": "number", "minimum": 0 }
+    },
+    "pricing": {
+      "description": "A price file, relative to the experiment file.",
+      "$ref": "defs.schema.json#/$defs/non_empty_string"
+    },
+    "seed": { "type": "integer" },
+    "compare": { "$ref": "#/$defs/compare" }
+  },
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "required": ["protocol"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "enum": ["command", "http"] },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "url": { "type": "string", "pattern": "^https?://." },
+        "namespace_header": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+        "timeouts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "turn": { "$ref": "defs.schema.json#/$defs/duration" },
+            "total": { "$ref": "defs.schema.json#/$defs/duration" }
+          }
+        },
+        "env_passthrough": { "$ref": "defs.schema.json#/$defs/string_list" }
+      },
+      "oneOf": [
+        {
+          "properties": { "protocol": { "const": "command" } },
+          "required": ["command"],
+          "not": { "anyOf": [{ "required": ["url"] }, { "required": ["namespace_header"] }] }
+        },
+        {
+          "properties": { "protocol": { "const": "http" } },
+          "required": ["url", "namespace_header"],
+          "not": { "required": ["command"] }
+        }
+      ]
+    },
+    "mcp_server": {
+      "description": "A stdio server (command, env, cwd) or an HTTP one (url). replay is not a policy here: an experiment's runs record.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy": { "enum": ["record", "passthrough", "block"] },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "env": { "$ref": "defs.schema.json#/$defs/string_map" },
+        "cwd": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+        "url": { "type": "string", "pattern": "^https?://." }
+      },
+      "oneOf": [
+        {
+          "required": ["command"],
+          "not": { "required": ["url"] }
+        },
+        {
+          "required": ["url"],
+          "not": { "anyOf": [{ "required": ["command"] }, { "required": ["env"] }, { "required": ["cwd"] }] }
+        }
+      ]
+    },
+    "sandbox": {
+      "description": "A mode, or a mapping. The vm backend needs an image.",
+      "oneOf": [
+        { "enum": ["auto", "strict", "off"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["auto", "strict", "off"] },
+            "backend": { "enum": ["auto", "vm", "seatbelt", "bubblewrap"] },
+            "image": {
+              "description": "A container image that holds the agent's runtime, digest-pinned. Must not start with '-'.",
+              "type": "string",
+              "pattern": "^[^-\\u0000]"
+            },
+            "runtime": { "enum": ["docker", "container"] },
+            "allow_write": {
+              "type": "array",
+              "items": { "$ref": "defs.schema.json#/$defs/non_empty_string" }
+            },
+            "deny_read": {
+              "type": "array",
+              "items": { "$ref": "defs.schema.json#/$defs/non_empty_string" }
+            }
+          },
+          "if": {
+            "required": ["backend"],
+            "properties": { "backend": { "const": "vm" } }
+          },
+          "then": { "required": ["image"] }
+        }
+      ]
+    },
+    "compare": {
+      "type": "object",
+      "required": ["baseline"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": { "$ref": "defs.schema.json#/$defs/non_empty_string" },
+        "confidence": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "thresholds": {
+          "description": "Per metric. A pass-rate threshold is strictly between 0 and 1, the others above 0.",
+          "type": "object",
+          "additionalProperties": { "type": "number", "exclusiveMinimum": 0 },
+          "properties": {
+            "pass_rate": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 }
+          }
+        },
+        "gate": {
+          "type": "array",
+          "items": { "$ref": "defs.schema.json#/$defs/non_empty_string" }
+        },
+        "population": { "enum": ["suite", "scenarios"] }
+      }
+    }
+  }
+}

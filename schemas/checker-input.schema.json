@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/checker-input.schema.json",
+  "title": "Checker input",
+  "description": "What a checker command reads on standard input: the trace as a JSON array, each element a trace line.",
+  "type": "array",
+  "items": { "$ref": "trace-line.schema.json" }
+}

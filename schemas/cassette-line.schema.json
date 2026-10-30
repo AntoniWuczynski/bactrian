@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/cassette-line.schema.json",
+  "title": "Cassette line",
+  "description": "One line of cassette.jsonl: a header, then one exchange per line, then an end line when the run finished cleanly (a file without one is a partial recording). Unknown fields are rejected.",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "enum": ["header", "exchange", "end"] }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/header" },
+    { "$ref": "#/$defs/exchange" },
+    { "properties": { "type": { "const": "end" } } }
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "header": {
+      "properties": {
+        "type": { "const": "header" },
+        "run_id": { "type": "string" },
+        "scenario": { "type": "string" },
+        "variant": { "type": "string" },
+        "bactrian_version": { "type": "string" },
+        "recorded_at": { "$ref": "defs.schema.json#/$defs/rfc3339" },
+        "sim_now": { "type": "string" },
+        "clock": { "$ref": "defs.schema.json#/$defs/clock_name" }
+      },
+      "required": ["run_id", "scenario", "variant", "bactrian_version", "recorded_at", "sim_now", "clock"]
+    },
+    "payload": {
+      "description": "Text as given, the same bytes in base64 when they are not valid UTF-8, or the BLAKE2b-256 digest of a blob stored beside the cassette (payloads over 64 KiB).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["inline"],
+          "additionalProperties": false,
+          "properties": { "inline": { "type": "string" } }
+        },
+        {
+          "type": "object",
+          "required": ["inline_b64"],
+          "additionalProperties": false,
+          "properties": {
+            "inline_b64": {
+              "type": "string",
+              "pattern": "^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["blob"],
+          "additionalProperties": false,
+          "properties": { "blob": { "$ref": "defs.schema.json#/$defs/sha256_hex" } }
+        }
+      ]
+    },
+    "chunk": {
+      "description": "Milliseconds since the previous chunk (or since the request for the first), and the chunk's bytes as text or {b64}.",
+      "type": "array",
+      "prefixItems": [
+        { "type": "integer", "minimum": 0 },
+        {
+          "oneOf": [
+            { "type": "string" },
+            {
+              "type": "object",
+              "required": ["b64"],
+              "additionalProperties": false,
+              "properties": {
+                "b64": {
+                  "type": "string",
+                  "pattern": "^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "body": {
+      "description": "Either whole or stream. complete is written only as false, when the body was cut off.",
+      "type": "object",
+      "properties": { "complete": { "const": false } },
+      "oneOf": [
+        {
+          "required": ["whole"],
+          "properties": { "whole": { "$ref": "#/$defs/payload" } }
+        },
+        {
+          "required": ["stream"],
+          "properties": {
+            "stream": { "type": "array", "items": { "$ref": "#/$defs/chunk" } }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "exchange": {
+      "description": "A response (status, headers and body) or a transport error, never both.",
+      "properties": {
+        "type": { "const": "exchange" },
+        "seq": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "t_ms": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "channel": { "enum": ["model", "mcp", "http"] },
+        "protocol": { "type": "string" },
+        "method": { "type": "string" },
+        "path": { "type": "string" },
+        "query": { "$ref": "defs.schema.json#/$defs/string_pairs" },
+        "key": { "type": "string" },
+        "occurrence": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "canonical": true,
+        "request": { "$ref": "#/$defs/payload" },
+        "status": { "type": "integer" },
+        "headers": { "$ref": "defs.schema.json#/$defs/string_pairs" },
+        "body": { "$ref": "#/$defs/body" },
+        "error": { "type": "string" }
+      },
+      "required": ["seq", "t_ms", "channel", "protocol", "method", "path", "query", "key", "occurrence", "canonical", "request"],
+      "oneOf": [
+        {
+          "required": ["status", "headers", "body"],
+          "not": { "required": ["error"] }
+        },
+        {
+          "required": ["error"],
+          "not": { "anyOf": [{ "required": ["status"] }, { "required": ["headers"] }, { "required": ["body"] }] }
+        }
+      ]
+    }
+  }
+}

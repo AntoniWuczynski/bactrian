@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/plan.schema.json",
+  "title": "Plan output",
+  "description": "What `bactrian plan --json` prints. Statistics are rounded to 12 significant digits, and non-finite ones are null. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["schema_version", "assumptions", "target", "answer"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "assumptions": {
+      "type": "object",
+      "required": [
+        "baseline_rates",
+        "effect",
+        "threshold",
+        "between_sd",
+        "population",
+        "confidence",
+        "gate_metrics",
+        "power",
+        "max_repeats",
+        "seed",
+        "simulations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "baseline_rates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["scenario", "rate"],
+            "additionalProperties": false,
+            "properties": {
+              "scenario": { "type": "string" },
+              "rate": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "effect": { "type": "number" },
+        "threshold": { "type": "number" },
+        "between_sd": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+        "population": { "enum": ["suite", "scenarios"] },
+        "confidence": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "gate_metrics": { "type": "integer", "minimum": 1 },
+        "power": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "max_repeats": { "type": "integer", "minimum": 1 },
+        "seed": { "type": "integer" },
+        "simulations": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "target": {
+      "description": "The correct verdict the plan aims to reach.",
+      "enum": ["regression", "improvement", "no_change"]
+    },
+    "answer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["result", "repeats", "achieved_power", "mc_se"],
+          "additionalProperties": false,
+          "properties": {
+            "result": { "const": "repeats" },
+            "repeats": { "type": "integer", "minimum": 1 },
+            "achieved_power": { "$ref": "defs.schema.json#/$defs/number_or_null" },
+            "mc_se": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["result", "best_power"],
+          "additionalProperties": false,
+          "properties": {
+            "result": { "const": "unreachable" },
+            "best_power": { "$ref": "defs.schema.json#/$defs/number_or_null" }
+          }
+        }
+      ]
+    }
+  }
+}

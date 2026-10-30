@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/verdicts.schema.json",
+  "title": "Verdicts",
+  "description": "verdicts.json: the result of each assertion and checker of a run that was judged. It has no version field. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["passed", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "passed": { "type": "boolean" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "verdict"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "verdict": { "enum": ["pass", "fail", "checker_failed"] },
+          "reason": { "type": "string" }
+        },
+        "if": { "properties": { "verdict": { "const": "pass" } } },
+        "then": { "not": { "required": ["reason"] } },
+        "else": { "required": ["reason"] }
+      }
+    },
+    "checker_sandbox": {
+      "description": "How the checkers were sandboxed. Absent when the scenario has no checker command.",
+      "$ref": "meta.schema.json#/$defs/sandbox_label"
+    }
+  }
+}

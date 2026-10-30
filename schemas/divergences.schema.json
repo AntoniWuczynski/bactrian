@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/divergences.schema.json",
+  "title": "Divergences",
+  "description": "divergences.json: where a replay left the recording. Written for every run, empty when nothing diverged. Unknown fields are rejected.",
+  "type": "object",
+  "required": ["version", "divergences"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "divergences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "changes"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["missing_request", "unconsumed", "reordered", "shape_mismatch"] },
+          "seq": {
+            "description": "The recorded exchange concerned, when there is one.",
+            "type": ["integer", "null"],
+            "minimum": 0
+          },
+          "similarity": {
+            "description": "How close the nearest recorded request is, for a missing request.",
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "change"],
+              "additionalProperties": false,
+              "properties": {
+                "path": { "type": "string" },
+                "change": { "enum": ["changed", "added", "removed"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

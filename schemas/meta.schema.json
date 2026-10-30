@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AntoniWuczynski/bactrian/main/schemas/meta.schema.json",
+  "title": "Run metadata",
+  "description": "meta.json: what a run recorded about itself. It has no version field. This describes what the current bactrian writes, not the older shapes it still reads (for example a bare string for the clock). Unknown fields are rejected.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "scenario",
+    "variant",
+    "bactrian_version",
+    "sim_now",
+    "clock",
+    "upstreams",
+    "sandbox",
+    "sandbox_violations",
+    "outcome",
+    "reason",
+    "findings",
+    "cost_usd",
+    "latency_ms",
+    "tokens",
+    "normalise",
+    "redact",
+    "mcp",
+    "unenforced"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": { "type": "string" },
+    "scenario": { "type": "string" },
+    "variant": { "type": "string" },
+    "bactrian_version": { "type": "string" },
+    "sim_now": { "type": "string" },
+    "clock": { "$ref": "#/$defs/clock_label" },
+    "upstreams": {
+      "description": "The base URL each provider was called at, for the providers a run called live.",
+      "type": "object",
+      "propertyNames": { "$ref": "defs.schema.json#/$defs/provider" },
+      "additionalProperties": { "type": "string" }
+    },
+    "sandbox": { "$ref": "#/$defs/sandbox_label" },
+    "sandbox_violations": { "$ref": "#/$defs/violations" },
+    "outcome": { "enum": ["passed", "failed", "diverged", "errored", "not_run"] },
+    "reason": { "type": ["string", "null"] },
+    "findings": {
+      "type": "object",
+      "required": [
+        "exchanges",
+        "transport_errors",
+        "usage_gaps",
+        "refused_keys",
+        "normalise_masks",
+        "cap_refusals",
+        "divergences",
+        "errors"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "exchanges": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "transport_errors": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "usage_gaps": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "refused_keys": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "normalise_masks": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "cap_refusals": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "divergences": { "$ref": "defs.schema.json#/$defs/non_negative_integer" },
+        "errors": { "$ref": "defs.schema.json#/$defs/non_negative_integer" }
+      }
+    },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+    "tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "normalise": { "$ref": "defs.schema.json#/$defs/string_list" },
+    "redact": { "$ref": "defs.schema.json#/$defs/string_list" },
+    "mcp": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "transport", "policy"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "transport": { "enum": ["stdio", "http"] },
+          "policy": { "$ref": "defs.schema.json#/$defs/policy" }
+        }
+      }
+    },
+    "unenforced": {
+      "description": "Settings that were read but not enforced in this run.",
+      "$ref": "defs.schema.json#/$defs/string_list"
+    },
+    "replay_of": {
+      "description": "The recording a replay was made from.",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "clock_label": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": { "mode": { "const": "enforced" } }
+        },
+        {
+          "type": "object",
+          "required": ["mode", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "contract_only" },
+            "reason": {
+              "enum": [
+                "macos",
+                "faketime-off",
+                "library-not-found",
+                "library-hidden",
+                "setuid-sandbox",
+                "invalid-sim-now",
+                "static-binary",
+                "go-binary",
+                "unreadable-executable",
+                "http-mode",
+                "vm"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "sandbox_label": {
+      "description": "How a sandbox was asked for and what was applied.",
+      "type": "object",
+      "required": ["mode", "applied"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["auto", "strict", "off"] },
+        "applied": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "backend": { "enum": ["seatbelt", "bubblewrap", "vm"] },
+        "vm": {
+          "type": "object",
+          "required": ["runtime", "image", "image_id"],
+          "additionalProperties": false,
+          "properties": {
+            "runtime": { "type": "string" },
+            "image": { "type": "string" },
+            "image_id": { "type": "string" }
+          }
+        }
+      },
+      "if": { "required": ["backend"], "properties": { "backend": { "const": "vm" } } },
+      "then": { "required": ["vm"] },
+      "else": { "not": { "required": ["vm"] } }
+    },
+    "violations": {
+      "description": "What the sandbox refused, or why that is not known.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["collected", "coverage", "complete", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "collected": { "const": true },
+            "coverage": { "enum": ["seatbelt-log", "relay-failures-only"] },
+            "complete": { "type": "boolean" },
+            "reason": { "type": "string" },
+            "items": { "$ref": "#/$defs/violation_items" }
+          },
+          "if": { "properties": { "complete": { "const": false } } },
+          "then": { "required": ["reason"] },
+          "else": { "not": { "required": ["reason"] } }
+        },
+        {
+          "type": "object",
+          "required": ["collected", "reason", "items"],
+          "additionalProperties": false,
+          "properties": {
+            "collected": { "const": false },
+            "reason": { "type": "string" },
+            "items": { "type": "array", "maxItems": 0 }
+          }
+        }
+      ]
+    },
+    "violation_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}
