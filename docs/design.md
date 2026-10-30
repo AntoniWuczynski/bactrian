@@ -226,7 +226,7 @@ Labels and violations:
 
 ## 6. File formats
 
-Human-written files are YAML (JSON accepted). Machine-written files are JSON Lines. Every format has a `version`, except `meta.json`, `verdicts.json` and `ledger.jsonl`, which do not carry one yet. Unknown fields are rejected. Hand-written JSON Schemas (draft 2020-12) in `schemas/` describe each of them, the agent protocol lines, a checker's input and verdict, and the `--json` output of `compare` and `plan`. They are validated in tests only, against real files and fixtures (decision record 0016). Project data lives in `.bactrian/` (runs, blobs, CA, ledger), which users are told to gitignore.
+Human-written files are YAML (JSON accepted). Machine-written files are JSON Lines. Every format has a `version`, except `meta.json`, `verdicts.json`, `ledger.jsonl`, a checker's verdict and `sandbox.log`, which do not carry one yet. Unknown fields are rejected in the files you write, and by the schemas everywhere, though the ledger reader ignores fields it does not know. Hand-written JSON Schemas (draft 2020-12) in `schemas/` describe each of them, the agent protocol lines, a checker's input and verdict, and the `--json` output of `compare` and `plan`. The schemas cover every format above except `sandbox.log`. They are validated in tests only, against real files and fixtures (decision record 0020). Project data lives in `.bactrian/` (runs, blobs, CA, ledger), which users are told to gitignore.
 
 ### Scenario
 
