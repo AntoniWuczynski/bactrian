@@ -211,7 +211,7 @@ let untrusted_cache () =
 let cancelled_build () =
   docker_only "a cancel during the build";
   gate [ node_image ];
-  with_bare_cache "tmp-vm-faketime-cancel" @@ fun ~dir:_ _ ->
+  with_bare_cache "tmp-vm-faketime-cancel" @@ fun ~dir:_ rt ->
   with_world ~vm:node_image "vm-clock-cancelled" @@ fun w ->
   let script = Filename.concat w.dir "agent.sh" in
   write script shell_agent;
@@ -262,6 +262,14 @@ let cancelled_build () =
       let r = run () in
       Alcotest.(check string) "the next run" "passed" (outcome_name r);
       Alcotest.(check string) "the agent answered" "ok" (reply_text r);
+      (* The label does not say why a build failed, the build does: cached,
+         this costs nothing. *)
+      (match
+         Vm_runtime.faketime ~process_mgr ~clock rt
+           Bactrian_core.Vm_exec_probe.Musl
+       with
+      | Ok _ -> ()
+      | Error m -> Printf.printf "the build after the cancel: %s\n" m);
       Alcotest.(check string)
         "the library was built" {|{"mode":"enforced"}|} (clock_label r);
       no_container r
