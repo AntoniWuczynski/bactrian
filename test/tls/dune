@@ -1,0 +1,20 @@
+(test
+ (name test_tls)
+ (package bactrian)
+ (deps
+  (source_tree ../fixtures/protocols))
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  bactrian.tls
+  fake_https
+  fake_upstream
+  proxy_support
+  eio_main
+  mirage-crypto-rng.unix
+  unix
+  uri
+  x509
+  alcotest)
+ (flags
+  (:standard -w -70)))

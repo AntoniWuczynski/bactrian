@@ -1,21 +1,36 @@
 (** One HTTP request to a model provider, with the response body delivered chunk
     by chunk as it arrives.
 
-    Only plain TCP is built in. A TLS connector can be added from a separate
-    library through {!of_https}. *)
+    Plain TCP is built in. The TLS connector comes from a separate library
+    ([bactrian.tls]) through {!of_https}, so this library builds without the TLS
+    stack. *)
 
 type connector
 
 val plain : connector
 (** Plain TCP. An [https] URL is refused with [Connect_failed]. *)
 
-type https =
-  Uri.t ->
-  [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r ->
-  [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
-(** Wraps an established TCP connection in TLS for the given URL. *)
+type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
+
+type https = {
+  ready : unit -> (unit, string) result;
+      (** Loads what the connector needs before its first connection (the
+          trusted root certificates), once. [Error] says why HTTPS cannot work.
+      *)
+  wrap : Uri.t -> flow -> (flow, string) result;
+      (** Wraps an established TCP connection in TLS for the given URL: the
+          handshake, the certificate and the host name check. [Error] says why
+          it failed. Used only for [https] URLs. *)
+  failure : exn -> string option;
+      (** The reason, for an exception that a wrapped flow raises on a read or
+          write (a TLS alert or a bad record), so that a call ends with an
+          {!error} rather than the exception. [None] for any other exception. *)
+}
 
 val of_https : https -> connector
+
+val tls_ready : connector -> (unit, string) result
+(** The connector's [ready], or [Error] for {!plain}. *)
 
 val is_https : Uri.t -> bool
 (** Whether the URL's scheme is [https], which needs a TLS connector. *)

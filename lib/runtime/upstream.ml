@@ -1,12 +1,19 @@
-type https =
-  Uri.t ->
-  [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r ->
-  [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
+type flow = [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r
+
+type https = {
+  ready : unit -> (unit, string) result;
+  wrap : Uri.t -> flow -> (flow, string) result;
+  failure : exn -> string option;
+}
 
 type connector = https option
 
 let plain = None
 let of_https f = Some f
+
+let tls_ready = function
+  | Some https -> https.ready ()
+  | None -> Error "this build has no TLS support (bactrian.tls)"
 
 type request = {
   meth : string;
@@ -156,7 +163,7 @@ let read_until_close r deliver =
   in
   loop ()
 
-let read_body ~clock ~t_head ~on_chunk framing r =
+let read_body ~clock ~t_head ~on_chunk ~failure framing r =
   let last = ref t_head and total = ref 0 in
   let deliver s =
     let now = Eio.Time.now clock in
@@ -177,6 +184,10 @@ let read_body ~clock ~t_head ~on_chunk framing r =
       Error (Truncated { bytes = !total; reason = Printexc.to_string e })
   | exception Eio.Buf_read.Buffer_limit_exceeded ->
       Error (Truncated { bytes = !total; reason = "chunk header too large" })
+  | exception e -> (
+      match failure e with
+      | Some reason -> Error (Truncated { bytes = !total; reason })
+      | None -> raise e)
 
 let request_text (req : request) ~host =
   let target = match Uri.path_and_query req.url with "" -> "/" | t -> t in
@@ -202,9 +213,11 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
   match Uri.host req.url with
   | None -> Error (Connect_failed "url has no host")
   | Some host -> (
-      let https = is_https req.url in
+      let tls = if is_https req.url then connector else None in
+      let failure e = Option.bind tls (fun t -> t.failure e) in
       let port =
-        Option.value (Uri.port req.url) ~default:(if https then 443 else 80)
+        Option.value (Uri.port req.url)
+          ~default:(if is_https req.url then 443 else 80)
       in
       let host_header =
         match Uri.port req.url with
@@ -216,31 +229,35 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
         Error
           (if !sent then Failed_after_send reason else Connect_failed reason)
       in
+      let exchange flow =
+        Eio.Flow.copy_string (request_text req ~host:host_header) flow;
+        sent := true;
+        let r = Eio.Buf_read.of_flow ~max_size:1_048_576 flow in
+        match read_head r with
+        | Error _ as e -> e
+        | Ok (status, raw_headers) ->
+            let t_head = Eio.Time.now clock in
+            on_head { status; headers = allowed_headers raw_headers };
+            read_body ~clock ~t_head ~on_chunk ~failure
+              (framing ~status raw_headers)
+              r
+      in
       try
         Eio.Net.with_tcp_connect ~host ~service:(string_of_int port) net
           (fun socket ->
-            let flow =
-              let raw =
-                (socket
-                  :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Std.r)
-              in
-              match connector with Some wrap -> wrap req.url raw | None -> raw
-            in
-            Eio.Flow.copy_string (request_text req ~host:host_header) flow;
-            sent := true;
-            let r = Eio.Buf_read.of_flow ~max_size:1_048_576 flow in
-            match read_head r with
-            | Error _ as e -> e
-            | Ok (status, raw_headers) ->
-                let t_head = Eio.Time.now clock in
-                on_head { status; headers = allowed_headers raw_headers };
-                read_body ~clock ~t_head ~on_chunk
-                  (framing ~status raw_headers)
-                  r)
+            let raw = (socket :> flow) in
+            match tls with
+            | None -> exchange raw
+            | Some t -> (
+                match t.wrap req.url raw with
+                | Ok flow -> exchange flow
+                | Error reason -> Error (Connect_failed reason)))
       with
       | Eio.Io _ as e -> failed (Printexc.to_string e)
       | End_of_file -> failed "connection closed before the response head"
-      | Eio.Buf_read.Buffer_limit_exceeded -> failed "response head too large")
+      | Eio.Buf_read.Buffer_limit_exceeded -> failed "response head too large"
+      | e -> (
+          match failure e with Some reason -> failed reason | None -> raise e))
 
 let call ~sw:_ ~net ~clock ~timeout connector (req : request) ~on_head ~on_chunk
     =
