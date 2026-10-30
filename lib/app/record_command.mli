@@ -8,10 +8,15 @@ type request = {
       (** [NAME=JSON] declarations, see {!Bactrian_runtime.Mcp_flags}. *)
   mcp_http : string list;  (** [NAME=URL] declarations. *)
   mcp_policy : string list;  (** [NAME=POLICY] declarations. *)
+  egress : string list;
+      (** [HOST=POLICY] entries of the egress policy
+          ({!Bactrian_core.Egress.of_flags}). *)
+  egress_default : string option;
+      (** The policy of the hosts not listed, default [block]. *)
 }
 
 val validate : request -> (unit, string) result
-(** [Error] when there is no turn, a timeout is not positive or an MCP
+(** [Error] when there is no turn, a timeout is not positive or an MCP or egress
     declaration is malformed. {!run} checks the same. *)
 
 val run :

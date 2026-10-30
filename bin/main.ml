@@ -214,6 +214,23 @@ let mcp_policy =
        (default), $(b,passthrough) (live, not recorded) or $(b,block) (every \
        request refused). Repeat for several servers."
 
+let egress_hosts =
+  Arg.(
+    value & opt_all string []
+    & info [ "egress" ] ~docv:"HOST=POLICY"
+        ~doc:
+          "Set the policy of the agent's HTTPS calls to $(i,HOST) (or \
+           $(i,HOST:PORT)): $(b,record) (recorded, and replayed by \
+           $(b,bactrian replay)), $(b,passthrough) (live, not recorded), \
+           $(b,replay) or $(b,block). Repeat for several hosts.")
+
+let egress_default =
+  Arg.(
+    value
+    & opt (some string) None
+    & info [ "egress-default" ] ~docv:"POLICY"
+        ~doc:"The policy of the hosts no $(b,--egress) names (default block).")
+
 let agent_argv ~pos_after =
   let docv = "AGENT" in
   let doc = "The agent command and its arguments, after $(b,--)." in
@@ -245,7 +262,8 @@ let record_cmd =
           ~doc:"A scripted user turn. Repeat for several turns, in order.")
   in
   let run json agent cwd turns scenario variant sim_now timezone env_passthrough
-      turn_timeout total_timeout mcp_stdio mcp_http mcp_policy sandbox =
+      turn_timeout total_timeout mcp_stdio mcp_http mcp_policy egress
+      egress_default sandbox =
     let request : Record_command.request =
       {
         common =
@@ -255,6 +273,8 @@ let record_cmd =
         mcp_stdio;
         mcp_http;
         mcp_policy;
+        egress;
+        egress_default;
       }
     in
     match Record_command.validate request with
@@ -286,6 +306,12 @@ let record_cmd =
              $(b,BACTRIAN_MCP_HTTP_)$(i,NAME) variable. Their traffic is \
              recorded with the model's, and $(b,bactrian replay) serves it \
              from the recording.";
+          `P
+            "The agent's HTTPS calls to other hosts reach them through \
+             $(b,HTTPS_PROXY), and are blocked unless $(b,--egress) or \
+             $(b,--egress-default) allows them. The agent trusts the project \
+             CA (see $(b,bactrian ca)) through $(b,SSL_CERT_FILE), \
+             $(b,NODE_EXTRA_CA_CERTS) and $(b,REQUESTS_CA_BUNDLE).";
         ]
   in
   Cmd.v info
@@ -295,7 +321,7 @@ let record_cmd =
         $ agent_argv ~pos_after:`Start
         $ cwd $ turns $ scenario $ variant $ sim_now $ timezone
         $ env_passthrough $ turn_timeout $ total_timeout $ mcp_stdio $ mcp_http
-        $ mcp_policy $ sandbox_mode))
+        $ mcp_policy $ egress_hosts $ egress_default $ sandbox_mode))
 
 let replay_cmd =
   let from =
@@ -626,6 +652,7 @@ let cmd =
       Plan_cmd.cmd;
       Report_cmd.cmd;
       Doctor_cmd.cmd ~bactrian_exe;
+      Ca_cmd.cmd;
       Serve_mcp_cmd.cmd ~bactrian_exe;
       mcp_shim_cmd;
       sandbox_init_cmd;

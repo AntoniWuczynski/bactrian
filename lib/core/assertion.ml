@@ -375,13 +375,12 @@ let limit name ~actual ~max ~show =
          (show max))
 
 let check_egress hosts trace =
-  let wanted = List.map String.lowercase_ascii hosts in
+  let wanted = List.map Trace.host_name hosts in
   let hits =
     List.filter_map
       (fun (e : Trace.entry) ->
         match e.event with
-        | Http_call { host; _ }
-          when List.mem (String.lowercase_ascii host) wanted ->
+        | Http_call { host; _ } when List.mem (Trace.host_name host) wanted ->
             Some host
         | Http_call _ | Run_start _ | Turn_start _ | Model_call _ | Tool_call _
         | Tool_result _ | Agent_event _ | Reply _ | Sandbox_violation _ | Done
@@ -484,11 +483,13 @@ let evaluate ~cost ~egress_intercepted assertion trace =
           Fail "max_cost_usd: the trace cannot be priced (a model has no price)"
       | Some actual ->
           limit "max_cost_usd" ~actual ~max ~show:(Printf.sprintf "$%g"))
-  | No_egress _ when not egress_intercepted ->
-      Fail
-        "no_egress: cannot be verified, egress is not intercepted so no HTTP \
-         call is recorded"
-  | No_egress hosts -> check_egress hosts trace
+  | No_egress hosts -> (
+      match check_egress hosts trace with
+      | Pass when not egress_intercepted ->
+          Fail
+            "no_egress: cannot be verified, egress is not intercepted or the \
+             run is unsandboxed, so a call may have gone direct and unrecorded"
+      | (Pass | Fail _) as verdict -> verdict)
   | Output { turn; check } -> (
       match check_output turn check trace with
       | Ok () -> Pass

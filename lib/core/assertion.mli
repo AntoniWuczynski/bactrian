@@ -41,12 +41,13 @@ val evaluate :
   Trace.entry list ->
   outcome
 (** [cost] prices a trace (supplied by the caller, from Pricing).
-    [egress_intercepted] says whether the run's HTTP egress was intercepted (and
-    so recorded in the trace as HTTP calls). When it was not, [No_egress] fails
-    as unverifiable instead of passing vacuously. Schema mode supports a
-    documented subset of JSON Schema: type, properties, required, enum, items,
-    additionalProperties false. Jsonpath supports $, .key, [n] and ["key"]. A
-    step is a model call.
+    [egress_intercepted] says whether every HTTP call of the run is in the
+    trace: egress was intercepted and the sandbox left the agent no other way
+    out. When not, [No_egress] still fails for a listed host the trace names,
+    and otherwise fails as unverifiable instead of passing vacuously. Schema
+    mode supports a documented subset of JSON Schema: type, properties,
+    required, enum, items, additionalProperties false. Jsonpath supports $,
+    .key, [n] and ["key"]. A step is a model call.
 
     Semantics worth knowing:
     - [Exact] needs the called tools to equal [tools]. [In_order] needs [tools]

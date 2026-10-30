@@ -69,6 +69,10 @@ let run_experiment (w : world) argv =
   let summary =
     match
       E.run_experiment
+        ~interception:
+          (Bactrian_app.Features.interception
+             (Eio.Stdenv.process_mgr w.env)
+             ~root:(Filename.concat w.dir ".bactrian"))
         ~root:Eio.Path.(Eio.Stdenv.fs w.env / Filename.concat w.dir ".bactrian")
         ~keys:[ (Model_proxy.Openai, real_key) ]
         ~upstream:(fun _ -> Uri.of_string (F.base_url w.up))

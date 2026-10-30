@@ -313,13 +313,23 @@ let test_no_egress () =
   is_pass "clean" (A.No_egress [ "other.example" ]) t;
   fails "hit (case-insensitive)" ~mentions:[ "Evil.example" ]
     (A.No_egress [ "evil.example" ]) t;
-  is_pass "empty trace" (A.No_egress [ "evil.example" ]) (entries [ Done ])
+  is_pass "empty trace" (A.No_egress [ "evil.example" ]) (entries [ Done ]);
+  fails "a trailing dot in the trace" ~mentions:[ "secret.example." ]
+    (A.No_egress [ "secret.example" ])
+    (entries [ http "secret.example." ]);
+  fails "a trailing dot in the list" ~mentions:[ "secret.example" ]
+    (A.No_egress [ "Secret.Example." ])
+    (entries [ http "secret.example" ])
 
-(* Nothing intercepts egress yet, so a clean trace proves nothing. *)
+(* Without interception or the sandbox, a clean trace proves nothing. *)
 let test_no_egress_unverifiable () =
   fails "not intercepted" ~egress_intercepted:false
     ~mentions:[ "cannot be verified"; "not intercepted" ]
-    (A.No_egress [ "evil.example" ]) (entries [ Done ])
+    (A.No_egress [ "evil.example" ]) (entries [ Done ]);
+  fails "not intercepted, a host it called" ~egress_intercepted:false
+    ~mentions:[ "HTTP calls to evil.example" ]
+    (A.No_egress [ "evil.example" ])
+    (entries [ http "evil.example" ])
 
 (* List elements are matched multiset-wise. *)
 let test_args_partial_multiset () =

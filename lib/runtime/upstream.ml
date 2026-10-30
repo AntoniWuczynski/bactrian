@@ -27,6 +27,7 @@ let tls_ready = function
 type request = {
   meth : string;
   url : Uri.t;
+  target : string option;
   headers : (string * string) list;
   body : string;
 }
@@ -82,9 +83,11 @@ let header_value headers name =
       else None)
     headers
 
-let framing ~status headers =
-  if status = 204 || status = 304 || (status >= 100 && status < 200) then
-    Fixed 0
+let framing ~meth ~status headers =
+  if
+    String.equal meth "HEAD" || status = 204 || status = 304
+    || (status >= 100 && status < 200)
+  then Fixed 0
   else
     match header_value headers "transfer-encoding" with
     | Some te when String.equal (String.lowercase_ascii te) "chunked" -> Chunked
@@ -99,7 +102,7 @@ let framing ~status headers =
    because its body reader reports a connection dropped inside a chunked body
    as a clean end, and a dropped stream has to be told apart from a finished
    one. *)
-let read_head r =
+let rec read_head r =
   let status_line = Eio.Buf_read.line r in
   let status =
     match String.split_on_char ' ' status_line with
@@ -119,6 +122,11 @@ let read_head r =
         | None -> headers acc)
   in
   match status with
+  (* An interim answer (100 Continue, 103 Early Hints) comes before the final
+     one. 101 is final: the connection changes protocol after it. *)
+  | Some status when status >= 100 && status < 200 && status <> 101 ->
+      ignore (headers [] : (string * string) list);
+      read_head r
   | Some status -> Ok (status, headers [])
   | None -> Error (Failed_after_send ("bad status line: " ^ status_line))
 
@@ -202,7 +210,12 @@ let read_body ~clock ~t_head ~on_chunk ~failure framing r =
       | None -> Printexc.raise_with_backtrace e backtrace)
 
 let request_text (req : request) ~host =
-  let target = match Uri.path_and_query req.url with "" -> "/" | t -> t in
+  let target =
+    match (req.target, Uri.path_and_query req.url) with
+    | Some t, _ -> t
+    | None, "" -> "/"
+    | None, t -> t
+  in
   let head =
     Printf.sprintf
       "%s %s HTTP/1.1\r\n\
@@ -254,7 +267,7 @@ let run ~net ~clock connector (req : request) ~on_head ~on_chunk =
             let t_head = Eio.Time.now clock in
             on_head { status; headers = allowed_headers raw_headers };
             read_body ~clock ~t_head ~on_chunk ~failure
-              (framing ~status raw_headers)
+              (framing ~meth:req.meth ~status raw_headers)
               r
       in
       try

@@ -61,6 +61,7 @@ type config = {
   mcp : Mcp_proxy.config list;
   sandbox : Sandbox.t;
   faketime : bool;
+  egress : Egress.t option;
 }
 
 type result = {
@@ -232,6 +233,16 @@ let recorded_patterns store ~run_id =
   let* redact = strings "redact" in
   Ok (normalise, redact)
 
+let recorded_egress store ~from =
+  let run_id = recording_id from in
+  let* fields = recorded_meta store ~run_id in
+  match List.assoc_opt "egress" fields with
+  | None | Some `Null -> Ok Egress.block_all
+  | Some json ->
+      Result.map_error
+        (Printf.sprintf "recording %s: meta.json egress: %s" run_id)
+        (Egress.of_json json)
+
 let recorded_mcp store ~from =
   let run_id = recording_id from in
   let* fields = recorded_meta store ~run_id in
@@ -311,6 +322,23 @@ let process_env config variables ~state_dir ~temp_dir =
   in
   merge (base_env @ passthrough @ variables @ home_env ~state_dir ~temp_dir)
 
+(* Egress (decision 0026): the agent's HTTPS clients reach the model proxy's
+   port as a proxy, and trust the bundle of the system's roots and the
+   project CA. Only a command agent's own process gets them. *)
+
+let bundle_file = "bactrian-trust.pem"
+
+let egress_env ~run_id ~token ~port ~bundle =
+  let proxy = Printf.sprintf "http://%s:%s@127.0.0.1:%d" run_id token port in
+  [
+    ("HTTPS_PROXY", proxy);
+    ("https_proxy", proxy);
+    ("NODE_USE_ENV_PROXY", "1");
+    ("SSL_CERT_FILE", bundle);
+    ("NODE_EXTRA_CA_CERTS", bundle);
+    ("REQUESTS_CA_BUNDLE", bundle);
+  ]
+
 (* The conversation *)
 
 let wrong_turn ~what ~turn ~expected =
@@ -387,7 +415,7 @@ let decide_outcome ~replay (findings : P.findings) failure =
 
 let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
     ~latency_ms ~tokens ~normalise ~redact ~replay_of ~violations ~clock
-    ~upstreams =
+    ~upstreams ~egress =
   let count l = `Int (List.length l) in
   `Assoc
     ([
@@ -419,7 +447,9 @@ let meta_json ~run_id ~config ~sim_now ~outcome ~(findings : P.findings) ~spend
              ("cap_refusals", count findings.cap_refusals);
              ("divergences", count findings.divergences);
              ("errors", count findings.errors);
+             ("http_calls", count findings.http_calls);
            ] );
+       ("egress", match egress with Some e -> Egress.to_json e | None -> `Null);
        ("cost_usd", `Float spend);
        ( "latency_ms",
          match latency_ms with Some ms -> `Float ms | None -> `Null );
@@ -446,6 +476,7 @@ let no_findings : P.findings =
     masks_fired = 0;
     cap_refusals = [];
     errors = [];
+    http_calls = [];
   }
 
 let compile_patterns ~what sources =
@@ -503,7 +534,8 @@ let kill_grace = 5.
 
 let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(on_start = fun (_ : string) -> ()) ?keys ?(upstream = P.default_upstream)
-    ?(connector = Upstream.plain) ~env ~proxy ~store ~ledger config =
+    ?(connector = Upstream.plain) ?interception ~env ~proxy ~store ~ledger
+    config =
   let clock = Eio.Stdenv.clock env in
   let now = Eio.Time.now clock in
   let run_id = fresh_id ~random_bytes now in
@@ -551,6 +583,20 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   Eio.Path.mkdirs ~exists_ok:true ~perm:0o700 temp_dir;
   let temp_dir_path = Filename.concat run_dir_path "tmp" in
   let* () = copy_fixtures ~env ~state_dir config.fixtures in
+  (* An HTTP-mode agent is a server bactrian does not start, so it cannot be
+     given the proxy and trust variables. *)
+  let* egress =
+    match (config.egress, config.agent, interception) with
+    | None, _, _ | Some _, Http _, _ -> Ok None
+    | Some policy, Command _, Some (i : Egress_proxy.interception) ->
+        let bundle = Filename.concat temp_dir_path bundle_file in
+        Eio.Path.save ~create:(`Or_truncate 0o644)
+          Eio.Path.(temp_dir / bundle_file)
+          i.bundle;
+        Ok (Some (policy, i.tls ~sim_now, bundle))
+    | Some _, Command _, None ->
+        Error "egress is intercepted, but no project CA was given"
+  in
   (* Lives as long as the run: its own port, where the sandbox needs one. *)
   Eio.Switch.run @@ fun run_sw ->
   let* port =
@@ -564,8 +610,13 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       ~sim_now
   in
   let agent_process_env =
-    process_env config variables ~state_dir:state_dir_path
-      ~temp_dir:temp_dir_path
+    process_env config
+      (variables
+      @
+      match egress with
+      | Some (_, _, bundle) -> egress_env ~run_id ~token ~port ~bundle
+      | None -> [])
+      ~state_dir:state_dir_path ~temp_dir:temp_dir_path
   in
   let agent_clock =
     match config.agent with
@@ -652,6 +703,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         pricing = config.pricing;
         run_started = !started;
         mcp = config.mcp;
+        egress = Option.map (fun (policy, tls, _) -> (policy, tls)) egress;
       };
     registered := true;
     Fun.protect ~finally:(fun () -> ignore (unregister ())) @@ fun () ->
@@ -807,6 +859,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
           cassette;
           agent = List.rev !events;
           resolve = (fun p -> Result.to_option (Store.read_payload store p));
+          http = findings.http_calls;
         }
     in
     let outcome, verdicts =
@@ -819,6 +872,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~sandbox:c.checker_sandbox ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
               ~date:(String.sub (rfc3339 now) 0 10)
+              ~egress_intercepted:(Option.is_some egress && label.applied)
               ~assertions:c.assertions ~checkers:c.checkers entries
           in
           (* Only a run that passed is judged by its checks. The others keep
@@ -865,7 +919,8 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~tokens:(Report_data.tokens entries)
               ~normalise:normalise_sources ~redact:redact_sources
               ~replay_of:(Option.map (fun (_, id, _) -> id) recording)
-              ~violations ~clock:clock_label ~upstreams)
+              ~violations ~clock:clock_label ~upstreams
+              ~egress:(Option.map (fun (policy, _, _) -> policy) egress))
         ^ "\n")
     with
     | () ->

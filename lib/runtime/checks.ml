@@ -31,10 +31,6 @@ let trace_date entries =
           None)
     entries
 
-(* Nothing intercepts a run's HTTP egress yet, so no HTTP call is ever recorded
-   and [no_egress] cannot be verified. *)
-let egress_intercepted = false
-
 let kind : Assertion.t -> string = function
   | Tool_sequence _ -> "tool_sequence"
   | Tool_args _ -> "tool_args"
@@ -46,7 +42,7 @@ let kind : Assertion.t -> string = function
   | No_egress _ -> "no_egress"
 
 let evaluate ?table ?stderr_dir ~process_mgr ~clock ~fs ~sandbox ~timeout ~cwd
-    ~date ~assertions ~checkers entries =
+    ~date ~egress_intercepted ~assertions ~checkers entries =
   let assertion i a =
     let verdict =
       match

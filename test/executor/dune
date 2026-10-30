@@ -6,6 +6,7 @@
  (libraries
   bactrian.core
   bactrian.runtime
+  egress_stub
   fake_upstream
   http_agent
   weather_agent

@@ -228,6 +228,7 @@ let make_run ?(connector = Upstream.plain) ?(mode = P.Record) ?(record = true)
     pricing;
     run_started = Eio.Time.now (Eio.Stdenv.clock ctx.env);
     mcp;
+    egress = None;
   }
 
 let recording ctx (run : P.run) =
@@ -261,7 +262,7 @@ let send ctx ?(headers = []) ?seg ~token ~provider ?(query = "") ~meth path body
     Eio.Switch.run @@ fun sw ->
     Upstream.call ~sw ~net:(Eio.Stdenv.net ctx.env) ~clock ~timeout:10.
       Upstream.plain
-      { meth; url = Uri.of_string url; headers; body }
+      { meth; url = Uri.of_string url; target = None; headers; body }
       ~on_head:(fun h -> head := Some h)
       ~on_chunk:(fun ~dt_ms:_ s ->
         Buffer.add_string buf s;

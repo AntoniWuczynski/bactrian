@@ -1,6 +1,10 @@
 (** The model proxy: one loopback listener serving every registered run, plus
     listeners of a single run where the sandbox needs them ({!listen_unix},
     {!listen_tcp}). Requests arrive at /r/<token>/<provider>/<provider path>.
+    The same listeners take the egress proxy's [CONNECT] requests (decision
+    0026): without [Proxy-Authorization] they get 407 with [Proxy-Authenticate],
+    with a run ID and token that are not a live run's (or another run's, on a
+    listener of one run) 403, before any TLS work.
 
     The agent's key is "bactrian-" ^ token in the provider's usual key header.
     For Gemini it may instead (or also) be the [key] query parameter, which must
@@ -77,6 +81,11 @@ type run = {
           [/r/<token>/mcp-http/<name>/...] (Streamable HTTP), see {!Mcp_proxy}.
           Their exchanges share this run's cassette, redaction, masks, matcher
           and findings. *)
+  egress : (Egress.t * Egress_proxy.tls) option;
+      (** The run's egress policy and the TLS that terminates its tunnels, when
+          it intercepts egress: [CONNECT] requests carrying the run ID and token
+          as proxy credentials are handed to {!Egress_proxy.connect}. [None]
+          refuses them with 403. *)
 }
 
 type findings = {
@@ -104,6 +113,8 @@ type findings = {
           bodies, and refused requests (wrong key, cap or unknown model, replay
           miss, unknown endpoint, no configured key). Requests that cannot be
           tied to a run are counted by {!unattributed} instead. *)
+  http_calls : Trace_builder.http_call list;
+      (** The run's egress requests in order, refused ones included. *)
 }
 
 type t

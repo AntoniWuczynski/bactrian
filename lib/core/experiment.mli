@@ -145,6 +145,15 @@ val mcp_http_clash : http_names:string list -> string -> string option
     another name of [http_names] has the same one, so the agent could not tell
     the two servers apart. *)
 
+val egress_host : string -> (string, string) result
+(** An egress host key in the form the policy compares ({!Trace.host_key}).
+    [Error] unless it is a DNS name or an IP address, with or without a port: a
+    scheme, a wildcard or a path is refused. *)
+
+val egress_host_errors : (string * 'a) list -> (string * string) list
+(** The keys of an egress host list that {!egress_host} refuses, or that name
+    the same host as another key before them, each with its message. *)
+
 val policies : (string * policy) list
 (** Every policy with its name in an experiment file: [record], [replay],
     [passthrough] and [block]. *)
@@ -155,8 +164,9 @@ val policy_of_name : string -> policy option
 (** The inverse of {!policy_name}. *)
 
 val unenforced : t -> string list
-(** One line per setting this build accepts but does not enforce (egress, [mcp]
-    servers when [intercept] leaves out [mcp], and the isolation of an [http]
-    agent), each starting with the setting's name and a colon. The sandbox and
-    the clock are enforced where the host allows, and a run they could not cover
-    is labelled instead (design §5.3, §5 step 2). *)
+(** One line per setting this build accepts but does not enforce ([mcp] servers
+    when [intercept] leaves out [mcp], [egress] hosts or a default other than
+    [block] when it leaves out [egress], and the isolation and egress of an
+    [http] agent), each starting with the setting's name and a colon. The
+    sandbox and the clock are enforced where the host allows, and a run they
+    could not cover is labelled instead (design §5.3, §5 step 2). *)

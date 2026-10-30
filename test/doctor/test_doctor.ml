@@ -46,6 +46,7 @@ let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
     faketime;
     funded;
     mcp_https;
+    egress = false;
   }
 
 (* Keys *)
@@ -286,9 +287,32 @@ let test_tls () =
      (/etc/proxy-ca.pem) adds 2 certificates trusted for every HTTPS host, the \
      providers included"
     c.message;
-  Alcotest.check pairs "egress is not built"
-    [ ("ca", "skip"); ("node", "skip") ]
-    (statuses Doctor.egress_checks)
+  Alcotest.check pairs "the CA and node checks"
+    [
+      ("ca", "ok");
+      ("ca", "fail");
+      ("node", "ok");
+      ("node", "ok");
+      ("node", "warn");
+      ("node", "warn");
+      ("node", "warn");
+      ("node", "skip");
+      ("node", "skip");
+    ]
+    (statuses
+       [
+         Doctor.ca_check ~ca:(fun () ->
+             Ok "the project CA is .bactrian/ca/ca.pem");
+         Doctor.ca_check ~ca:(fun () ->
+             Error "the CA key is readable by others");
+         Doctor.node_check ~egress:true (Some (Ok "v24.3.0\n"));
+         Doctor.node_check ~egress:true (Some (Ok "v22.21.0"));
+         Doctor.node_check ~egress:true (Some (Ok "v22.20.1"));
+         Doctor.node_check ~egress:true (Some (Ok "v23.11.0"));
+         Doctor.node_check ~egress:true (Some (Error "exited 1"));
+         Doctor.node_check ~egress:true None;
+         Doctor.node_check ~egress:false (Some (Ok "v20.0.0"));
+       ])
 
 (* Upstream overrides *)
 
@@ -358,6 +382,7 @@ let test_no_key_value_in_output () =
     Doctor.report
       (Doctor.run ~env ~bactrian_exe:"/nonexistent"
          ~tls:(fun () -> Ok { Upstream.roots = 1; extra = None })
+         ~ca:(fun () -> Ok "the project CA")
          ~upstream:P.default_upstream ~keys:sentinels
          ~path:(Some "/usr/bin:/bin") t)
   in

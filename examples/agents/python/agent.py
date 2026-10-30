@@ -13,7 +13,12 @@ environment, so runs in flight at once stay apart.
 When AGENT_MCP_COMMAND holds a JSON array (for example
 ["bactrian", "mcp-shim", "weather"]), get_weather runs on that stdio MCP server
 instead of returning a canned answer. AGENT_MCP_PROTOCOL picks the protocol
-revision: 2026-07-28 (the default) or 2025-11-25, which opens with initialize."""
+revision: 2026-07-28 (the default) or 2025-11-25, which opens with initialize.
+
+When AGENT_WEATHER_URL is set instead, get_weather fetches that HTTPS URL with
+the city as its query, with httpx or, when AGENT_HTTP_CLIENT is requests, with
+requests. Both reach it through HTTPS_PROXY, which bactrian's egress proxy
+answers, and trust its CA through SSL_CERT_FILE and REQUESTS_CA_BUNDLE."""
 
 import json
 import os
@@ -104,6 +109,28 @@ class ToolResult(BaseModel):
 Arguments = TypeAdapter(dict[str, JsonValue])
 
 
+class City(BaseModel):
+    city: str = ""
+
+
+def fetch_weather(url: str, client: str, arguments_json: str) -> str:
+    """get_weather over HTTPS: the service's answer, or its status and body."""
+    # Each client is imported where it is used: urllib3, under requests, binds a
+    # socket at import to probe for IPv6, which a sandbox reports as a violation.
+    params = {"city": City.model_validate_json(arguments_json).city}
+    if client == "requests":
+        import requests
+
+        reply = requests.get(url, params=params, timeout=30)
+        status, text = reply.status_code, reply.text
+    else:
+        import httpx
+
+        answer = httpx.get(url, params=params, timeout=30)
+        status, text = answer.status_code, answer.text
+    return text if 200 <= status < 300 else f"weather service: HTTP {status}: {text}"
+
+
 class McpClient:
     """A minimal MCP client for a stdio server: one JSON-RPC message per line,
     one request in flight at a time."""
@@ -171,6 +198,8 @@ class Session:
         self.mcp_command = env.get("AGENT_MCP_COMMAND")
         self.mcp_protocol = env.get("AGENT_MCP_PROTOCOL", "2026-07-28")
         self.mcp: McpClient | None = None
+        self.weather_url = env.get("AGENT_WEATHER_URL")
+        self.http_client = env.get("AGENT_HTTP_CLIENT", "httpx")
         self.client = OpenAI(
             max_retries=0,
             api_key=env.get("OPENAI_API_KEY"),
@@ -184,6 +213,8 @@ class Session:
         ]
 
     def weather(self, name: str, arguments_json: str) -> str:
+        if self.weather_url is not None:
+            return fetch_weather(self.weather_url, self.http_client, arguments_json)
         if self.mcp_command is None:
             return WEATHER_RESULT
         if self.mcp is None:

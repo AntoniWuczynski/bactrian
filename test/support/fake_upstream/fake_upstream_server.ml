@@ -4,7 +4,8 @@
    prompt. It prints its port as its first line, serves until its standard
    input closes, and holds every request while the --hold file exists. With
    --tls-ca it serves HTTPS for localhost and 127.0.0.1, with a certificate of
-   a CA minted at start and written to that file. *)
+   a CA minted at start and written to that file. GET /weather is a weather
+   service instead, for agents whose tool calls it over HTTPS. *)
 
 open Cmdliner
 module F = Fake_upstream
@@ -72,7 +73,19 @@ let main fixtures hold log tls_ca =
           Eio.Time.sleep clock 0.02
         done)
       hold;
-    if has_tool_message r then second else first
+    if String.equal r.path "/weather" then
+      {
+        F.status = 200;
+        headers = [ ("content-type", "application/json") ];
+        chunks =
+          [
+            Printf.sprintf
+              {|{"forecast":"18 degrees Celsius, cloudy","query":%S}|} r.query;
+          ];
+        ending = Complete;
+      }
+    else if has_tool_message r then second
+    else first
   in
   match F.start ~sw ~net:(Eio.Stdenv.net env) (F.Handler handler) with
   | Error e ->

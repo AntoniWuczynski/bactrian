@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls go to the providers over HTTPS, and to a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)). HTTPS is tested against a local server with a certificate authority made for the test, not yet against the real providers. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls go to the providers over HTTPS, and to a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)). HTTPS is tested against a local server with a certificate authority made for the test, not yet against the real providers. An agent's own HTTPS calls to other services are intercepted, recorded and replayed per host (see [HTTPS egress](#https-egress)), tested with Node `fetch`, httpx and requests against a local server. Plain HTTP egress, WebSockets and HTTP/2-only clients are not intercepted.
 
 Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
 
@@ -101,6 +101,40 @@ bactrian's own calls over HTTPS, to the providers, to an `https` upstream, to an
 To trust another certificate authority as well, for a proxy that inspects TLS or a test server, set `BACTRIAN_EXTRA_CA_CERTS` to a file of PEM certificates. It adds to the system's roots and never replaces them. Its certificates are trusted for every host, the real providers included, so `doctor` shows a `warn` naming the variable, the file and the number of certificates in it, and `record`, `replay` and `run` print the same warning before calling anything over HTTPS. The file must belong to you or to root, and neither its group nor others may write to it. bactrian does not read `SSL_CERT_FILE`, `NIX_SSL_CERT_FILE` or `OCAML_EXTRA_CA_CERTS`, because those are for the agent's own clients (see [decision 0017](docs/decisions/0017-upstream-tls-trust.md)).
 
 When the roots cannot be loaded (no bundle, or a `BACTRIAN_EXTRA_CA_CERTS` that cannot be read, holds no certificate or could be changed by another user), a command that would call a provider, an agent or an MCP server over HTTPS stops with exit status 69 and says why. An MCP server counts when the run calls it live: `passthrough`, or `record` outside a replay. A certificate that does not verify fails the call. The agent gets an error from the proxy, and the run's reason names the TLS failure. `bactrian doctor` shows whether the roots load.
+
+## HTTPS egress
+
+An agent's own HTTPS calls, to a weather service or a search API its tools use, go through bactrian too. Each run gives the agent `HTTPS_PROXY` (and `https_proxy`) naming bactrian's proxy port, with the run ID and run token as the proxy's user name and password, and `NODE_USE_ENV_PROXY=1`, which makes Node's `fetch` use it. bactrian answers each `CONNECT` with a certificate for the requested host, signed by a certificate authority of the project, and the agent trusts that authority through a bundle of the system's root certificates and the project's, named by `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and `REQUESTS_CA_BUNDLE`. The bundle is written into the run's temporary directory and deleted with it. The proxy shares the model proxy's port, so the sandbox still lets the agent reach one port and nothing else (see [decision 0026](docs/decisions/0026-egress-through-the-model-proxy.md)).
+
+Every host is blocked unless it is listed. In an experiment:
+
+```yaml
+intercept: [model, mcp, fixtures, egress]
+egress: { default: block, hosts: { "api.weather.example": record, "search.example:8443": passthrough } }
+```
+
+and for `bactrian record`, `--egress HOST=POLICY` (repeatable) and `--egress-default POLICY`. A host is matched as `host:port` first, then as `host`, without regard to case or a trailing dot. A key is a DNS name or an IP address, with or without a port: a scheme, a wildcard, a path or two keys for the same host is a configuration error. An experiment whose `intercept` leaves out `egress` but lists hosts, or a default other than `block`, gets a warning, also listed under `unenforced`, because its agent's HTTPS then goes direct wherever the sandbox lets it. The policies:
+
+- `record`: called and recorded when recording, answered from the recording in a replay. `bactrian replay` uses the policy the recording was made with.
+- `replay`: always answered from the recording, and refused as a replay miss when there is none.
+- `passthrough`: always called, never recorded.
+- `block` (the default): the `CONNECT` is refused with 403 and `bactrian_egress_blocked`, before any TLS. The attempt still appears in the trace.
+
+A request inside a tunnel goes only to the host and port the `CONNECT` named. Its target must be a path, or an `https` URL of that same host and port, and anything else (another host, user information, another scheme) gets 400 with `bactrian_bad_request`. The `Host` header is always the tunnel's.
+
+Each call is an exchange on the cassette's `http` channel, keyed on its method, host and port, path, sorted query, `content-type` and body (canonical JSON, or a hash of other bytes), with the run's `normalise` and `redact` patterns applied as for model calls. A strict replay serves it without calling the host, in any order, because tools that fetch URLs are often called in parallel, and a call the recording lacks gets 409 with `bactrian_replay_miss` and is a divergence whose diff names what changed. The trace has an `http_call` for every call, blocked ones included (method `CONNECT`, status 403), so a `no_egress` assertion can be checked. Without the sandbox a client that ignores the proxy goes direct and leaves no call, so in an unsandboxed run `no_egress` fails as unverifiable unless a listed host was called, which fails it anyway. `meta.json` records the policy under `egress`.
+
+The certificate authority lives in `.bactrian/ca/`: the directory and the key `ca.key` are readable by you alone, and a key that others can read is refused. It is made on first use and is valid for a year. `bactrian ca path` prints its certificate's absolute path (to trust it elsewhere) and `bactrian ca rotate` replaces it. Leaf certificates are valid from 2 days before the earlier of now and the run's `SIM_NOW` to 7 days after the later, and the authority from 1970 on, so an agent whose clock `libfaketime` sets to a past `SIM_NOW` (a scenario's fixed `now`, or an old recording's in a replay) still accepts them. A `SIM_NOW` after the authority expires fails under `libfaketime`. Leaves are kept in memory only, one per host. bactrian's own calls to these hosts check their certificates as in [HTTPS](#https), and never trust the bundle it gives the agent.
+
+What is covered:
+
+| Client | Proxy | Trust |
+|---|---|---|
+| Node `fetch` (the OpenAI and Anthropic SDKs use it) | `NODE_USE_ENV_PROXY`, Node 24.0 or later, or 22.21 or later | `NODE_EXTRA_CA_CERTS` |
+| Python httpx, httpx2 (the OpenAI and Anthropic SDKs) | `HTTPS_PROXY` | `SSL_CERT_FILE` |
+| Python requests | `HTTPS_PROXY` | `REQUESTS_CA_BUNDLE` |
+
+Not covered: plain `http://` egress (no `HTTP_PROXY` is set, so it goes direct and fails in the sandbox), WebSockets (an `Upgrade` inside the tunnel gets 501), HTTP/2-only and gRPC clients, clients that ignore the proxy variables or bring their own roots (Node's `ws`, Go before 1.27 and Rust's platform verifier on macOS, `trust_env=False`), and HTTP-mode agents, which bactrian does not start, so their egress is not intercepted and their runs say so under `unenforced`. Package managers honour the proxy as well, so a `uv run` or `npx` that downloads packages when it starts is refused unless its index is listed: install the agent's packages before the run (the examples use `uv run --no-sync`). Bodies are passed on whole, not streamed, and a body over 64 MiB is refused: a request with 413, a response with 502, recorded as a transport error. Only the response headers bactrian stores for model calls (`content-type`, `retry-after`, the rate-limit headers and `x-request-id`) reach the agent.
 
 ## Local and self-hosted models
 
@@ -291,7 +325,8 @@ ok    tls: the trusted root certificates load (161)
 - `clock`: with an experiment, the clock label its command agent would get (`enforced`, or `contract-only` with the reason). Without one, whether `libfaketime` is found on Linux. Contract-only on macOS is expected and is `ok`.
 - `upstream-<provider>` (only for a provider whose `BACTRIAN_UPSTREAM_<PROVIDER>` is set): the URL. A `warn` for plain `http` to a host other than this machine, because the API key is sent to it unencrypted.
 - `tls`: the trusted root certificates load (see [HTTPS](#https)), and how many there are. A `warn` when `BACTRIAN_EXTRA_CA_CERTS` adds some. When they do not load, a `fail` if the experiment calls a provider whose upstream is an `https` URL, an agent or an MCP server over HTTPS, and a `warn` otherwise.
-- `ca` and `node`: `skip`, because egress interception is not built.
+- `ca`: the project certificate authority loads, or is made when missing, with its path, expiry and fingerprint. A key that others can read, or an expired authority, is a `fail` naming the fix. `skip` when the experiment does not intercept egress.
+- `node`: the `node` on `PATH` honours `NODE_USE_ENV_PROXY` (24.0 or later, or 22.21 or later). An older one is a `warn`, because a Node agent's `fetch` would bypass the egress proxy. `skip` without `node`, or when the experiment does not intercept egress.
 
 `--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file is reported with its location and exits 64, as for `bactrian run`.
 

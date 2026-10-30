@@ -1,7 +1,8 @@
 (* The virtual machine sandbox (design §5.3) on a real container runtime: the
    example agents' cycle and the escape agents in a Linux container, no host
    process visible from inside it, and no container left after a run, an
-   interrupt or a bactrian killed with SIGKILL.
+   interrupt or a bactrian killed with SIGKILL. An agent's HTTPS egress
+   reaches the egress proxy through the relay.
 
    They run on docker, or on Apple's container when BACTRIAN_VM_RUNTIME is
    container. Without a working runtime the tests are skipped, unless
@@ -191,6 +192,55 @@ let escapes agent () =
     (fun ~dir ->
       copy ~into:dir [ "test/sandbox/" ^ file ];
       runtime @ [ Filename.concat dir file ])
+
+(* Egress from the virtual machine: the agent's fetch reaches the egress proxy
+   through the relay as a CONNECT tunnel, and trusts the project CA through
+   the run's bundle, which the container must see at the same path. *)
+let egress () =
+  gate [ node_image ];
+  Egress_cli.with_services "vm-egress"
+  @@ fun ~project ~ca ~models ~weather ~port ->
+  let argv = typescript.prepare project in
+  let url = Printf.sprintf "https://127.0.0.1:%d/weather" port in
+  let code, recorded =
+    Cli_world.cli ~dir:project
+      ~env:
+        ((("BACTRIAN_CAP_OPENAI", "1") :: Cli_world.key_env)
+        @ Egress_cli.env ~ca ~models ~url ~http_client:"fetch")
+      ([
+         "record";
+         "--json";
+         "--turn";
+         first_turn;
+         "--sandbox";
+         "strict";
+         "--sandbox-backend";
+         "vm";
+         "--sandbox-runtime";
+         runtime;
+         "--sandbox-image";
+         node_image;
+         "--egress";
+         Printf.sprintf "127.0.0.1:%d=record" port;
+       ]
+      @ Egress_cli.passthrough @ [ "--" ] @ argv)
+  in
+  Alcotest.(check (pair int string))
+    "record: passed" (0, "passed")
+    (code, Egress_cli.outcome recorded);
+  let run = Cli_world.string_field "run_id" recorded in
+  Alcotest.(check int)
+    "the service was called once" 1
+    (List.length (Egress_cli.weather_calls weather));
+  Alcotest.(check bool)
+    "the call is in the cassette" true
+    (Egress_cli.has_text project run "cassette.jsonl" {|"channel":"http"|});
+  Alcotest.(check bool)
+    "the reply used the forecast" true
+    (Egress_cli.has_text project run "cassette.jsonl" "18 degrees");
+  Alcotest.(check bool)
+    "no container left" false
+    (container_exists ("bactrian-" ^ run))
 
 (* Host processes. The agent looks for a sentinel held by a process of the
    user: through /proc where there is one, and through the process-arguments
@@ -753,6 +803,7 @@ let () =
         List.map
           (fun a -> Alcotest.test_case a.name `Slow (escapes a))
           [ typescript; python ] );
+      ("egress", [ Alcotest.test_case "a weather fetch" `Slow egress ]);
       ( "masks",
         [ Alcotest.test_case "a hidden file's neighbours" `Slow neighbours ] );
       ( "host processes",

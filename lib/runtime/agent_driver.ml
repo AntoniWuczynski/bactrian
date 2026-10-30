@@ -237,6 +237,7 @@ let send_http (h : http) msg =
     {
       meth = "POST";
       url = h.http_config.url;
+      target = None;
       headers =
         [
           ("Content-Type", "application/json");

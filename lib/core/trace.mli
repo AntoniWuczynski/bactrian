@@ -67,7 +67,7 @@ type event =
   | Http_call of {
       turn : int;
       meth : string;  (** ["method"] on the wire. *)
-      host : string;
+      host : string;  (** In the form {!host_name} gives. *)
       path : string;
       status : int;
     }
@@ -75,6 +75,23 @@ type event =
   | Reply of { turn : int; content : string }
   | Sandbox_violation of { kind : string; detail : string }
   | Done
+
+val host_name : string -> string
+(** A host name as an [Http_call] holds it and [no_egress] compares it:
+    lowercased, without one trailing dot, so that [Example.COM.] is
+    [example.com]. *)
+
+val authority : string -> (string * int, string) result
+(** The host, lowercased and without IPv6 brackets, and port of [host:port] or
+    [[v6]:port]. The host is in the form {!host_name} gives, so
+    [Example.com.:443] names [example.com]. The port must be from 1 to 65535. *)
+
+val host_port : string -> int -> string
+(** [host:port], with brackets around an IPv6 address. *)
+
+val host_key : string -> string
+(** An egress host key ([host] or [host:port]) in the form the policy compares:
+    {!host_port} of its {!authority}, else its {!host_name}. *)
 
 type entry = { seq : int; t_ms : int; event : event }
 

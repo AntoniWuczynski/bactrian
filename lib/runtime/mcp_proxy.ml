@@ -822,7 +822,13 @@ let forward_http t ~url ~rest ~query ~headers body =
   let result =
     Eio.Switch.run @@ fun sw ->
     t.env.call ~sw t.shared.connector
-      { meth = "POST"; url = target url ~rest ~query; headers; body }
+      {
+        meth = "POST";
+        url = target url ~rest ~query;
+        target = None;
+        headers;
+        body;
+      }
       ~on_head:(fun h -> head := Some h)
       ~on_chunk:(fun ~dt_ms:_ c -> chunks := c :: !chunks)
   in

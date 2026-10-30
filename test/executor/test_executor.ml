@@ -297,6 +297,23 @@ let test_preflight =
   | Ok _ | Error (E.Configuration _ | E.Usage _) ->
       Alcotest.fail "expected Environment"
 
+(* Egress is in the default intercept list, so a caller without the project CA
+   is refused rather than running without it. *)
+let test_egress_without_ca =
+  with_ctx "egress-no-ca" @@ fun ctx ->
+  match
+    E.run_experiment ~root:ctx.root ~random_bytes ~sandbox:`Off
+      ~bactrian_exe:"/nonexistent/bactrian"
+      ~keys:[ (P.Openai, "real-key") ]
+      ~upstream:(fun _ -> Uri.of_string (F.base_url ctx.up))
+      ~env:ctx.env ~experiment_file:(ctx.dir ^ "/exp.json") ~resume:None ()
+  with
+  | Error (E.Environment m) ->
+      Alcotest.(check string)
+        "names the CA" "egress is intercepted, but no project CA was given" m
+  | Ok _ | Error (E.Configuration _ | E.Usage _) ->
+      Alcotest.fail "expected Environment"
+
 (* Assertions and checkers decide the outcome *)
 
 let test_failing_assertion_and_checker =
@@ -551,6 +568,8 @@ let () =
           Alcotest.test_case "assertions and checkers decide" `Slow
             test_failing_assertion_and_checker;
           Alcotest.test_case "preflight" `Quick test_preflight;
+          Alcotest.test_case "egress without the CA" `Quick
+            test_egress_without_ca;
         ] );
       ( "resume",
         [

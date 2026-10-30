@@ -20,6 +20,12 @@ let run ?stop ?files ?vet ~on_progress ~bactrian_exe ~env (r : request) =
         Interrupt.run ?stop (fun () ->
             Executor.run_experiment ~seatbelt_hint:r.seatbelt_hint ~upstream
               ~connector:(Features.connector (Eio.Stdenv.process_mgr env))
+              ~interception:
+                (Features.interception
+                   (Eio.Stdenv.process_mgr env)
+                   ~root:
+                     (Eio.Path.native_exn
+                        Eio.Path.(Eio.Stdenv.cwd env / ".bactrian")))
               ?sandbox:r.sandbox
               ~on_sandbox:(fun l -> label := Some l)
               ~bactrian_exe ~env ?files ?vet ~experiment_file:r.experiment

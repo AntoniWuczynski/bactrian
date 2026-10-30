@@ -127,11 +127,25 @@ type config = {
           a command agent where {!Agent_clock} can, [false] for [off]. An [http]
           agent's clock is contract-only whatever this says. [meta.json] records
           the {!Bactrian_core.Clock_label} under [clock]. *)
+  egress : Egress.t option;
+      (** The per-host egress policy when the run intercepts a command agent's
+          HTTPS egress ({!Egress_proxy}), [None] when it does not. The agent
+          then gets [HTTPS_PROXY] and [https_proxy] naming the run's proxy port
+          with the run ID and token as credentials, [NODE_USE_ENV_PROXY=1], and
+          [SSL_CERT_FILE], [NODE_EXTRA_CA_CERTS] and [REQUESTS_CA_BUNDLE] naming
+          the trust bundle, written into [tmp] and deleted with it. [meta.json]
+          records the policy under [egress] ([null] without), the trace has the
+          run's HTTPS calls, and [no_egress] can pass. An HTTP agent's egress is
+          never intercepted. *)
 }
 
 val recording_id : string -> string
 (** The run ID of a recording given as a run ID or as a run directory: the last
     path component, without a trailing ['/']. *)
+
+val recorded_egress : Store.t -> from:string -> (Egress.t, string) Stdlib.result
+(** The egress policy of the recording [from], from its [meta.json], for its
+    replay: {!Bactrian_core.Egress.block_all} when it has none. *)
 
 val recorded_mcp :
   Store.t -> from:string -> (Mcp_proxy.config list, string) Stdlib.result
@@ -167,6 +181,7 @@ val execute :
   ?keys:(Model_proxy.provider * string) list ->
   ?upstream:(Model_proxy.provider -> Uri.t) ->
   ?connector:Upstream.connector ->
+  ?interception:Egress_proxy.interception ->
   env:Eio_unix.Stdenv.base ->
   proxy:Model_proxy.t ->
   store:Store.t ->
@@ -175,9 +190,9 @@ val execute :
   (result, string) Stdlib.result
 (** Creates the run directory, cassette, state directory and temporary directory
     ([tmp], removed at teardown), builds the agent's environment (design §5 step
-    2 minus egress: provider base URLs from the proxy, placeholder keys,
-    SIM_NOW, TZ, BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP variables, HOME
-    and the XDG and npm cache variables inside the state directory, TMPDIR,
+    2: provider base URLs from the proxy, placeholder keys, SIM_NOW, TZ,
+    BACTRIAN_RUN_ID, BACTRIAN_STATE_DIR, the MCP variables, HOME and the XDG and
+    npm cache variables inside the state directory, TMPDIR,
     PYTHONDONTWRITEBYTECODE=1, PATH, LANG, TERM and the passthrough list, and
     nothing else, plus the {!Agent_clock} variables where it injects
     [libfaketime]; an HTTP agent gets the per-run variables (not HOME, the XDG,
@@ -190,7 +205,8 @@ val execute :
     (atomically), and returns the outcome.
 
     [Error] means the run could not be set up (unreadable recording, store
-    failure, unreadable fixtures, an invalid pattern): no agent was started.
+    failure, unreadable fixtures, an invalid pattern, [config.egress] for a
+    command agent without [interception]): no agent was started.
 
     [on_start] is called with the run ID as soon as it is chosen, before
     anything can fail or be cancelled, so the caller knows which run directory a

@@ -1,0 +1,28 @@
+(tests
+ (names test_egress test_egress_requests)
+ (package bactrian)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  bactrian.tls
+  cohttp
+  domain-name
+  fake_https
+  fake_upstream
+  proxy_support
+  eio
+  eio_main
+  ipaddr
+  mirage-crypto-rng.unix
+  ptime
+  ptime.clock.os
+  re
+  tls
+  tls-eio
+  unix
+  uri
+  x509
+  yojson
+  alcotest)
+ (flags
+  (:standard -w -70)))

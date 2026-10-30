@@ -72,9 +72,14 @@ type contents = {
 }
 (** What a loaded experiment holds, for [vet]. *)
 
+val egress : Bactrian_core.Experiment.t -> Bactrian_core.Egress.t option
+(** The policy the experiment's runs intercept egress with: its [egress] field
+    when [intercept] lists [egress], else [None]. *)
+
 val run_experiment :
   ?seatbelt_hint:bool ->
   ?root:Eio.Fs.dir_ty Eio.Path.t ->
+  ?interception:(unit -> (Egress_proxy.interception, string) result) ->
   ?random_bytes:(int -> string) ->
   ?announce:(string -> unit) ->
   ?warn:(string -> unit) ->
@@ -147,6 +152,13 @@ val run_experiment :
     [announce] is called with the experiment ID once it is known and the
     manifest is about to be written, so an interrupted caller can say what to
     resume.
+
+    When [intercept] lists [egress] and the agent is a command, [interception]
+    loads the project CA and the agents' trust bundle once, before the first run
+    (an [Error] is [Environment]), and every run intercepts the agent's HTTPS
+    egress under the experiment's [egress] policy ({!Run.config}). Without
+    [interception] such an experiment is refused with [Environment], as
+    {!Run.execute} refuses such a run.
 
     [random_bytes], [keys], [upstream] and [connector] are passed to
     {!Run.execute}. [connector] defaults to {!Upstream.plain}. An https upstream

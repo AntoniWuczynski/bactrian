@@ -241,6 +241,7 @@ let config ~sandbox ~go ?(mcp = []) ?checks () : Run.config =
     mcp;
     sandbox;
     faketime = false;
+    egress = None;
   }
 
 let execute ~env ~proxy ~store ~dir config =

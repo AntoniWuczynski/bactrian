@@ -15,6 +15,10 @@
 // server instead of returning a canned answer. AGENT_MCP_PROTOCOL picks the
 // protocol revision: 2026-07-28 (the default) or 2025-11-25, which opens with
 // initialize.
+//
+// When AGENT_WEATHER_URL is set instead, get_weather fetches that HTTPS URL
+// with the city as its query, through the global fetch, which bactrian's
+// egress proxy intercepts (NODE_USE_ENV_PROXY and HTTPS_PROXY).
 import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
 import { createServer } from "node:http";
@@ -191,12 +195,24 @@ class McpClient {
   }
 }
 
+// get_weather over HTTPS: the service's answer, or its status and body.
+async function fetchWeather(base: string, argumentsJson: string): Promise<string> {
+  const args = parseJson(argumentsJson);
+  const city = isRecord(args) && typeof args["city"] === "string" ? args["city"] : "";
+  const url = new URL(base);
+  url.searchParams.set("city", city);
+  const response = await fetch(url);
+  const text = await response.text();
+  return response.ok ? text : `weather service: HTTP ${response.status}: ${text}`;
+}
+
 // One conversation. The env is its whole configuration: the process
 // environment in command mode, the start message's env in HTTP mode.
 class Session {
   private readonly model: string;
   private readonly mcpCommand: string | undefined;
   private readonly mcpProtocol: string;
+  private readonly weatherUrl: string | undefined;
   private mcp: McpClient | undefined;
   private readonly client: OpenAI;
   private readonly history: ChatCompletionMessageParam[];
@@ -205,6 +221,7 @@ class Session {
     this.model = env["AGENT_MODEL"] ?? "gpt-6-luna";
     this.mcpCommand = env["AGENT_MCP_COMMAND"];
     this.mcpProtocol = env["AGENT_MCP_PROTOCOL"] ?? "2026-07-28";
+    this.weatherUrl = env["AGENT_WEATHER_URL"];
     this.client = new OpenAI({
       maxRetries: 0,
       apiKey: env["OPENAI_API_KEY"] ?? null,
@@ -216,6 +233,7 @@ class Session {
   }
 
   private async weather(argumentsJson: string): Promise<string> {
+    if (this.weatherUrl !== undefined) return fetchWeather(this.weatherUrl, argumentsJson);
     if (this.mcpCommand === undefined) return WEATHER_RESULT;
     // The shim finds bactrian through BACTRIAN_MCP_URL, which is in the run's
     // env and not necessarily in this process's.

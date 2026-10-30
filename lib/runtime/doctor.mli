@@ -36,6 +36,9 @@ type target = {
   mcp_https : string list;
       (** The [https] MCP servers it calls live ({!Live_preflight.mcp_https}).
       *)
+  egress : bool;
+      (** Whether its runs intercept egress: [intercept] lists [egress] and the
+          agent is a command. *)
 }
 (** What an experiment says that the checks depend on. *)
 
@@ -131,14 +134,21 @@ val tls_check :
     agent at one or an [https] MCP server ([mcp_https]), and [Warn] if it does
     not. An [http] upstream does not count. *)
 
-val egress_checks : check list
-(** The CA and the Node version, which only matter once egress is intercepted:
-    both [Skip]. *)
+val ca_check : ca:(unit -> (string, string) result) -> check
+(** [ca] loads the project CA, making it when it is missing, and says where it
+    is and until when it is valid: [Pass], or [Fail] with its error. *)
+
+val node_check : egress:bool -> (string, string) result option -> check
+(** What [node --version] printed, [None] when [node] is not on [PATH]: [Pass]
+    when it honours [NODE_USE_ENV_PROXY]
+    ({!Bactrian_core.Egress.node_env_proxy}) and [Warn] when it does not or
+    cannot say. [Skip] without egress or without [node]. *)
 
 val run :
   env:Eio_unix.Stdenv.base ->
   bactrian_exe:string ->
   tls:(unit -> (Upstream.trust, string) result) ->
+  ca:(unit -> (string, string) result) ->
   upstream:(Model_proxy.provider -> Uri.t) ->
   keys:(Model_proxy.provider * string) list ->
   path:string option ->
@@ -146,4 +156,7 @@ val run :
   check list
 (** Every check, in the order they are reported. An agent that would run in the
     virtual machine is not looked up on this host ([agent] is [Skip]). [keys] is
-    {!Run.keys_from_environment}: only which providers appear in it is used. *)
+    {!Run.keys_from_environment}: only which providers appear in it is used. The
+    [ca] and [node] checks run when egress is intercepted, which without an
+    experiment it is ([record] and [replay]); [node --version] is started with
+    only [PATH] in its environment. *)

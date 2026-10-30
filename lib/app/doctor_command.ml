@@ -33,6 +33,13 @@ let run ?files ~bactrian_exe ~env r =
                   ~tls:(fun () ->
                     Upstream.tls_ready
                       (Features.connector (Eio.Stdenv.process_mgr env)))
+                  ~ca:(fun () ->
+                    Result.map
+                      (fun (ca, _) -> Features.describe_ca ca)
+                      (Features.ca
+                         ~root:
+                           (Eio.Path.native_exn
+                              Eio.Path.(Eio.Stdenv.cwd env / ".bactrian"))))
                   ~upstream
                   ~keys:(Run.keys_from_environment ())
                   ~path:(Sys.getenv_opt "PATH") target)))

@@ -12,7 +12,8 @@
   cohttp-eio
   uri
   mirage-crypto-rng
-  mirage-crypto-rng.unix)
+  mirage-crypto-rng.unix
+  cohttp)
  (foreign_stubs
   (language c)
   (names undumpable))

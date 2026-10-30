@@ -701,6 +701,14 @@ let test_judge () =
          denied_read = Ok ();
        })
 
+(* Sandboxed, the proxy is the only way out, so a host no call names passes
+   [no_egress]. *)
+let test_no_egress_sandboxed =
+  sandboxed "no-egress" @@ fun ctx ->
+  let r = no_egress_run ctx (strict ctx) in
+  Alcotest.check strs "only the host it called fails" [ "fail"; "pass" ]
+    (verdict_names r)
+
 let () =
   Alcotest.run "run_sandbox"
     [
@@ -734,5 +742,7 @@ let () =
             test_clock_library_under_tmp;
           Alcotest.test_case "a masked library is not claimed enforced" `Slow
             test_clock_library_hidden;
+          Alcotest.test_case "no_egress passes for a host never called" `Slow
+            test_no_egress_sandboxed;
         ] );
     ]

@@ -177,6 +177,26 @@ let test_dotted_key_location () =
   | [ e ] -> Alcotest.(check int) "the host's line" 9 e.line
   | es -> Alcotest.failf "expected one error, got %d" (List.length es)
 
+(* A refused egress host key is located at its own line and column. *)
+let test_egress_key_location () =
+  with_dir @@ fun dir ->
+  write dir "e.yaml"
+    "version: 1\n\
+     name: x\n\
+     agent: { protocol: command, command: [a] }\n\
+     scenarios: [s]\n\
+     variants: { a: {} }\n\
+     egress:\n\
+    \  hosts:\n\
+    \    api.example.com: record\n\
+    \    https://api.example.com: block\n";
+  match errors (Loader.load_experiment Eio.Path.(dir / "e.yaml")) with
+  | [ e ] ->
+      Alcotest.(check string)
+        "file:line:column" "e.yaml:9:5"
+        (Printf.sprintf "%s:%d:%d" (Filename.basename e.file) e.line e.column)
+  | es -> Alcotest.failf "expected one error, got %d" (List.length es)
+
 (* Errors from every stage of loading are reported together, in file
    order. *)
 let test_sorted_and_complete () =
@@ -409,6 +429,8 @@ let () =
             test_duplicate_key_keeps_going;
           Alcotest.test_case "dotted key location" `Quick
             test_dotted_key_location;
+          Alcotest.test_case "egress host key location" `Quick
+            test_egress_key_location;
           Alcotest.test_case "sorted and complete" `Quick
             test_sorted_and_complete;
         ] );

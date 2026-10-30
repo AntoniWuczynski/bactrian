@@ -50,6 +50,10 @@ val is_https : Uri.t -> bool
 type request = {
   meth : string;
   url : Uri.t;
+  target : string option;
+      (** The request line's target as given, for a request that must reach its
+          host byte for byte. [None] sends [url]'s path and query, which [Uri]
+          re-encodes. *)
   headers : (string * string) list;
   body : string;
 }

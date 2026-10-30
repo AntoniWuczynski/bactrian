@@ -275,6 +275,9 @@ let test_sandbox_strict =
 
 let test_unenforced_warned_and_recorded =
   with_ctx "unenforced" @@ fun ctx ->
+  write ctx "exp.json"
+    (experiment_json ctx
+       ~extra:{|, "intercept": ["model"], "mcp": {"c": {"command": ["c"]}}|} ());
   let warnings = ref [] in
   let s = ok (go ~warn:(fun w -> warnings := w :: !warnings) ctx) in
   let warnings = List.rev !warnings in

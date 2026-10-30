@@ -9,23 +9,7 @@ module J = Yojson.Safe.Util
 let strict =
   { Run.from = ""; matcher = Strict; allow_reorder = false; timing = P.Fast }
 
-let checks ?(assertions = []) ?(checkers = []) () : Run.checks option =
-  Some
-    {
-      assertions;
-      checkers;
-      checks_cwd = ".";
-      checker_timeout = 10.;
-      checker_sandbox = Sandbox.off;
-    }
-
-let json (r : Run.result) name = Yojson.Safe.from_file (file r name)
 let failing_agent = [ "python3"; "-I"; "-c"; "import sys; sys.exit(3)" ]
-
-let verdict_names (r : Run.result) =
-  List.map
-    (fun item -> J.(to_string (member "verdict" item)))
-    J.(to_list (member "items" (json r "verdicts.json")))
 
 (* A checker that cannot give a verdict is a fault outside the agent. *)
 let test_checker_error_is_errored =
@@ -205,6 +189,25 @@ let test_unenforced_in_meta =
     (List.map J.to_string
        J.(to_list (member "unenforced" (json r "meta.json"))))
 
+(* Unsandboxed, a client that ignores the proxy goes direct, so a clean trace
+   proves nothing: only the host it called through the proxy fails as such. *)
+let test_no_egress_fails =
+  with_ctx "no-egress" @@ fun ctx ->
+  let r = no_egress_run ctx Sandbox.off in
+  Alcotest.(check string) "kind" "failed" (Run.outcome_kind r.outcome);
+  Alcotest.check strs "both fail" [ "fail"; "fail" ] (verdict_names r);
+  Alcotest.(check bool)
+    "the other cannot be verified" true
+    (List.exists
+       (fun item ->
+         Re.execp
+           (Re.compile (Re.str "cannot be verified"))
+           J.(to_string (member "reason" item)))
+       J.(to_list (member "items" (json r "verdicts.json"))));
+  Alcotest.(check bool)
+    "the attempt is in the trace" true
+    (List.mem "http_call" (trace_types r))
+
 let () =
   Alcotest.run "run_checks"
     [
@@ -216,6 +219,8 @@ let () =
             test_checker_fail_is_failed;
           Alcotest.test_case "a failed run still has verdicts" `Slow
             test_failed_run_has_verdicts;
+          Alcotest.test_case "an egress call fails no_egress" `Slow
+            test_no_egress_fails;
         ] );
       ( "files",
         [

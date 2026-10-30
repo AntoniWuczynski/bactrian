@@ -289,10 +289,59 @@ let variants ~path c =
       let+ () = reject_duplicate_names ~path vs in
       (vs, mapping_form)
 
+let egress_host key =
+  let has text = Re.execp (Re.compile (Re.str text)) key in
+  let host_ok h =
+    Result.is_ok (Ipaddr.of_string h)
+    || Result.is_ok (Result.bind (Domain_name.of_string h) Domain_name.host)
+  in
+  let ok =
+    match Trace.authority key with
+    | Ok (h, _) -> host_ok h
+    | Error _ -> host_ok (Trace.host_name key)
+  in
+  if ok then Ok (Trace.host_key key)
+  else
+    let hint =
+      if has "://" then ": leave out the scheme"
+      else if has "*" then ": wildcards are not supported, list each host"
+      else if has "/" then ": leave out the path"
+      else ""
+    in
+    Error
+      (Printf.sprintf
+         "%S is not a host name or IP address, with or without a :port%s" key
+         hint)
+
+let egress_host_errors hosts =
+  let rec go seen = function
+    | [] -> []
+    | (key, _) :: rest -> (
+        match egress_host key with
+        | Error m -> (key, m) :: go seen rest
+        | Ok normal -> (
+            match List.assoc_opt normal seen with
+            | Some other ->
+                (key, Printf.sprintf "%S and %S name the same host" other key)
+                :: go seen rest
+            | None -> go ((normal, key) :: seen) rest))
+  in
+  go [] hosts
+
 let egress ~path c =
   object_ ~path c (fun r ->
       let+ default_policy = default r "default" Block policy
-      and+ hosts = default r "hosts" [] (assoc policy) in
+      and+ hosts =
+        let* hosts = default r "hosts" [] (assoc policy) in
+        let+ _ =
+          collect
+            (List.map
+               (fun (key, m) ->
+                 fail ~path:(field_path (field_path path "hosts") key) m)
+               (egress_host_errors hosts))
+        in
+        hosts
+      in
       (default_policy, hosts))
 
 let intercept =
@@ -607,12 +656,22 @@ let unenforced t =
              cannot reset the server between them";
           ]
       | Command _ -> []);
-      (if List.mem `Egress t.intercept then
-         [
-           "egress: the agent's own network traffic is not recorded, and is \
-            blocked only in a sandboxed run";
-         ]
-       else []);
+      (match t.agent with
+      | Http _ when List.mem `Egress t.intercept ->
+          [
+            "egress: an HTTP-mode agent is a server bactrian does not start, \
+             so its own HTTPS traffic is not intercepted";
+          ]
+      | Http _ | Command _ -> []);
+      (match (t.egress_hosts, t.egress_default) with
+      | (_ :: _, _ | [], (Record | Replay | Passthrough))
+        when not (List.mem `Egress t.intercept) ->
+          [
+            "egress: hosts or a default are declared but intercept leaves out \
+             egress, so the agent's HTTPS goes direct and unrecorded wherever \
+             the sandbox lets it";
+          ]
+      | _ :: _, _ | [], (Record | Replay | Passthrough | Block) -> []);
       (match t.mcp with
       | _ :: _ when not (List.mem `Mcp t.intercept) ->
           [

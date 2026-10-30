@@ -92,16 +92,17 @@ let config ?(agent = [ "python3"; "-I"; "-c"; python_agent ]) ?replay
     mcp = [];
     sandbox = Sandbox.off;
     faketime = false;
+    egress = None;
   }
 
-let execute ?connector ?random_bytes:(rb = random_bytes) ?(cap = 100.)
-    ?(ledger_name = string_of_int !counter) ctx config =
+let execute ?connector ?interception ?random_bytes:(rb = random_bytes)
+    ?(cap = 100.) ?(ledger_name = string_of_int !counter) ctx config =
   let ledger =
     Ledger.create
       ~path:Eio.Path.(ctx.dir / ("ledger-" ^ ledger_name ^ ".jsonl"))
       ~caps:(caps cap)
   in
-  Run.execute ?connector ~random_bytes:rb
+  Run.execute ?connector ?interception ~random_bytes:rb
     ~keys:[ (P.Openai, real_openai_key) ]
     ~upstream:(fun _ -> Uri.of_string (F.base_url ctx.up))
     ~env:ctx.env ~proxy:ctx.proxy ~store:ctx.store ~ledger config
@@ -173,3 +174,64 @@ let cli ctx args =
   let text = read out in
   Sys.remove out;
   (code, text)
+
+(* Checks *)
+
+let checks ?(assertions = []) ?(checkers = []) () : Run.checks option =
+  Some
+    {
+      assertions;
+      checkers;
+      checks_cwd = ".";
+      checker_timeout = 10.;
+      checker_sandbox = Sandbox.off;
+    }
+
+let json (r : Run.result) name = Yojson.Safe.from_file (file r name)
+
+let verdict_names (r : Run.result) =
+  List.map
+    (fun item -> Yojson.Safe.Util.(to_string (member "verdict" item)))
+    Yojson.Safe.Util.(to_list (member "items" (json r "verdicts.json")))
+
+(* The weather agent, opening a tunnel to a host no policy lists before its
+   first model call. The host is blocked before any TLS, and the attempt is
+   still a call that no_egress sees. *)
+let egress_agent =
+  let connect =
+    {|
+import base64, socket, urllib.parse
+def connect():
+    u = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
+    s = socket.create_connection((u.hostname, u.port))
+    cred = base64.b64encode((u.username + ":" + u.password).encode()).decode()
+    s.sendall(("CONNECT api.weather.example:443 HTTP/1.1\r\nHost: api.weather.example:443\r\nProxy-Authorization: Basic " + cred + "\r\n\r\n").encode())
+    s.recv(4096)
+    s.close()
+|}
+  in
+  let script =
+    Re.replace_string ~all:false
+      (Re.compile (Re.str "msg = chat(messages)\n"))
+      ~by:"connect(); msg = chat(messages)\n" python_agent
+  in
+  [ "python3"; "-I"; "-c"; "import os\n" ^ connect ^ script ]
+
+(* A run of [egress_agent] in [sandbox], checked with [no_egress] for the host
+   it calls and for one it does not. *)
+let no_egress_run ctx sandbox =
+  ok
+    (execute ~interception:Egress_stub.interception ctx
+       {
+         (config ~agent:egress_agent ()) with
+         sandbox;
+         egress = Some Egress.block_all;
+         checks =
+           checks
+             ~assertions:
+               [
+                 No_egress [ "api.weather.example" ];
+                 No_egress [ "other.example" ];
+               ]
+             ();
+       })

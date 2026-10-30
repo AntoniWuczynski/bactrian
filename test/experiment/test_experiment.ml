@@ -216,6 +216,27 @@ let test_variant_list () =
     "names" [ "x"; "y" ]
     (List.map (fun (v : Experiment.variant) -> v.name) t.variants)
 
+(* A refused egress host key says what to change. *)
+let test_egress_key_messages () =
+  List.iter
+    (fun (key, hint) ->
+      match
+        errors
+          (doc (Printf.sprintf {|, "egress": {"hosts": {%S: "block"}}|} key))
+      with
+      | [ e ] ->
+          Alcotest.(check bool)
+            (key ^ ": " ^ hint)
+            true
+            (Re.execp (Re.compile (Re.str hint)) e.message)
+      | es -> Alcotest.failf "%s: %a" key pp_errors es)
+    [
+      ("https://a.example", "leave out the scheme");
+      ("*.ads.example", "wildcards are not supported");
+      ("a.example/v1", "leave out the path");
+      ("a b", "is not a host name or IP address");
+    ]
+
 let test_paths name expected json () =
   Alcotest.(check strings) name expected (paths json)
 
@@ -234,21 +255,34 @@ let test_unenforced () =
       (fun w -> List.hd (String.split_on_char ':' w))
       (Experiment.unenforced t)
   in
-  Alcotest.check strings "defaults" [ "egress" ] (names (decoded (doc "")));
-  Alcotest.check strings "mcp servers are enforced" [ "egress" ]
+  Alcotest.check strings "defaults" [] (names (decoded (doc "")));
+  Alcotest.check strings "mcp servers are enforced" []
     (names (decoded (doc {|, "mcp": {"calendar": {"command": ["c"]}}|})));
   Alcotest.check strings "mcp servers that are not intercepted" [ "mcp" ]
     (names
        (decoded
           (doc
              {|, "intercept": ["model", "fixtures"], "mcp": {"calendar": {"command": ["c"]}}|})));
+  Alcotest.check strings "egress that is not intercepted" [ "egress" ]
+    (names
+       (decoded
+          (doc
+             {|, "intercept": ["model"], "egress": {"hosts": {"api.example.com": "record"}}|})));
+  Alcotest.check strings "a default egress policy that is not intercepted"
+    [ "egress" ]
+    (names
+       (decoded
+          (doc
+             {|, "intercept": ["model"], "egress": {"default": "passthrough"}|})));
+  Alcotest.check strings "intercepted egress is enforced" []
+    (names
+       (decoded (doc {|, "egress": {"hosts": {"api.example.com": "record"}}|})));
   Alcotest.check strings "everything off" []
     (names
        (decoded
           (doc
              {|, "sandbox": "off", "intercept": ["model", "fixtures"], "clock": {"faketime": "off"}|})));
-  Alcotest.check strings "the sandbox and the clock are never listed"
-    [ "egress" ]
+  Alcotest.check strings "the sandbox and the clock are never listed" []
     (names (decoded (doc {|, "sandbox": "strict"|})))
 
 (* The sandbox is a mode or a mapping with more paths. *)
@@ -441,6 +475,8 @@ let () =
           Alcotest.test_case "caseless normalise" `Quick test_caseless_normalise;
           Alcotest.test_case "variants as a list" `Quick test_variant_list;
           Alcotest.test_case "unenforced settings" `Quick test_unenforced;
+          Alcotest.test_case "egress key messages" `Quick
+            test_egress_key_messages;
           Alcotest.test_case "sandbox forms" `Quick test_sandbox_forms;
           Alcotest.test_case "sandbox backend" `Quick test_sandbox_backend;
           Alcotest.test_case "unenforced settings, http agent" `Quick
@@ -459,6 +495,16 @@ let () =
             test_baseline_with_other_errors;
           Alcotest.test_case "thresholds in range" `Quick
             test_thresholds_in_range;
+          case "egress host keys"
+            [
+              {|egress.hosts["*.ads.example"]|};
+              {|egress.hosts["a.example/v1"]|};
+              {|egress.hosts["a.example:http"]|};
+              {|egress.hosts["https://a.example"]|};
+              {|egress.hosts["ok.example"]|};
+            ]
+            (doc
+               {|, "egress": {"default": "passthrough", "hosts": {"https://a.example": "block", "*.ads.example": "block", "a.example/v1": "block", "a.example:http": "block", "ok.example": "record", "OK.example.": "block", "localhost:8080": "record", "::1": "record", "[::1]:443": "record", "10.0.0.1": "record"}}|});
           case "unknown nested field" [ "agent.extra" ]
             (doc
                ~agent:

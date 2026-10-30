@@ -71,6 +71,58 @@ type event =
   | Sandbox_violation of { kind : string; detail : string }
   | Done
 
+let host_name host =
+  let host = String.lowercase_ascii host in
+  if String.ends_with ~suffix:"." host then
+    String.sub host 0 (String.length host - 1)
+  else host
+
+let host_port host port =
+  if String.contains host ':' then Printf.sprintf "[%s]:%d" host port
+  else Printf.sprintf "%s:%d" host port
+
+let port_of text =
+  match int_of_string_opt text with
+  | Some p
+    when p >= 1 && p <= 65535
+         && String.for_all (fun c -> c >= '0' && c <= '9') text ->
+      Ok p
+  | Some _ | None -> Error (Printf.sprintf "%S is not a port" text)
+
+let authority target =
+  let bad () = Error (Printf.sprintf "%S is not host:port" target) in
+  let ( let* ) = Result.bind in
+  let named host port =
+    match host_name host with "" -> bad () | host -> Ok (host, port)
+  in
+  if String.length target > 0 && Char.equal target.[0] '[' then
+    match String.index_opt target ']' with
+    | Some close
+      when close + 1 < String.length target && Char.equal target.[close + 1] ':'
+      ->
+        let host = String.sub target 1 (close - 1) in
+        let* port =
+          port_of
+            (String.sub target (close + 2) (String.length target - close - 2))
+        in
+        named host port
+    | Some _ | None -> bad ()
+  else
+    match String.rindex_opt target ':' with
+    | Some i when i > 0 && not (String.contains (String.sub target 0 i) ':') ->
+        let* port =
+          port_of (String.sub target (i + 1) (String.length target - i - 1))
+        in
+        named (String.sub target 0 i) port
+    | Some _ | None -> bad ()
+
+(* A key names [host] or [host:port], in any case and with or without the
+   trailing dot. *)
+let host_key key =
+  match authority key with
+  | Ok (h, p) -> host_port h p
+  | Error _ -> host_name key
+
 type entry = { seq : int; t_ms : int; event : event }
 
 type error =
