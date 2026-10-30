@@ -5,8 +5,8 @@
 
    The second argument is the validator's fixtures directory. Each scenario,
    experiment and price file fixture goes through the binary's own decoders too,
-   which must reject exactly the invalid ones, so the schemas and the decoders
-   cannot drift apart unnoticed. *)
+   which must reject exactly the invalid ones, each at the path of its fault, so
+   the schemas and the decoders cannot drift apart unnoticed. *)
 
 open Bactrian_core
 open Acceptance_world
@@ -121,6 +121,49 @@ pricing: %S
 |}
     price_file
 
+(* Where bactrian must report each invalid fixture's fault. Rejecting a fixture
+   for another reason, say in the shared s.yaml, would not show that the schema
+   and the decoder agree. *)
+let expected_paths =
+  [
+    ("experiment.command-with-url.yaml", "agent.url");
+    ("experiment.empty-command.yaml", "agent.command");
+    ("experiment.http-strict-mapping.yaml", "sandbox");
+    ("experiment.http-strict.yaml", "sandbox");
+    ("experiment.http-with-command.yaml", "agent.command");
+    ("experiment.http-without-header.yaml", "agent.namespace_header");
+    ("experiment.mcp-command-and-url.yaml", "mcp.s");
+    ("experiment.mcp-replay-policy.yaml", "mcp.s.policy");
+    ("experiment.no-variants.yaml", "variants");
+    ("experiment.no-version.yaml", "version");
+    ( "experiment.pass-rate-threshold-above-one.yaml",
+      "compare.thresholds.pass_rate" );
+    ("experiment.unknown-provider-cap.yaml", "caps_usd.mistral");
+    ("experiment.vm-without-image.yaml", "sandbox.image");
+    ("experiment.zero-timeout.yaml", "agent.timeouts.turn");
+    ("price-file.date-trailing-newline.json", "prices[0].effective_from");
+    ("price-file.negative-rate.json", "prices[0].rates.input");
+    ("price-file.no-max-output.json", "prices[0].max_output");
+    ("scenario.exact-without-match.yaml", "assertions[0].tool_args.match");
+    ("scenario.negative-limit.yaml", "assertions[0].max_steps");
+    ("scenario.no-turns.yaml", "turns");
+    ("scenario.output-turn-zero.yaml", "assertions[0].output.turn");
+    ("scenario.output-two-checks.yaml", "assertions[0].output");
+    ("scenario.schema-and-match.yaml", "assertions[0].tool_args.match");
+    ( "scenario.schema-unsupported-keyword.yaml",
+      "assertions[0].tool_args.schema.properties.city.minLength" );
+    ("scenario.two-keys-assertion.yaml", "assertions[0]");
+    ("scenario.unknown-assertion.yaml", "assertions[0].sing");
+  ]
+
+let reports ~file ~path printed =
+  let is key want e =
+    Option.equal String.equal (Canon.str_member key e) (Some want)
+  in
+  List.exists
+    (fun e -> is "file" file e && is "path" path e)
+    (Option.value ~default:[] (Canon.list_member "errors" printed))
+
 let check_fixtures_agree ~dir ~fixtures ~env =
   let copy = Filename.concat dir "agreement" in
   write (Filename.concat copy "valid/fixtures/basic/.keep") "";
@@ -153,15 +196,30 @@ let check_fixtures_agree ~dir ~fixtures ~env =
               write
                 (Filename.concat copy relative)
                 (read (Filename.concat from name));
-              let code, _ = cli ~dir:copy ~env args in
-              if code = config_error <> should_reject then (
-                Printf.eprintf "%s: bactrian %s the file (exit %d)\n" relative
-                  (if should_reject then "accepted" else "rejected")
-                  code;
-                exit 1))
+              let code, printed = cli ~dir:copy ~env args in
+              let fail why =
+                Printf.eprintf "%s: %s (exit %d)\n" relative why code;
+                exit 1
+              in
+              match (should_reject, List.assoc_opt name expected_paths) with
+              | false, _ ->
+                  if code = config_error then fail "bactrian rejected the file"
+              | true, None -> fail "no expected error path is listed for it"
+              | true, Some path ->
+                  if
+                    code <> config_error
+                    || not (reports ~file:relative ~path printed)
+                  then fail ("bactrian reported no error at " ^ path))
             args)
         (Sys.readdir from))
-    [ ("valid", false); ("invalid", true) ]
+    [ ("valid", false); ("invalid", true) ];
+  List.iter
+    (fun (name, _) ->
+      if not (Sys.file_exists (Filename.concat fixtures ("invalid/" ^ name)))
+      then (
+        Printf.eprintf "%s is listed but is not a fixture\n" name;
+        exit 1))
+    expected_paths
 
 let () =
   let dir, fixtures =
