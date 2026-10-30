@@ -1,0 +1,25 @@
+# A conformance transcript for HTTP mode (design section 5.1).
+#
+# One line per message. "> " is the body of a POST from bactrian to the agent
+# and "< " a message in the JSON array the agent answers it with (the array of
+# the "<" lines that follow, empty for "start" and "end"). Lines starting with
+# "#" and blank lines are comments.
+#
+# Every POST has the method POST, "Content-Type: application/json", the header
+# "X-Bactrian-Run" and the experiment's namespace header, both holding the run
+# ID of the "start" message. The "start" message carries "env", the per-run
+# environment a command agent would get as process variables (the test suite
+# writes its keys in sorted order, so the line here does too).
+#
+# The ">" lines are exactly the bytes bactrian sends. An agent may answer with
+# other key order or spacing: the test suite decodes it.
+
+> {"v":1,"type":"start","run_id":"run-1","scenario":"weather","variant":"baseline","sim_now":"2026-03-01T09:00:00Z","state_dir":"/work/.bactrian/runs/run-1/state","env":{"BACTRIAN_RUN_ID":"run-1","BACTRIAN_STATE_DIR":"/work/.bactrian/runs/run-1/state","OPENAI_API_KEY":"bactrian-00000000000000000000000000000001","OPENAI_BASE_URL":"http://127.0.0.1:41000/r/00000000000000000000000000000001/openai/v1","SIM_NOW":"2026-03-01T09:00:00Z","TZ":"Europe/London"}}
+> {"v":1,"type":"turn","turn":1,"content":"What is the weather in Paris?"}
+< {"v":1,"type":"event","turn":1,"name":"tool","data":{"name":"get_weather","arguments":{"city":"Paris"}}}
+< {"v":1,"type":"reply","turn":1,"content":"It is 18 degrees Celsius and cloudy in Paris."}
+> {"v":1,"type":"turn","turn":2,"content":"And in Zürich? Say \"briefly\".\nThanks."}
+< {"v":1,"type":"reply","turn":2,"content":"Cool, 9 degrees.\nLight rain."}
+> {"v":1,"type":"turn","turn":3,"content":"Thanks"}
+< {"v":1,"type":"reply","turn":3,"content":"You are welcome."}
+> {"v":1,"type":"end"}

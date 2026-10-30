@@ -1,0 +1,20 @@
+; The transcripts of examples/transcripts, replayed against the agent driver
+; in each mode.
+
+(test
+ (name test_conformance)
+ (package bactrian)
+ (deps
+  (glob_files ../../examples/transcripts/*.transcript)
+  ../support/transcript/transcript_agent.exe)
+ (libraries
+  bactrian.core
+  bactrian.runtime
+  transcript
+  eio_main
+  cohttp-eio
+  http
+  uri
+  alcotest)
+ (flags
+  (:standard -w -70)))

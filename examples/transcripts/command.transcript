@@ -1,0 +1,22 @@
+# A conformance transcript for command mode (design section 5.1).
+#
+# One line per message, in the order they cross the pipes. "> " is a line
+# bactrian writes to the agent's standard input and "< " a line the agent
+# writes to its standard output. Lines starting with "#" and blank lines are
+# comments. Every message is one JSON object with "v": 1, and the lines after a
+# ">" line are what the agent answers to it: events, then exactly one reply
+# for a turn, and nothing for "start" and "end".
+#
+# The ">" lines are exactly the bytes bactrian writes. An agent may write its
+# own lines with other key order or spacing: the test suite decodes them.
+
+> {"v":1,"type":"start","run_id":"20261030T090000Z-0a1b2c3d","scenario":"weather","variant":"baseline","sim_now":"2026-03-01T09:00:00Z","state_dir":"/work/.bactrian/runs/20261030T090000Z-0a1b2c3d/state"}
+> {"v":1,"type":"turn","turn":1,"content":"What is the weather in Paris?"}
+< {"v":1,"type":"event","turn":1,"name":"tool","data":{"name":"get_weather","arguments":{"city":"Paris"}}}
+< {"v":1,"type":"event","turn":1,"name":"tool_result","data":{"ok":true}}
+< {"v":1,"type":"reply","turn":1,"content":"It is 18 degrees Celsius and cloudy in Paris."}
+> {"v":1,"type":"turn","turn":2,"content":"And in Zürich? Say \"briefly\".\nThanks."}
+< {"v":1,"type":"reply","turn":2,"content":"Cool, 9 degrees.\nLight rain."}
+> {"v":1,"type":"turn","turn":3,"content":"Thanks"}
+< {"v":1,"type":"reply","turn":3,"content":"You are welcome."}
+> {"v":1,"type":"end"}
