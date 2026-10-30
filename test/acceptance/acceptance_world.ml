@@ -144,7 +144,7 @@ let vm_runtime =
     List.assoc_opt vm_runtime_name Bactrian_core.Experiment.sandbox_runtimes
   with
   | Some r -> r
-  | None -> failwith "BACTRIAN_VM_RUNTIME is neither docker nor container"
+  | None -> failwith "BACTRIAN_VM_RUNTIME is not docker, podman or container"
 
 (* With [vm], the virtual machine sandbox running that image. *)
 let sandbox ?vm ~env ~dir ~deny_read () =

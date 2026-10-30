@@ -1,7 +1,8 @@
 (** The command line that starts an agent in a virtual machine sandbox (design
-    §5.3): a Docker-compatible [run], or Apple's [container create], of the
-    image with no network, a read-only root and the relay ([vm/relay.c]) as its
-    entrypoint, and the file of the agent's environment. Pure.
+    §5.3): a Docker-compatible [run] (Docker's, or Podman's with the differences
+    of decision 0016), or Apple's [container create], of the image with no
+    network, a read-only root and the relay ([vm/relay.c]) as its entrypoint,
+    and the file of the agent's environment. Pure.
 
     Every host path is mounted at the same absolute path inside, so the agent's
     command and the paths in its arguments and environment work unchanged: the
@@ -62,9 +63,13 @@ type input = {
       *)
   uid : int;
   gid : int;  (** The agent runs as this user and group. *)
+  rootless : bool;
+      (** Whether the runtime runs containers in a user namespace of its own
+          (rootless Podman). Podman then maps [uid] to itself. *)
   image : string;
-      (** The image's ID for Docker. container cannot run an ID, so there it is
-          the reference, and the caller checks the digest after [create]. *)
+      (** The image's ID for Docker and Podman. container cannot run an ID, so
+          there it is the reference, and the caller checks the digest after
+          [create]. *)
   workdir : string;
   env_file : string;  (** The file {!val-env_file} wrote. *)
   relay : string;
@@ -149,7 +154,7 @@ type stage = {
 
 type invocation = {
   argv : string list;
-  stages : stage list;  (** Empty for Docker. *)
+  stages : stage list;  (** Empty for Docker and Podman. *)
 }
 
 val argv : input -> (invocation, error) result
@@ -162,6 +167,11 @@ val argv : input -> (invocation, error) result
      PORT... -- AGENT...] (or
     [--probe OUTSIDE INSIDE DENIED MASKED MASKED_CASE ROOT OTHER_RUN] in place
     of [-- AGENT...]).
+
+    For Podman the same, with [--userns=keep-id] after [--security-opt] when the
+    runtime is rootless ([rootless]), and [--read-only-tmpfs=false] after it.
+    Its directory masks are [--tmpfs PATH:ro,mode=0755,notmpcopyup], because
+    Podman copies what is beneath a tmpfs into it unless told not to.
 
     For container:
     [RUNTIME create --rm --name NAME --label KEY=VALUE... --network none
@@ -181,17 +191,17 @@ val argv : input -> (invocation, error) result
     [Error File_allow_write].
 
     Mounts are given in order of depth, as the runtime applies them, then of
-    path. A directory mask is [--tmpfs PATH:ro,mode=0755] for Docker. For a file
-    mask the same tmpfs covers the file's directory, and each other entry of it
-    ([list_dir]) is bound again as the mounts above showed it, read-only or
-    read-write. An entry that is the masked file under another name is left out,
-    and so is a symbolic link, unless it leads to a file the container shows (a
-    bind follows the link). An entry with a mount of its own keeps that one, so
-    masks nest. A writable path under a directory mask is left out, except under
-    [bactrian_dir] and, for the run's own directories, under [runs_dir], so a
-    path inside another run stays hidden. A mask is left out where no mount
-    shows its path, and a mount whose path equals a mask's is replaced by the
-    mask. *)
+    path. A directory mask is [--tmpfs PATH:ro,mode=0755] for Docker and Podman.
+    For a file mask the same tmpfs covers the file's directory, and each other
+    entry of it ([list_dir]) is bound again as the mounts above showed it,
+    read-only or read-write. An entry that is the masked file under another name
+    is left out, and so is a symbolic link, unless it leads to a file the
+    container shows (a bind follows the link). An entry with a mount of its own
+    keeps that one, so masks nest. A writable path under a directory mask is
+    left out, except under [bactrian_dir] and, for the run's own directories,
+    under [runs_dir], so a path inside another run stays hidden. A mask is left
+    out where no mount shows its path, and a mount whose path equals a mask's is
+    replaced by the mask. *)
 
 val env_file : (string * string) list -> (string, error) result
 (** The agent's environment in the runtime's env-file format: one [NAME=VALUE]

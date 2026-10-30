@@ -3,8 +3,8 @@
    process visible from inside it, and no container left after a run, an
    interrupt or a bactrian killed with SIGKILL.
 
-   They run on docker, or on Apple's container when BACTRIAN_VM_RUNTIME is
-   container. Without a working runtime the tests are skipped, unless
+   They run on docker, or on podman or Apple's container when
+   BACTRIAN_VM_RUNTIME is podman or container. Without a working runtime the tests are skipped, unless
    BACTRIAN_REQUIRE_VM is 1 (continuous integration on Linux sets it), where
    they fail. The agents
    run from copies inside each world, because the virtual machine shows the
@@ -17,7 +17,7 @@ open Acceptance_world
 (* Pinned by digest: node 24 on Alpine 3.24 (2026-09-18), and uv 0.12.21 with
    Python 3.12 on Debian trixie (2026-09-29). *)
 let node_image =
-  "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
+  "docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"
 
 let python_image =
   "ghcr.io/astral-sh/uv:0.12.21-python3.12-trixie-slim@sha256:5ae92e4d35b8d586d50ddf4aba6ecdd9f744237284d31c86bf45077e4e17e4bd"
@@ -37,23 +37,25 @@ let runtime_works =
 (* The runtime's own command for each thing the tests do beside bactrian. *)
 let image_present image =
   match vm_runtime with
-  | `Docker -> quiet ("docker image inspect " ^ Filename.quote image)
+  | `Docker | `Podman ->
+      quiet (runtime ^ " image inspect " ^ Filename.quote image)
   | `Container -> quiet ("container image inspect " ^ Filename.quote image)
 
 let pull image =
   match vm_runtime with
-  | `Docker -> quiet ("docker pull -q " ^ Filename.quote image)
+  | `Docker | `Podman -> quiet (runtime ^ " pull -q " ^ Filename.quote image)
   | `Container ->
       quiet ("container image pull --progress none " ^ Filename.quote image)
 
 let run_prefix =
   match vm_runtime with
-  | `Docker -> [ "docker"; "run" ]
+  | `Docker | `Podman -> [ runtime; "run" ]
   | `Container -> [ "container"; "run"; "--progress"; "none" ]
 
 let remove_command name =
   match vm_runtime with
   | `Docker -> "docker rm -f " ^ name
+  | `Podman -> "podman rm --force --time 1 " ^ name
   | `Container -> "container delete --force " ^ name
 
 let required =
@@ -111,6 +113,13 @@ let typescript =
 (* uv builds the environment in a container with the network, for the Linux
    wheels, at the path the agent's container sees it at. *)
 let python =
+  (* A rootless Podman maps the user to a subordinate ID unless told to keep
+     it. *)
+  let keep_user =
+    match vm_runtime with
+    | `Podman -> [ "--userns=keep-id" ]
+    | `Docker | `Container -> []
+  in
   {
     name = "python";
     image = python_image;
@@ -125,9 +134,8 @@ let python =
         run_or_fail
           (String.concat " "
              (List.map Filename.quote
-                (run_prefix
+                (run_prefix @ [ "--rm" ] @ keep_user
                 @ [
-                    "--rm";
                     "--user";
                     Printf.sprintf "%d:%d" (Unix.getuid ()) (Unix.getgid ());
                     "-e";
@@ -155,11 +163,12 @@ let python =
 let container_exists name =
   match vm_runtime with
   | `Container -> quiet ("container inspect " ^ Filename.quote name)
-  | `Docker ->
-      let out = Filename.temp_file "docker-ps" ".txt" in
+  | `Docker | `Podman ->
+      let out = Filename.temp_file "ps" ".txt" in
       Fun.protect ~finally:(fun () -> Sys.remove out) @@ fun () ->
       run_or_fail
-        (Printf.sprintf "docker ps -a --filter %s --format '{{.Names}}' > %s"
+        (Printf.sprintf "%s ps -a --filter %s --format '{{.Names}}' > %s"
+           runtime
            (Filename.quote ("name=^" ^ name ^ "$"))
            (Filename.quote out));
       String.length (String.trim (read out)) > 0
@@ -342,7 +351,8 @@ let seatbelt_control () =
 (* A hidden file's neighbours. The project's .env is not there under any
    spelling of its name (the host's file system ignores case), while the files
    and directories beside it are, read-only. Docker's replacement directory is
-   a tmpfs, where only the exact name of a neighbour is there. container's is a
+   a tmpfs (Podman's too), where only the exact name of a neighbour is there.
+   container's is a
    staging directory on the host, so a neighbour's other spellings read it. *)
 
 let neighbours_agent =
@@ -414,7 +424,9 @@ let neighbours () =
       (".Env", "ENOENT");
       ("sibling.txt", "visible");
       ( "SIBLING.TXT",
-        match vm_runtime with `Docker -> "ENOENT" | `Container -> "visible" );
+        match vm_runtime with
+        | `Docker | `Podman -> "ENOENT"
+        | `Container -> "visible" );
       ("sub/inner.txt", "inner");
       ("new.txt", "EROFS");
     ]
@@ -433,14 +445,21 @@ let neighbours () =
 let hung_agent =
   {|touch "$BACTRIAN_STATE_DIR/started"; while :; do sleep 1; done|}
 
+(* The variables that tell a rootless Podman where its runtime state is go
+   through too: a container made with another value is not found by it. *)
 let record_env =
-  [|
-    "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
-    "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
-    "BACTRIAN_CAP_OPENAI=1";
-    "OPENAI_API_KEY=not-a-real-key";
-    "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
-  |]
+  Array.append
+    [|
+      "PATH=" ^ Option.value (Sys.getenv_opt "PATH") ~default:"/usr/bin";
+      "HOME=" ^ Option.value (Sys.getenv_opt "HOME") ~default:"/";
+      "BACTRIAN_CAP_OPENAI=1";
+      "OPENAI_API_KEY=not-a-real-key";
+      "BACTRIAN_UPSTREAM_OPENAI=http://127.0.0.1:9";
+    |]
+    (Array.of_list
+       (List.filter_map
+          (fun k -> Option.map (fun v -> k ^ "=" ^ v) (Sys.getenv_opt k))
+          [ "TMPDIR"; "XDG_RUNTIME_DIR" ]))
 
 (* bactrian record in the virtual machine, in a directory of its own. *)
 let with_record ~name agent f =
@@ -583,7 +602,9 @@ let all_killed () =
   let bridge = child_of pid "__vm-bridge" in
   let client =
     child_of bridge
-      (match vm_runtime with `Docker -> "run" | `Container -> "start")
+      (match vm_runtime with
+      | `Docker | `Podman -> "run"
+      | `Container -> "start")
   in
   (* Back to back: the bridge checks its parent once a second, so it has no
      time to remove the container itself. *)
@@ -620,7 +641,7 @@ let relay_liveness () =
   (* container mounts directories only. *)
   let relay_args =
     match vm_runtime with
-    | `Docker ->
+    | `Docker | `Podman ->
         [
           "--log-driver";
           "none";

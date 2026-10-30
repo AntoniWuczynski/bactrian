@@ -147,9 +147,10 @@ let invocation t layout ~run_id ~run_dir ~env_file ~state_dir ~temp_dir ~cwd
          labels = Vm_runtime.labels ~run_id;
          uid = Unix.getuid ();
          gid = Unix.getgid ();
+         rootless = Vm_runtime.rootless t.runtime;
          image =
            (match Vm_runtime.kind t.runtime with
-           | `Docker -> t.image_id
+           | `Docker | `Podman -> t.image_id
            | `Container -> t.image);
          workdir = cwd;
          env_file;
@@ -250,7 +251,7 @@ let remove t name =
    the agent runs in. *)
 let launch t ~run_dir ~name (invocation : Vm_args.invocation) =
   match Vm_runtime.kind t.runtime with
-  | `Docker -> Ok invocation.argv
+  | `Docker | `Podman -> Ok invocation.argv
   | `Container ->
       let process_mgr = t.process_mgr and clock = t.clock in
       let* () = make_stages ~run_dir invocation.stages in
@@ -412,7 +413,7 @@ let start ~sw t layout ~bactrian_exe ~run_id ~run_dir ~state_dir ~temp_dir ~cwd
           "container=" ^ name;
         ]
         @ (match Vm_runtime.kind t.runtime with
-          | `Docker -> []
+          | `Docker | `Podman -> []
           | `Container -> [ "signals=kill"; "staging=" ^ staging_dir ~run_dir ])
         @ ("--" :: runtime_argv);
       env = client_env t;

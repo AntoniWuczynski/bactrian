@@ -236,8 +236,7 @@ type vm_host = {
 }
 
 let no_runtime_fix =
-  "install OrbStack or Docker Desktop, or Apple's container (Podman is not \
-   supported yet)"
+  "install OrbStack, Docker Desktop, Podman or Apple's container"
 
 (* Whether the experiment's agent would run in the virtual machine. *)
 let uses_vm ~macos (t : target) =

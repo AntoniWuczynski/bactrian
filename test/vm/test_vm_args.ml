@@ -62,8 +62,8 @@ let default_listing =
       ] );
   ]
 
-let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
-    ?(listing = default_listing)
+let input ?(kind = `Docker) ?(uid = 501) ?(rootless = false) ?(allow_write = [])
+    ?(deny = []) ?(listing = default_listing)
     ?(command = Vm_args.Agent [ "node"; "agent.js" ]) ?(workdir = project) () :
     Vm_args.input =
   {
@@ -71,17 +71,19 @@ let input ?(kind = `Docker) ?(uid = 501) ?(allow_write = []) ?(deny = [])
     runtime =
       (match kind with
       | `Docker -> "/usr/bin/docker"
+      | `Podman -> "/usr/bin/podman"
       | `Container -> "/usr/local/bin/container");
     name = "bactrian-r1";
     labels = [ ("bactrian.run", "r1"); ("bactrian.pid", "42") ];
     uid;
     gid = 20;
+    rootless;
     image = "node:24@sha256:abc";
     workdir;
     env_file = "/p/.bactrian/runs/r1/agent.env";
     relay =
       (match kind with
-      | `Docker -> "/c/relay"
+      | `Docker | `Podman -> "/c/relay"
       | `Container -> "/c/relay-1a2b-arm64");
     project_root = project;
     bactrian_dir = "/p/.bactrian";
@@ -207,6 +209,48 @@ let test_command_line () =
       "agent.js";
     ]
     (argv (input ()))
+
+(* Podman: Docker's command line, plus a user namespace that maps the agent to
+   itself when rootless, and no writable tmpfs but /tmp. *)
+let test_podman_command_line () =
+  let docker = argv (input ()) in
+  let expected ~userns =
+    List.concat_map
+      (function
+        | "/usr/bin/docker" -> [ "/usr/bin/podman" ]
+        | "--user" -> userns @ [ "--read-only-tmpfs=false"; "--user" ]
+        | a -> [ a ])
+      docker
+  in
+  Alcotest.check strings "rootless"
+    (expected ~userns:[ "--userns=keep-id" ])
+    (argv (input ~kind:`Podman ~rootless:true ()));
+  Alcotest.check strings "rootful" (expected ~userns:[])
+    (argv (input ~kind:`Podman ()))
+
+let test_podman_masks () =
+  let deny = default_deny in
+  let docker = mounts (input ~deny ()) in
+  let podman = mounts (input ~kind:`Podman ~rootless:true ~deny ()) in
+  Alcotest.(check bool)
+    "masks are tmpfs" true
+    (List.exists (String.ends_with ~suffix:":ro,mode=0755") docker);
+  Alcotest.check strings "Docker's masks, without copying the directory up"
+    (List.map
+       (fun m ->
+         if String.ends_with ~suffix:":ro,mode=0755" m then m ^ ",notmpcopyup"
+         else m)
+       docker)
+    podman;
+  Alcotest.(check int)
+    "no staging" 0
+    (List.length
+       (invocation (input ~kind:`Podman ~rootless:true ~deny ())).stages);
+  Alcotest.(check bool)
+    "a writable directory with a hidden file is allowed" true
+    (Result.is_ok
+       (Vm_args.argv
+          (input ~kind:`Podman ~rootless:true ~deny ~allow_write:[ "/p" ] ())))
 
 let test_probe () =
   let a =
@@ -766,6 +810,8 @@ let () =
         [
           Alcotest.test_case "flags" `Quick test_command_line;
           Alcotest.test_case "probe" `Quick test_probe;
+          Alcotest.test_case "podman flags" `Quick test_podman_command_line;
+          Alcotest.test_case "podman masks" `Quick test_podman_masks;
           Alcotest.test_case "errors" `Quick test_errors;
         ] );
       ( "mounts",

@@ -130,7 +130,9 @@ let judge (runtime : Experiment.sandbox_runtime) (r : report) =
       | Ok () -> []
       | Error _ as e ->
           fails_with "a write outside the state directory"
-            (match runtime with `Docker -> "EROFS" | `Container -> "EACCES")
+            (match runtime with
+            | `Docker | `Podman -> "EROFS"
+            | `Container -> "EACCES")
             e)
     @ checks ~listener:r.listener ~outside_write:r.outside_write
         ~inside_write:r.inside_write ~denied_read:r.denied_read

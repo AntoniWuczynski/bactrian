@@ -104,6 +104,17 @@ let test_judge () =
 (* Under container the mask over .bactrian is a tmpfs only root can write to,
    so a write outside the state directory gives EACCES, and EROFS there is a
    surprise as much as EACCES is under Docker. *)
+let test_podman () =
+  Alcotest.check wrong "read-only like Docker's" (Ok ())
+    (judged ~runtime:`Podman good);
+  Alcotest.check wrong "EACCES is container's"
+    (Error
+       [
+         "a write outside the state directory failed with EACCES instead of \
+          EROFS";
+       ])
+    (judged ~runtime:`Podman (with_field "outside_write" (`String "EACCES")))
+
 let test_container () =
   let container = with_field "outside_write" (`String "EACCES") in
   Alcotest.check wrong "a sandbox that holds" (Ok ())
@@ -134,6 +145,7 @@ let () =
       ( "judge",
         [
           Alcotest.test_case "reports" `Quick test_judge;
+          Alcotest.test_case "podman" `Quick test_podman;
           Alcotest.test_case "container" `Quick test_container;
         ] );
     ]

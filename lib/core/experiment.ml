@@ -35,7 +35,7 @@ type compare = {
 }
 
 type sandbox_backend = [ `Auto | `Vm | `Seatbelt | `Bubblewrap ]
-type sandbox_runtime = [ `Docker | `Container ]
+type sandbox_runtime = [ `Docker | `Container | `Podman ]
 
 type t = {
   name : string;
@@ -381,19 +381,11 @@ let sandbox_backends =
     ("bubblewrap", `Bubblewrap);
   ]
 
-let sandbox_runtimes = [ ("docker", `Docker); ("container", `Container) ]
+let sandbox_runtimes =
+  [ ("docker", `Docker); ("container", `Container); ("podman", `Podman) ]
 
-(* Only docker and container have been run against: podman is refused by name
-   rather than taken on trust. *)
 let sandbox_runtime ~path c =
-  match (c : Canon.t) with
-  | String "podman" ->
-      fail ~path
-        "podman is not supported yet: only docker (Docker Engine, Docker \
-         Desktop, OrbStack) and container (Apple's) have been verified"
-  | String _ | Null | Bool _ | Int _ | Big_int _ | Float _ | List _ | Object _
-    ->
-      enum ~what:"sandbox runtime" sandbox_runtimes ~path c
+  enum ~what:"sandbox runtime" sandbox_runtimes ~path c
 
 let image_problem s =
   if String.equal s "" then Some "is empty"

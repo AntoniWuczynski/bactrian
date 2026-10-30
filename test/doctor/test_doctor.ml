@@ -170,7 +170,7 @@ let test_vm () =
   check_status "no runtime on macOS" Warn c;
   Alcotest.(check bool)
     "names the runtimes" true
-    (contains ~sub:"OrbStack or Docker Desktop" c.message
+    (contains ~sub:"OrbStack, Docker Desktop, Podman" c.message
     && contains ~sub:"Apple's container" c.message);
   check_status "no runtime on Linux" Skip
     (run ~host:(host ~macos:false ~runtime:(Error "no docker") ()) None);

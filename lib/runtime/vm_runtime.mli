@@ -1,8 +1,8 @@
 (** The container runtime behind a virtual machine sandbox (design §5.3): a
     Docker-compatible command line, which on macOS drives a Linux virtual
-    machine (OrbStack, Docker Desktop), or Apple's [container], which starts a
-    virtual machine for each container. Finds it, checks images, builds the
-    relay ([vm/relay.c]) and removes containers.
+    machine (OrbStack, Docker Desktop), Podman (decision 0016), or Apple's
+    [container], which starts a virtual machine for each container. Finds it,
+    checks images, builds the relay ([vm/relay.c]) and removes containers.
 
     Every command it runs gets {!client_env}, never bactrian's own environment,
     which holds the provider keys (decision 0010). *)
@@ -13,7 +13,7 @@ type t
 val kind : t -> Bactrian_core.Experiment.sandbox_runtime
 
 val name : t -> string
-(** ["docker"] or ["container"]. *)
+(** ["docker"], ["podman"] or ["container"]. *)
 
 val exe : t -> string
 (** The executable, an absolute path. *)
@@ -21,8 +21,13 @@ val exe : t -> string
 val client_env : t -> string array
 (** [NAME=VALUE] for the variables the runtime's client reads ([PATH], [HOME],
     [USER], [LOGNAME], [TMPDIR], [XDG_RUNTIME_DIR], [XDG_CONFIG_HOME], and for
-    docker the [DOCKER_*] ones that select and reach the daemon), as bactrian
-    has them. *)
+    docker the [DOCKER_*] ones that select and reach the daemon, and for podman
+    where its store, session and remote connection are), as bactrian has them.
+*)
+
+val rootless : t -> bool
+(** Whether the runtime runs containers in a user namespace of its own: a
+    rootless Podman. Always false for the others. *)
 
 val arch : t -> string
 (** The architecture of the runtime's machines, such as ["arm64"] or ["amd64"].
@@ -35,9 +40,10 @@ val detect :
   (t, string) result
 (** Looks the runtime up on [PATH] and asks it for its architecture: docker's
     daemon ([version]), or container's services, which must be running
-    ([system status]). Unset, it is docker when that answers, otherwise
-    container. The error says what is missing and how to get it, for both when
-    neither works. *)
+    ([system status]), or podman's ([info]: architecture and whether it is
+    rootless). Unset, it is the first of docker, podman and container that
+    answers. The error says what is missing and how to get it, for each when
+    none works. *)
 
 val image_id :
   process_mgr:_ Eio.Process.mgr ->
@@ -46,8 +52,9 @@ val image_id :
   string ->
   (string, string) result
 (** The image in the runtime's local store ([image inspect -- IMAGE]): docker's
-    image ID, or the digest ([sha256:...]) container names it by. Never pulls:
-    the error gives the command that does. *)
+    image ID, podman's (its 64 hexadecimal digits after [sha256:]), or the
+    digest ([sha256:...]) container names it by. Never pulls: the error gives
+    the command that does. *)
 
 val create :
   process_mgr:_ Eio.Process.mgr ->
