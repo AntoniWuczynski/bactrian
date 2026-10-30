@@ -4,11 +4,10 @@
 # volume, so the compiler and dependencies are cached between runs.
 set -eu
 
-apk add --no-cache build-base git curl bash opam m4 patch unzip rsync \
-  linux-headers pkgconf
-# --no-cache keeps no package index, and without one opam reports system
-# packages such as linux-headers (needed by uring) as unavailable.
+# A package index is needed, or opam reports system packages such as
+# linux-headers (needed by uring) as unavailable.
 apk update
+apk add build-base git curl bash opam m4 patch unzip rsync linux-headers pkgconf
 # The mounted checkout is owned by the runner user, not root, and git refuses it
 # otherwise, which breaks opam's file listing.
 git config --global --add safe.directory '*'
