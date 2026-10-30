@@ -67,7 +67,8 @@ summary has a line for each.
   > s.serve_forever()
   > PY
   $ (python3 -I http_agent.py &)
-  $ while [ ! -f port ]; do sleep 0.1; done
+  $ trap 'kill "$(cat agent.pid 2>/dev/null)" 2>/dev/null' EXIT
+  $ for _ in $(seq 100); do [ -f port ] && break; sleep 0.1; done; [ -f port ] || { echo "agent did not start"; exit 1; }
   $ cat > http.yaml <<YAML
   > version: 1
   > name: demo
