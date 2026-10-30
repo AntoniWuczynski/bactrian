@@ -8,6 +8,7 @@
   test_acceptance
   test_launch_env_outside
   test_mcp_client
+  test_mcp_http_client
   test_upstream_override
   test_vm)
  (libraries
@@ -55,6 +56,8 @@
       (run %{exe:test_acceptance.exe})
       ; bactrian serve-mcp from the outside, with a scripted client.
       (run %{exe:test_mcp_client.exe})
+      ; The same server over Streamable HTTP, and the Tasks extension.
+      (run %{exe:test_mcp_http_client.exe})
       ; Experiments through BACTRIAN_UPSTREAM_*, against a fake upstream process.
       (run %{exe:test_upstream_override.exe})))))))
 

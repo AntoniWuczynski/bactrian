@@ -2,6 +2,8 @@
 
 Date: 2026-10-13
 
+Superseded in part by decision 0021, which adds serving over Streamable HTTP and the Tasks extension beside the jobs, and makes job IDs 128 random bits.
+
 ## Context
 
 Coding agents such as Claude Code, Codex and Cursor drive local tools through the Model Context Protocol (MCP). bactrian already speaks MCP as a proxy between an agent and its tool servers (decision 0006), and every command's work and `--json` output live in the command library (`bactrian.app`). `bactrian serve-mcp` puts those commands behind MCP tools, so a coding agent can record, replay, run experiments, compare variants and read divergences without parsing terminal output.

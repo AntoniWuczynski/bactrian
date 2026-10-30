@@ -17,7 +17,11 @@ type context = {
 (* What a tool shows: the exact text of its JSON and the same as a value. *)
 type shown = { text : string; structured : Canon.t }
 
-let of_json json =
+(* What a tool gives: JSON to show, or a job it started, which a client that
+   declared the Tasks extension gets as a task. *)
+type answer = Shown of shown | Started of Jobs.job
+
+let shown_of_json json =
   match Canon.of_yojson json with
   | Ok structured -> Ok { text = Yojson.Safe.to_string json; structured }
   | Error e ->
@@ -25,7 +29,9 @@ let of_json json =
         (Command_error.Internal
            (Format.asprintf "the result is not valid JSON: %a" Canon.pp_error e))
 
-let of_canon c = Ok { text = Canon.to_short_string c; structured = c }
+let of_json json = Result.map (fun s -> Shown s) (shown_of_json json)
+let shown_of_canon c = { text = Canon.to_short_string c; structured = c }
+let of_canon c = Ok (Shown (shown_of_canon c))
 let usage r = Result.map_error (fun m -> Command_error.Usage m) r
 
 type annotations = {
@@ -59,7 +65,7 @@ type tool = {
   description : string;
   properties : Tool_schema.property list;
   annotations : annotations;
-  run : context -> Canon.t option -> (shown, Command_error.t) result;
+  run : context -> Canon.t option -> (answer, Command_error.t) result;
 }
 
 (* A tool whose arguments [decode] reads once [properties] accept them. *)
@@ -128,9 +134,7 @@ let start_job context ~kind ~progress command =
              finish or cancel it with job_cancel (serve-mcp --max-jobs sets \
              the limit)"
             running))
-  else
-    let id = Jobs.start context.jobs ~kind ~progress command in
-    of_canon (Canon.set_member "job_id" (Canon.string id) Canon.empty_object)
+  else Ok (Started (Jobs.start context.jobs ~kind ~progress command))
 
 let one_run ~finished =
   { Jobs.done_ = (if finished then 1 else 0); total = Some 1 }
@@ -816,18 +820,26 @@ let result ~is_error s =
     ]
 
 let failure e =
-  match of_json (Command_error.to_json e) with
+  match shown_of_json (Command_error.to_json e) with
   | Ok s -> result ~is_error:true s
   | Error _ ->
       result ~is_error:true
         { text = Command_error.message e; structured = Canon.empty_object }
 
-let call context name arguments =
+let started job =
+  shown_of_canon
+    (Canon.set_member "job_id" (Canon.string (Jobs.id job)) Canon.empty_object)
+
+let call context ~tasks name arguments : Mcp_dispatch.tool_result =
+  let failure e = Mcp_dispatch.Complete (failure e) in
   match List.find_opt (fun t -> String.equal t.name name) tools with
   | None -> failure (Command_error.Usage ("unknown tool " ^ name))
   | Some t -> (
       match t.run context arguments with
-      | Ok s -> result ~is_error:false s
+      | Ok (Shown s) -> Complete (result ~is_error:false s)
+      | Ok (Started job) ->
+          if tasks then Task (Mcp_tasks.task job)
+          else Complete (result ~is_error:false (started job))
       | Error e -> failure e
       | exception Eio.Io (err, _) ->
           failure
@@ -842,3 +854,17 @@ let call context name arguments =
                   (Printexc.to_string ex)
                   (Printexc.get_backtrace ())));
           failure (Command_error.Internal (Printexc.to_string ex)))
+
+let task context (op : Mcp_dispatch.task_op) id =
+  Option.map
+    (fun job ->
+      (match op with
+      | Cancel_task -> Jobs.request_cancel job
+      | Get_task | Update_task -> ());
+      Mcp_tasks.detailed
+        ~result:(fun ~is_error body -> result ~is_error (shown_of_canon body))
+        job)
+    (Jobs.find context.jobs id)
+
+let handlers context : Mcp_dispatch.handlers =
+  { call = call context; task = task context }

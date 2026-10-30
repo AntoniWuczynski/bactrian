@@ -18,6 +18,7 @@ type finished = {
   exit : int;
   field : string;  (** ["result"] or ["error"]. *)
   body : Canon.t;
+  message : string;
 }
 
 type job = {
@@ -25,6 +26,10 @@ type job = {
   kind : string;
   progress : finished:bool -> progress;
   stop : Interrupt.trigger;
+  now : unit -> float;
+  created_at : float;
+  mutable updated_at : float;
+  mutable last_done : int;
   mutable finished : finished option;
   mutable finished_at : float;
   over : unit Eio.Promise.t;
@@ -84,7 +89,13 @@ let canonical json =
 let finish (outcome : outcome) =
   match outcome with
   | Ok (json, exit) ->
-      { state = Succeeded; exit; field = "result"; body = canonical json }
+      {
+        state = Succeeded;
+        exit;
+        field = "result";
+        body = canonical json;
+        message = Printf.sprintf "finished with exit status %d" exit;
+      }
   | Error e ->
       {
         state =
@@ -94,23 +105,29 @@ let finish (outcome : outcome) =
         exit = Command_error.exit_code e;
         field = "error";
         body = canonical (Command_error.to_json e);
+        message = Command_error.message e;
       }
 
 let rec fresh_id t =
   let id =
-    "job-" ^ Bactrian_runtime.Proc_util.hex (Mirage_crypto_rng.generate 8)
+    "job-" ^ Bactrian_runtime.Proc_util.hex (Mirage_crypto_rng.generate 16)
   in
   if Hashtbl.mem t.jobs id then fresh_id t else id
 
 let start t ~kind ~progress command =
   let id = fresh_id t in
   let over, resolve = Eio.Promise.create () in
+  let created_at = t.now () in
   let job =
     {
       id;
       kind;
       progress;
       stop = Interrupt.trigger ();
+      now = t.now;
+      created_at;
+      updated_at = created_at;
+      last_done = 0;
       finished = None;
       finished_at = 0.;
       over;
@@ -136,11 +153,36 @@ let start t ~kind ~progress command =
       in
       job.finished <- Some (finish outcome);
       job.finished_at <- t.now ();
+      job.updated_at <- job.finished_at;
       Eio.Promise.resolve resolve ());
-  id
+  job
+
+(* A job changes when it finishes and when a run of it finishes. *)
+let progress job =
+  let p = job.progress ~finished:(Option.is_some job.finished) in
+  if p.done_ <> job.last_done then begin
+    job.last_done <- p.done_;
+    if Option.is_none job.finished then job.updated_at <- job.now ()
+  end;
+  p
+
+let id job = job.id
+let created_at job = job.created_at
+let updated_at job = job.updated_at
+
+let expires_at job =
+  Option.map (fun _ -> job.finished_at +. keep_for) job.finished
+
+type ending = { state : state; exit : int; body : Canon.t; message : string }
+
+let ending job =
+  Option.map
+    (fun (f : finished) ->
+      { state = f.state; exit = f.exit; body = f.body; message = f.message })
+    job.finished
 
 let status job =
-  let p = job.progress ~finished:(Option.is_some job.finished) in
+  let p = progress job in
   let base =
     [
       ("job_id", Canon.string job.id);
@@ -160,8 +202,10 @@ let status job =
   in
   Canon.of_fields fields
 
+let request_cancel job = Interrupt.fire job.stop Sys.sigint
+
 let cancel job =
-  Interrupt.fire job.stop Sys.sigint;
+  request_cancel job;
   Eio.Promise.await job.over
 
 let cancel_all t =

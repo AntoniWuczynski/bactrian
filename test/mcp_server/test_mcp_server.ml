@@ -4,34 +4,14 @@
 open Bactrian_core
 open Bactrian_app
 open Bactrian_server
+open Server_support
 module Interrupt = Bactrian_runtime.Interrupt
 module Divergences = Bactrian_runtime.Divergences
-
-let canon text =
-  match Canon.of_string text with
-  | Ok c -> c
-  | Error _ -> Alcotest.fail ("malformed JSON: " ^ text)
-
-let canon_t =
-  Alcotest.testable
-    (fun f c -> Format.pp_print_string f (Canon.to_string c))
-    Canon.equal
 
 let of_yojson json =
   match Canon.of_yojson json with
   | Ok c -> c
   | Error _ -> Alcotest.fail "not canonical JSON"
-
-let path keys c =
-  List.fold_left (fun acc k -> Option.bind acc (Canon.member k)) (Some c) keys
-
-let meta =
-  {|"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}|}
-
-let call_line id name =
-  Printf.sprintf
-    {|{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{%s,"name":"%s"}}|}
-    id meta name
 
 let cancel_line id =
   Printf.sprintf
@@ -40,44 +20,15 @@ let cancel_line id =
 
 (* Transport *)
 
-let server : Mcp_dispatch.server =
+let echo_or_hang : Mcp_dispatch.handlers =
   {
-    name = "test";
-    version = "1";
-    instructions = "";
-    tools = [ ("echo", canon "{}"); ("slow", canon "{}") ];
+    call =
+      (fun ~tasks:_ name _ ->
+        match name with
+        | "slow" -> Eio.Fiber.await_cancel ()
+        | _ -> Complete (canon {|{"isError":false}|}));
+    task = (fun _ _ -> None);
   }
-
-let echo_or_hang name _ =
-  match name with
-  | "slow" -> Eio.Fiber.await_cancel ()
-  | _ -> canon {|{"isError":false}|}
-
-(* Every line written is a response; the ids of the results and errors. *)
-let replies text =
-  String.split_on_char '\n' text
-  |> List.filter (fun l -> not (String.equal l ""))
-  |> List.map (fun line ->
-      let fail () =
-        Alcotest.fail ("not a response to one of the test's ids: " ^ line)
-      in
-      let number : Mcp_msg.id -> int = function
-        | Int_id n -> n
-        | String_id _ -> fail ()
-      in
-      match Mcp_msg.decode line with
-      | Ok (Response { id; _ }) -> `Result (number id)
-      | Ok (Error_response { id = Some id; code; _ }) -> `Error (number id, code)
-      | Ok (Error_response { id = None; code; _ }) -> `Error (0, code)
-      | Ok (Request _ | Notification _) | Error _ -> fail ())
-
-let reply_t =
-  Alcotest.testable
-    (fun f r ->
-      match r with
-      | `Result n -> Format.fprintf f "result %d" n
-      | `Error (n, code) -> Format.fprintf f "error %d %d" n code)
-    ( = )
 
 let test_transport_eof () =
   Eio_main.run @@ fun _env ->
@@ -101,7 +52,7 @@ let test_transport_eof () =
   in
   let out = Buffer.create 256 in
   let ended =
-    Mcp_server.serve ~server ~call:echo_or_hang ~stop:(Interrupt.trigger ())
+    Mcp_server.serve ~server ~handlers:echo_or_hang ~stop:(Interrupt.trigger ())
       ~log:ignore ~input ~output:(Eio.Flow.buffer_sink out)
   in
   Alcotest.(check bool)
@@ -135,8 +86,9 @@ let test_transport_long_line () =
   in
   let out = Buffer.create 256 in
   ignore
-    (Mcp_server.serve ~server ~call:echo_or_hang ~stop:(Interrupt.trigger ())
-       ~log:ignore ~input ~output:(Eio.Flow.buffer_sink out)
+    (Mcp_server.serve ~server ~handlers:echo_or_hang
+       ~stop:(Interrupt.trigger ()) ~log:ignore ~input
+       ~output:(Eio.Flow.buffer_sink out)
       : Mcp_server.ended);
   Alcotest.(check (list reply_t))
     "an error without an id, then the next request's reply"
@@ -152,8 +104,8 @@ let test_transport_stop () =
   let ended =
     Eio.Fiber.pair
       (fun () ->
-        Mcp_server.serve ~server ~call:echo_or_hang ~stop ~log:ignore ~input:r
-          ~output:(Eio.Flow.buffer_sink out))
+        Mcp_server.serve ~server ~handlers:echo_or_hang ~stop ~log:ignore
+          ~input:r ~output:(Eio.Flow.buffer_sink out))
       (fun () ->
         Eio.Flow.copy_string
           (call_line 1 "slow" ^ "\n" ^ call_line 2 "echo" ^ "\n")
@@ -189,41 +141,28 @@ let state_t =
     (fun f s -> Format.pp_print_string f (Jobs.state_name s))
     (fun a b -> String.equal (Jobs.state_name a) (Jobs.state_name b))
 
-let one ~finished = { Jobs.done_ = (if finished then 1 else 0); total = Some 1 }
-
-(* A command that runs until stopped, as Run_command does on SIGINT. *)
-let until_stopped ~during stop =
-  match
-    Interrupt.run ~stop (fun () ->
-        during ();
-        Eio.Fiber.await_cancel ())
-  with
-  | Error signal ->
-      Error (Command_error.Interrupted { signal; experiment_id = Some "exp-1" })
-  | Ok () -> Ok (`Null, 0)
-
 let test_jobs () =
   Eio_main.run @@ fun env ->
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
   let jobs = Jobs.create ~sw () in
   let ok =
-    Jobs.start jobs ~kind:"run" ~progress:one (fun _ ->
+    start jobs ~kind:"run" ~progress:one (fun _ ->
         Ok (`Assoc [ ("a", `Int 1) ], 1))
   in
   let failed =
-    Jobs.start jobs ~kind:"record" ~progress:one (fun _ ->
+    start jobs ~kind:"record" ~progress:one (fun _ ->
         Error (Command_error.Usage "bad"))
   in
   let broken =
-    Jobs.start jobs ~kind:"replay" ~progress:one (fun _ ->
+    start jobs ~kind:"replay" ~progress:one (fun _ ->
         ignore
           (Eio.Path.load Eio.Path.(Eio.Stdenv.cwd env / "no-such-file")
             : string);
         Ok (`Null, 0))
   in
   let running =
-    Jobs.start jobs ~kind:"run" ~progress:one (until_stopped ~during:ignore)
+    start jobs ~kind:"run" ~progress:one (until_stopped ~during:ignore)
   in
   Alcotest.(check bool)
     "distinct IDs" true
@@ -285,10 +224,10 @@ let test_jobs_lifetime () =
       ~sw ()
   in
   let finished () =
-    Jobs.start jobs ~kind:"run" ~progress:one (fun _ -> Ok (`Null, 0))
+    start jobs ~kind:"run" ~progress:one (fun _ -> Ok (`Null, 0))
   in
   let broken =
-    Jobs.start jobs ~kind:"run" ~progress:one (fun _ -> raise Not_found)
+    start jobs ~kind:"run" ~progress:one (fun _ -> raise Not_found)
   in
   Alcotest.check state_t "a job that raises fails" Failed
     (job_state jobs broken);
@@ -318,7 +257,7 @@ let test_jobs_cancel_all () =
   Eio.Switch.run @@ fun sw ->
   let jobs = Jobs.create ~sw () in
   let agent =
-    Jobs.start jobs ~kind:"run" ~progress:one (fun stop ->
+    start jobs ~kind:"run" ~progress:one (fun stop ->
         Eio.Switch.run @@ fun psw ->
         let child =
           Eio.Process.spawn ~sw:psw
@@ -330,7 +269,7 @@ let test_jobs_cancel_all () =
           stop)
   in
   let other =
-    Jobs.start jobs ~kind:"run" ~progress:one (until_stopped ~during:ignore)
+    start jobs ~kind:"run" ~progress:one (until_stopped ~during:ignore)
   in
   Jobs.cancel_all jobs;
   Alcotest.check state_t "first" Cancelled (job_state jobs agent);
@@ -345,11 +284,6 @@ let test_jobs_cancel_all () =
         | exception Unix.Unix_error (ESRCH, _, _) -> true)
 
 (* Root confinement *)
-
-let root () =
-  match Confine.create (Sys.getcwd ()) with
-  | Ok r -> r
-  | Error m -> Alcotest.fail m
 
 let accepted r p = Result.is_ok (Confine.path r ~field:"f" p)
 
@@ -407,23 +341,6 @@ let test_confine () =
         (String.starts_with ~prefix:"output: " m)
 
 (* Tools, called as the server calls them *)
-
-let with_context ?(policy = Policy.default) f =
-  Eio_main.run @@ fun env ->
-  Mirage_crypto_rng_unix.use_default ();
-  Eio.Switch.run @@ fun sw ->
-  let context : Mcp_tools.context =
-    {
-      env;
-      root = root ();
-      policy;
-      jobs = Jobs.create ~sw ();
-      bactrian_exe = Sys.executable_name;
-      on_progress = ignore;
-    }
-  in
-  f context (fun name args ->
-      Mcp_tools.call context name (Option.map canon args))
 
 let with_tools ?policy f =
   with_context ?policy (fun context call -> f context.Mcp_tools.env call)
@@ -641,8 +558,9 @@ let test_plan_off_loop () =
       (fun () ->
         Mcp_server.serve
           ~server:{ server with tools = Mcp_tools.definitions }
-          ~call:(Mcp_tools.call context) ~stop:(Interrupt.trigger ())
-          ~log:ignore ~input:r ~output:(Eio.Flow.buffer_sink out))
+          ~handlers:(Mcp_tools.handlers context)
+          ~stop:(Interrupt.trigger ()) ~log:ignore ~input:r
+          ~output:(Eio.Flow.buffer_sink out))
       (fun () ->
         send (plan 1);
         send (list 2);
@@ -915,8 +833,7 @@ let test_job_limit () =
   @@ fun context call ->
   Out_channel.with_open_text "limit.yaml" (fun oc -> output_string oc "x");
   let first =
-    Jobs.start context.jobs ~kind:"run" ~progress:one
-      (until_stopped ~during:ignore)
+    start context.jobs ~kind:"run" ~progress:one (until_stopped ~during:ignore)
   in
   let result = call "run_start" (Some {|{"experiment":"limit.yaml"}|}) in
   Alcotest.(check bool) "refused" true (is_error result);

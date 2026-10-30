@@ -111,11 +111,6 @@ let keys_from_environment () =
 
 (* Formatting *)
 
-let rfc3339 t =
-  let tm = Unix.gmtime t in
-  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
-    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
-
 let fresh_id ~random_bytes now =
   let tm = Unix.gmtime now in
   Printf.sprintf "%04d%02d%02dT%02d%02d%02dZ-%s" (tm.tm_year + 1900)
@@ -540,7 +535,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
   let sim_now =
     match (config.sim_now, recording) with
     | "", Some (_, _, c) -> c.header.sim_now
-    | "", None -> rfc3339 now
+    | "", None -> Proc_util.rfc3339 now
     | s, (Some _ | None) -> s
   in
   let run_dir_path = Proc_util.absolute (Eio.Path.native_exn run_dir) in
@@ -588,7 +583,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
       scenario = config.scenario;
       variant = config.variant;
       bactrian_version = Version.current;
-      recorded_at = rfc3339 now;
+      recorded_at = Proc_util.rfc3339 now;
       sim_now;
       clock = Clock_label.to_clock clock_label;
     }
@@ -818,7 +813,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
               ~table:config.pricing ~clock ~fs:(Eio.Stdenv.fs env)
               ~sandbox:c.checker_sandbox ~timeout:c.checker_timeout
               ~cwd:Eio.Path.(Eio.Stdenv.fs env / c.checks_cwd)
-              ~date:(String.sub (rfc3339 now) 0 10)
+              ~date:(String.sub (Proc_util.rfc3339 now) 0 10)
               ~assertions:c.assertions ~checkers:c.checkers entries
           in
           (* Only a run that passed is judged by its checks. The others keep

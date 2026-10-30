@@ -44,7 +44,7 @@ let modern ?version ?(extra = "") id method_ =
 
 let reply = function
   | Mcp_dispatch.Reply m -> canon (Mcp_msg.encode m)
-  | Call _ | Cancel _ | Ignore -> Alcotest.fail "expected a reply"
+  | Call _ | Task_op _ | Cancel _ | Ignore -> Alcotest.fail "expected a reply"
 
 let check_reply what expected action =
   Alcotest.check canon_t what (canon expected) (reply action)
@@ -70,13 +70,14 @@ let era_t =
       | (Undecided | Legacy _ | Modern), _ -> false)
 
 let call_of = function
-  | Mcp_dispatch.Call { id; name; arguments } -> (id, name, arguments)
-  | Reply _ | Cancel _ | Ignore -> Alcotest.fail "expected a tool call"
+  | Mcp_dispatch.Call { id; name; arguments; _ } -> (id, name, arguments)
+  | Reply _ | Task_op _ | Cancel _ | Ignore ->
+      Alcotest.fail "expected a tool call"
 
 let test_modern_discover () =
   let d = Mcp_dispatch.create server in
   check_reply "discover"
-    {|{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"instructions":"use it","ttlMs":3600000,"cacheScope":"public","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}}}|}
+    {|{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{},"extensions":{"io.modelcontextprotocol/tasks":{}}},"instructions":"use it","ttlMs":3600000,"cacheScope":"public","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}}}|}
     (Mcp_dispatch.receive d (modern 1 "server/discover"));
   Alcotest.check era_t "era" Modern (Mcp_dispatch.era d);
   check_reply "tools in order, cacheable"
@@ -100,7 +101,8 @@ let test_modern_call () =
        {|{"jsonrpc":"2.0","id":3,"result":{"isError":false,"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}}}|})
     (canon
        (Mcp_msg.encode
-          (Mcp_dispatch.tool_reply d id (canon {|{"isError":false}|}))))
+          (Mcp_dispatch.tool_reply d id
+             (Complete (canon {|{"isError":false}|})))))
 
 let test_unsupported_version () =
   let d = Mcp_dispatch.create server in
@@ -168,7 +170,8 @@ let test_legacy () =
        (message {|{"jsonrpc":"2.0","method":"notifications/initialized"}|})
    with
   | Ignore -> ()
-  | Reply _ | Call _ | Cancel _ -> Alcotest.fail "initialized is a notification");
+  | Reply _ | Call _ | Task_op _ | Cancel _ ->
+      Alcotest.fail "initialized is a notification");
   check_reply "ping" {|{"jsonrpc":"2.0","id":2,"result":{}}|}
     (receive (request 2 "ping"));
   check_reply "tools/list without the modern fields"
@@ -182,7 +185,8 @@ let test_legacy () =
     (canon {|{"jsonrpc":"2.0","id":4,"result":{"isError":false}}|})
     (canon
        (Mcp_msg.encode
-          (Mcp_dispatch.tool_reply d id (canon {|{"isError":false}|}))));
+          (Mcp_dispatch.tool_reply d id
+             (Complete (canon {|{"isError":false}|})))));
   check_code "no server/discover" (-32601)
     (receive (request 5 "server/discover"));
   check_code "a second initialize" (-32600)
@@ -246,7 +250,7 @@ let test_cancel () =
   in
   let cancel_of = function
     | Mcp_dispatch.Cancel id -> Some id
-    | Reply _ | Call _ | Ignore -> None
+    | Reply _ | Call _ | Task_op _ | Ignore -> None
   in
   Alcotest.(check (option id_t))
     "a number" (Some (Int_id 7))
@@ -261,7 +265,8 @@ let test_cancel () =
     Mcp_dispatch.receive d (message {|{"jsonrpc":"2.0","id":1,"result":{}}|})
   with
   | Ignore -> ()
-  | Reply _ | Call _ | Cancel _ -> Alcotest.fail "a response is ignored"
+  | Reply _ | Call _ | Task_op _ | Cancel _ ->
+      Alcotest.fail "a response is ignored"
 
 let test_undecodable () =
   let code text =
@@ -281,6 +286,103 @@ let test_undecodable () =
     (Some (-32600), Some "null")
     (code "[]")
 
+(* The Tasks extension *)
+
+let tasks_meta =
+  {|"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}|}
+
+let with_tasks ?(extra = "") id method_ =
+  request ~params:(Printf.sprintf "{%s%s}" tasks_meta extra) id method_
+
+let task_op_of = function
+  | Mcp_dispatch.Task_op { id; op; task_id } -> (id, op, task_id)
+  | Reply _ | Call _ | Cancel _ | Ignore -> Alcotest.fail "expected a task op"
+
+let op_name : Mcp_dispatch.task_op -> string = function
+  | Get_task -> "get"
+  | Update_task -> "update"
+  | Cancel_task -> "cancel"
+
+let info =
+  {|"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"test","version":"1"}}|}
+
+let test_tasks () =
+  let d = Mcp_dispatch.create server in
+  let receive = Mcp_dispatch.receive d in
+  let tasks_of = function
+    | Mcp_dispatch.Call { tasks; _ } -> tasks
+    | Reply _ | Task_op _ | Cancel _ | Ignore ->
+        Alcotest.fail "expected a tool call"
+  in
+  Alcotest.(check bool)
+    "a call that declares the extension" true
+    (tasks_of (receive (with_tasks 1 "tools/call" ~extra:{|,"name":"slow"|})));
+  Alcotest.(check bool)
+    "a call that does not" false
+    (tasks_of (receive (modern 2 "tools/call" ~extra:{|,"name":"slow"|})));
+  List.iter
+    (fun (method_, op) ->
+      let _, got, task_id =
+        task_op_of
+          (receive
+             (with_tasks 3 method_
+                ~extra:{|,"taskId":"job-1","inputResponses":{}|}))
+      in
+      Alcotest.(check string) method_ (op_name op) (op_name got);
+      Alcotest.(check string) (method_ ^ ": the task") "job-1" task_id)
+    [
+      ("tasks/get", Mcp_dispatch.Get_task);
+      ("tasks/update", Update_task);
+      ("tasks/cancel", Cancel_task);
+    ];
+  check_reply "a task method without the extension"
+    {|{"jsonrpc":"2.0","id":4,"error":{"code":-32021,"message":"Missing required client capability","data":{"requiredCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}}}}|}
+    (receive (modern 4 "tasks/get" ~extra:{|,"taskId":"job-1"|}));
+  check_code "no taskId" (-32602) (receive (with_tasks 5 "tasks/cancel"));
+  check_code "tasks/update without inputResponses" (-32602)
+    (receive (with_tasks 6 "tasks/update" ~extra:{|,"taskId":"job-1"|}));
+  let encode m = canon (Mcp_msg.encode m) in
+  Alcotest.check canon_t "a task result"
+    (canon
+       (Printf.sprintf
+          {|{"jsonrpc":"2.0","id":1,"result":{"taskId":"job-1","status":"working","resultType":"task",%s}}|}
+          info))
+    (encode
+       (Mcp_dispatch.tool_reply d (Int_id 1)
+          (Task (canon {|{"taskId":"job-1","status":"working"}|}))));
+  let task = Some (canon {|{"taskId":"job-1","status":"working"}|}) in
+  Alcotest.check canon_t "tasks/get gives the task"
+    (canon
+       (Printf.sprintf
+          {|{"jsonrpc":"2.0","id":2,"result":{"taskId":"job-1","status":"working","resultType":"complete",%s}}|}
+          info))
+    (encode (Mcp_dispatch.task_reply d (Int_id 2) Get_task task));
+  Alcotest.check canon_t "tasks/cancel acknowledges"
+    (canon
+       (Printf.sprintf
+          {|{"jsonrpc":"2.0","id":3,"result":{"resultType":"complete",%s}}|}
+          info))
+    (encode (Mcp_dispatch.task_reply d (Int_id 3) Cancel_task task));
+  Alcotest.check canon_t "an unknown task"
+    (canon
+       {|{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Failed to retrieve task: Task not found"}}|})
+    (encode (Mcp_dispatch.task_reply d (Int_id 4) Update_task None))
+
+(* Legacy clients keep the job tools: no task methods, and no task results. *)
+let test_tasks_legacy () =
+  let d = Mcp_dispatch.create ~era:(Legacy "2025-06-18") server in
+  let receive = Mcp_dispatch.receive d in
+  (match receive (request 1 "tools/list") with
+  | Reply (Response _) -> ()
+  | Reply (Error_response _ | Request _ | Notification _)
+  | Call _ | Task_op _ | Cancel _ | Ignore ->
+      Alcotest.fail "the transport named the era, so no initialize is needed");
+  check_code "tasks/get" (-32601)
+    (receive (request 2 "tasks/get" ~params:{|{"taskId":"job-1"}|}));
+  ignore
+    (call_of (receive (request 3 "tools/call" ~params:{|{"name":"slow"}|}))
+      : Mcp_msg.id * string * Canon.t option)
+
 let () =
   Alcotest.run "mcp_dispatch"
     [
@@ -293,6 +395,11 @@ let () =
           Alcotest.test_case "errors" `Quick test_modern_errors;
           Alcotest.test_case "an error fixes no era" `Quick
             test_era_not_fixed_by_an_error;
+        ] );
+      ( "tasks",
+        [
+          Alcotest.test_case "methods and results" `Quick test_tasks;
+          Alcotest.test_case "not in the legacy era" `Quick test_tasks_legacy;
         ] );
       ( "legacy",
         [

@@ -24,6 +24,9 @@ type era =
 type error = { code : int; message : string; data : Canon.t option }
 (** A JSON-RPC error response. *)
 
+val tasks_extension : string
+(** ["io.modelcontextprotocol/tasks"]. *)
+
 type t
 
 val spawn :
@@ -62,9 +65,10 @@ val raw_request : t -> string -> Canon.t -> (Canon.t, error) result
 (** Sends a request with exactly these [params] and returns its result or its
     error. *)
 
-val request : t -> string -> Canon.t -> (Canon.t, error) result
+val request : ?tasks:bool -> t -> string -> Canon.t -> (Canon.t, error) result
 (** {!raw_request} with the [_meta] of a [Modern] connection added to [params]
-    (the protocol version and empty client capabilities). *)
+    (the protocol version and client capabilities, empty or, with [tasks],
+    declaring the Tasks extension). *)
 
 val notify : t -> string -> Canon.t -> unit
 (** Sends a notification. *)
@@ -83,6 +87,15 @@ val call_tool : t -> string -> Canon.t -> outcome
     to see one). The result's text block must hold the [structuredContent]
     serialised, and in the [Modern] era [resultType] must be ["complete"]. *)
 
+val call_task : t -> string -> Canon.t -> Canon.t
+(** [tools/call] from a request that declares the Tasks extension, which must be
+    answered with a task: [resultType] ["task"] and a [taskId]. *)
+
+val poll_task : ?timeout:float -> ?interval:float -> t -> string -> Canon.t
+(** [tasks/get] every [interval] seconds (default 0.1) until the task is
+    [completed], [failed] or [cancelled], and returns it. [Timeout] after
+    [timeout] seconds (default 120) altogether. *)
+
 val poll_job : ?timeout:float -> ?interval:float -> t -> string -> Canon.t
 (** [job_status] every [interval] seconds (default 0.1) until the job's state is
     no longer ["running"], and returns that status. [Timeout] after [timeout]
@@ -96,3 +109,155 @@ val close : ?timeout:float -> t -> Unix.process_status
 
 val dispose : t -> unit
 (** Kills the server by its PID if it is still running. For [Fun.protect]. *)
+
+(** The same server over Streamable HTTP ([serve-mcp --http 0]), one POST per
+    message. *)
+module Http : sig
+  type response = {
+    status : int;
+    headers : (string * string) list;
+    body : string;  (** Without the chunked framing. *)
+  }
+
+  val header : response -> string -> string option
+  (** A header of the answer, by a name in any case. *)
+
+  val send :
+    ?meth:string ->
+    ?path:string ->
+    ?timeout:float ->
+    port:int ->
+    (string * string) list ->
+    string ->
+    response
+  (** One request to [127.0.0.1:port] (default [POST /mcp]) with these headers
+      and body, [Host] added unless given, on a connection of its own. [Timeout]
+      when no answer comes within [timeout] (default 60) seconds. *)
+
+  val request :
+    ?meth:string ->
+    ?path:string ->
+    ?close:bool ->
+    port:int ->
+    (string * string) list ->
+    string ->
+    string
+  (** The bytes of the request {!send} makes, with [Connection: close] unless
+      [close] is [false]. *)
+
+  val exchange : ?timeout:float -> port:int -> string -> string
+  (** Writes these bytes on a connection of its own and returns all the server
+      sends until it closes the connection. [Timeout] when it neither sends nor
+      closes within [timeout] (default 60) seconds. *)
+
+  val answers : string -> response list
+  (** The answers in what {!exchange} returned, one after another, by their
+      framing. *)
+
+  val hang_up :
+    ?timeout:float ->
+    ?linger:float ->
+    ?pipelined:string ->
+    port:int ->
+    (string * string) list ->
+    string ->
+    unit
+  (** Sends a POST, then the bytes [pipelined] (default none, else the POST
+      keeps the connection alive), waits for the head of the answer and [linger]
+      seconds more (default 0.2), and closes the connection before its body. *)
+
+  val events : string -> string list
+  (** The [data] of each event of an SSE body. *)
+
+  val message : response -> Mcp_msg.message
+  (** The JSON-RPC message of an answer, from a JSON body or the single event of
+      an SSE one. *)
+
+  val outcome : response -> (Canon.t, error) result
+  (** The result or error of {!message}. *)
+
+  type server
+
+  val test_token : string
+  (** The bearer token {!start} gives the server by default. *)
+
+  val start :
+    ?env:(string * string) list ->
+    ?args:string list ->
+    ?token:string option ->
+    ?timeout:float ->
+    exe:string ->
+    dir:string ->
+    unit ->
+    server
+  (** Starts [exe serve-mcp --http 0 args] in [dir] with [BACTRIAN_MCP_TOKEN]
+      set to [token] (default {!test_token}), or unset for [None], and the
+      test's environment plus [env]. Waits until it prints the port it listens
+      on and, without a token of the test's, the token it made. Its standard
+      error goes to a file, {!log}. *)
+
+  val port : server -> int
+  val token : server -> string
+  val pid : server -> int
+
+  val log : server -> string
+  (** What the server wrote to standard error so far. *)
+
+  val stop : ?timeout:float -> server -> Unix.process_status
+  (** SIGTERM, then waits for the server to exit, at most [timeout] seconds
+      (default 30), killing it by its PID when that runs out. *)
+
+  val dispose : server -> unit
+  (** Kills the server by its PID if it is still running, and removes its
+      {!log}. *)
+
+  val auth : server -> string * string
+  (** The [Authorization] header with the server's token. *)
+
+  val rpc_headers :
+    ?accept:string ->
+    token:string ->
+    string ->
+    Canon.t ->
+    (string * string) list
+  (** What a 2026-07-28 request with this method and params carries: the token,
+      [Content-Type], [Accept] (default both JSON and SSE),
+      [MCP-Protocol-Version], [Mcp-Method] and, for [tools/call] and the task
+      methods, [Mcp-Name]. *)
+
+  val with_meta : tasks:bool -> Canon.t -> Canon.t
+  (** [params] with the [_meta] of {!Mcp_client.request}. *)
+
+  val body : ?id:int -> string -> Canon.t -> string
+  (** A JSON-RPC request with this method and params, with the next id unless
+      given. *)
+
+  val rpc :
+    ?tasks:bool ->
+    ?accept:string ->
+    ?headers:((string * string) list -> (string * string) list) ->
+    server ->
+    string ->
+    Canon.t ->
+    response
+  (** A 2026-07-28 request: the [_meta] of {!request} added to [params], with
+      {!rpc_headers} passed through [headers] (default unchanged). *)
+
+  val must_ok : string -> response -> Canon.t
+  (** The result of an answer with status 200. Anything else raises
+      {!Protocol_violation}, naming the method. *)
+
+  val call_tool : ?accept:string -> server -> string -> Canon.t -> outcome
+  (** {!Mcp_client.call_tool} over HTTP, which must answer with status 200. *)
+
+  val call_task : server -> string -> Canon.t -> Canon.t
+  (** {!Mcp_client.call_task} over HTTP. *)
+
+  val task : server -> string -> string -> (Canon.t, error) result
+  (** [tasks/get] or [tasks/cancel] for this task, from a request that declares
+      the extension. *)
+
+  val poll_task :
+    ?timeout:float -> ?interval:float -> server -> string -> Canon.t
+  (** {!Mcp_client.poll_task} over HTTP. *)
+end

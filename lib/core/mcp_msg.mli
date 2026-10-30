@@ -48,6 +48,10 @@ val encode : ?short_floats:bool -> message -> string
     [decode (encode m)] is [Ok m]. [short_floats] renders floats as
     {!Canon.to_short_string} does. *)
 
+val protocol_version : message -> string option
+(** The [io.modelcontextprotocol/protocolVersion] in a request's [params._meta],
+    [None] when it is absent, not a string, or the message is not a request. *)
+
 val era_of_request : message -> era option
 (** [Legacy] for an [initialize] request, [Modern] when [params._meta] carries
     [io.modelcontextprotocol/protocolVersion], [None] otherwise and for every

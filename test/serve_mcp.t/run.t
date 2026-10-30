@@ -39,3 +39,19 @@ holds the key.
   tool.json:0
   cli.json:0
   [1]
+
+Over Streamable HTTP it needs a port, and a token of at least 32 characters
+when one is given.
+
+  $ bactrian serve-mcp --http 70000
+  bactrian serve-mcp: --http needs a port from 0 to 65535
+  [64]
+  $ bactrian serve-mcp --http-allow-origin http://localhost:5173
+  bactrian serve-mcp: --http-allow-origin needs --http
+  [64]
+  $ bactrian serve-mcp --http 0 --http-allow-origin http://localhost:5173/
+  bactrian serve-mcp: --http-allow-origin: http://localhost:5173/ is not an origin: give scheme://host or scheme://host:port, with http or https and no path, such as http://localhost:5173
+  [64]
+  $ BACTRIAN_MCP_TOKEN=short bactrian serve-mcp --http 0
+  bactrian serve-mcp: BACTRIAN_MCP_TOKEN must be at least 32 visible ASCII characters, without spaces
+  [64]

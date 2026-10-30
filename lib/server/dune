@@ -5,6 +5,9 @@
   bactrian.app
   bactrian.core
   bactrian.runtime
+  base64
+  cohttp-eio
+  http
   eio
   eio.unix
   mirage-crypto-rng

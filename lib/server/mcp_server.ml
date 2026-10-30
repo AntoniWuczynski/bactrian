@@ -9,7 +9,8 @@ let key : Mcp_msg.id -> string = function
   | Int_id n -> "i" ^ string_of_int n
   | String_id s -> "s" ^ s
 
-let serve ~server ~call ~stop ~log ~input ~output =
+let serve ~server ~(handlers : Mcp_dispatch.handlers) ~stop ~log ~input ~output
+    =
   let dispatch = Mcp_dispatch.create server in
   let lock = Eio.Mutex.create () in
   let send message =
@@ -30,7 +31,7 @@ let serve ~server ~call ~stop ~log ~input ~output =
       (Hashtbl.find_opt in_flight k)
   in
   Eio.Switch.run @@ fun sw ->
-  let start id name arguments =
+  let start id name arguments ~tasks =
     let k = key id in
     (* The error carries no id: with the id, the client would take it for the
        reply to its first request with that id. *)
@@ -52,7 +53,7 @@ let serve ~server ~call ~stop ~log ~input ~output =
               (fun () ->
                 Eio.Promise.await cancelled;
                 None)
-              (fun () -> Some (call name arguments))
+              (fun () -> Some (handlers.call ~tasks name arguments))
           in
           (* A cancelled call has left the table already, and its id may be in
              use again. *)
@@ -89,7 +90,12 @@ let serve ~server ~call ~stop ~log ~input ~output =
         | Ok message -> (
             match Mcp_dispatch.receive dispatch message with
             | Reply m -> send m
-            | Call { id; name; arguments } -> start id name arguments
+            | Call { id; name; arguments; tasks } ->
+                start id name arguments ~tasks
+            | Task_op { id; op; task_id } ->
+                send
+                  (Mcp_dispatch.task_reply dispatch id op
+                     (handlers.task op task_id))
             | Cancel id -> cancel (key id)
             | Ignore -> ()));
         loop ()
@@ -118,13 +124,15 @@ let server policy : Mcp_dispatch.server =
        this directory, whose .bactrian folder holds the runs and experiments. \
        run_start, record_start and replay_start start a job and return its \
        job_id at once: poll job_status until it is no longer running, and stop \
-       it with job_cancel. The other tools answer at once. Every result is the \
-       JSON that the matching bactrian command prints with --json. Paths must \
-       lie inside this directory. " ^ Policy.describe policy;
+       it with job_cancel. A client that declares the \
+       io.modelcontextprotocol/tasks extension gets the job as a task instead, \
+       whose result is the command's. The other tools answer at once. Every \
+       result is the JSON that the matching bactrian command prints with \
+       --json. Paths must lie inside this directory. " ^ Policy.describe policy;
     tools = Mcp_tools.definitions;
   }
 
-let run ~env ~root ~stop config ~input ~output =
+let run ~env ~root config transport =
   Mirage_crypto_rng_unix.use_default ();
   Eio.Switch.run @@ fun sw ->
   let jobs = Jobs.create ~log:config.log ~sw () in
@@ -138,9 +146,6 @@ let run ~env ~root ~stop config ~input ~output =
       on_progress = config.on_progress;
     }
   in
-  let ended =
-    serve ~server:(server config.policy) ~call:(Mcp_tools.call context) ~stop
-      ~log:config.log ~input ~output
-  in
+  let ended = transport (server config.policy) (Mcp_tools.handlers context) in
   Jobs.cancel_all jobs;
   ended
