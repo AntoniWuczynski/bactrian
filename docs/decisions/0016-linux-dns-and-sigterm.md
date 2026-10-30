@@ -27,7 +27,7 @@ The agent ends up as before: its own uid and gid, no capability in any set, `NoN
 
 ## Consequences
 
-- A lookup through a resolver at another address, such as a `nameserver` on the local network in a regular `/etc/resolv.conf`, fails with `ENETUNREACH` without reaching the forwarder and is not recorded. The coverage label does not say which case a host is.
+- A lookup through a resolver at another address, such as a `nameserver` on the local network in a regular `/etc/resolv.conf`, fails with `ENETUNREACH` without reaching the forwarder and is not recorded. The coverage label does not tell the cases apart, so bactrian reads `/etc/resolv.conf` as the sandbox shows it (missing, or under the hidden `/run`, means 127.0.0.1) and, when it names a resolver other than the two the forwarder answers, adds a gap naming it, which makes `complete` false.
 - A set-user-ID bubblewrap refuses `--cap-add` to a user, so there the forwarder answers no DNS and the coverage stays `relay-failures-only`, as it does in the virtual machine.
 - The forwarder holds two capabilities, valid only in the sandbox's own user namespace, for the whole run.
 - Each lookup is one line in the violation log, so an agent that floods port 53 fills the log's 16 MiB limit, which the violations then report as a gap.

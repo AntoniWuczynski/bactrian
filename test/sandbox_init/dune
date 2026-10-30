@@ -7,13 +7,6 @@
    BACTRIAN_BIN
    %{bin:bactrian}
    (run %{test})))
- (libraries
-  bactrian.core
-  bactrian.runtime
-  eio_main
-  unix
-  yojson
-  cstruct
-  alcotest)
+ (libraries bactrian.core bactrian.runtime eio_main unix yojson alcotest)
  (flags
   (:standard -w -70)))

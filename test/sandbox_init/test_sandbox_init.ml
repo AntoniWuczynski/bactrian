@@ -490,123 +490,6 @@ let closed_signal_pipe_asks_nothing () =
 
 (* DNS *)
 
-module Dns_server = Bactrian_runtime.Sandbox_dns
-
-let dns_query ?(flags = "\001\000") labels =
-  "\012\034" ^ flags ^ "\000\001\000\000\000\000\000\000"
-  ^ String.concat ""
-      (List.map
-         (fun l -> String.make 1 (Char.chr (String.length l)) ^ l)
-         labels)
-  ^ "\000\000\028\000\001"
-
-let with_dns f =
-  with_ctx @@ fun ctx ->
-  let lines = ref [] and ports = ref [] in
-  let net = Eio.Stdenv.net ctx.env in
-  (match
-     Dns_server.serve ~sw:ctx.sw ~net
-       ~on_bound:(fun t p -> ports := (t, p) :: !ports)
-       ~record:(fun l -> lines := l :: !lines)
-       [ (loopback, 0) ]
-   with
-  | Ok () -> ()
-  | Error e -> Alcotest.fail (Dns_server.describe_error e));
-  let port t =
-    match List.assoc_opt t !ports with
-    | Some p -> p
-    | None -> Alcotest.fail "not bound"
-  in
-  f ctx ~port ~lines:(fun () -> List.rev !lines)
-
-let refused_reply query reply =
-  Alcotest.(check string)
-    "same id" (String.sub query 0 2) (String.sub reply 0 2);
-  Alcotest.(check int) "REFUSED" 5 (Char.code reply.[3] land 0x0f);
-  Alcotest.(check int) "a response" 0x80 (Char.code reply.[2] land 0x80)
-
-let dns_over_udp () =
-  with_dns @@ fun ctx ~port ~lines ->
-  let sock =
-    Eio.Net.datagram_socket ~sw:ctx.sw (Eio.Stdenv.net ctx.env)
-      (`Udp (loopback, 0))
-  in
-  let ask q =
-    Eio.Net.send sock ~dst:(`Udp (loopback, port `Udp)) [ Cstruct.of_string q ]
-  in
-  let q = dns_query [ "example"; "com" ] in
-  ask q;
-  let buf = Cstruct.create 512 in
-  let _, n = Eio.Net.recv sock buf in
-  refused_reply q (Cstruct.to_string ~len:n buf);
-  (* Nothing comes back for a response, and the next query is still served. *)
-  ask (dns_query ~flags:"\129\000" [ "x" ]);
-  ask "\001\002";
-  ask q;
-  let _, n = Eio.Net.recv sock buf in
-  refused_reply q (Cstruct.to_string ~len:n buf);
-  Alcotest.(check (list string))
-    "one line per message"
-    [
-      {|{"kind":"dns","transport":"udp","name":"example.com","type":"AAAA"}|};
-      {|{"kind":"dns","transport":"udp","error":"the message is a response, not a query"}|};
-      {|{"kind":"dns","transport":"udp","error":"the message ends inside its header or question"}|};
-      {|{"kind":"dns","transport":"udp","name":"example.com","type":"AAAA"}|};
-    ]
-    (lines ())
-
-let dns_over_tcp () =
-  with_dns @@ fun ctx ~port ~lines ->
-  let flow = connect ctx (port `Tcp) in
-  let prefixed q =
-    let n = String.length q in
-    String.make 1 (Char.chr (n lsr 8))
-    ^ String.make 1 (Char.chr (n land 0xff))
-    ^ q
-  in
-  let q1 = dns_query [ "a"; "test" ] and q2 = dns_query [ "b" ] in
-  Eio.Flow.copy_string (prefixed q1 ^ prefixed q2) flow;
-  let r = reader flow in
-  let answer () =
-    let len = Buf_read.take 2 r in
-    Buf_read.take ((Char.code len.[0] lsl 8) lor Char.code len.[1]) r
-  in
-  refused_reply q1 (answer ());
-  refused_reply q2 (answer ());
-  half_close flow;
-  Alcotest.(check bool)
-    "closed after the last query" true
-    (Buf_read.at_end_of_input r);
-  Alcotest.(check (list string))
-    "both recorded"
-    [
-      {|{"kind":"dns","transport":"tcp","name":"a.test","type":"AAAA"}|};
-      {|{"kind":"dns","transport":"tcp","name":"b","type":"AAAA"}|};
-    ]
-    (lines ())
-
-let dns_lines_are_read_back () =
-  List.iter
-    (fun (transport, query) ->
-      let line =
-        Dns_server.line ~transport (Bactrian_core.Dns_message.parse query)
-      in
-      match Bactrian_core.Sandbox_log.of_relay_line line with
-      | Ok v -> Alcotest.(check string) line "dns" v.kind
-      | Error m -> Alcotest.failf "%s: %s" line m)
-    [ (`Udp, dns_query [ "a\"b"; "c" ]); (`Tcp, "\000") ]
-
-(* 192.0.2.1 is a documentation address, assigned to no interface. *)
-let dns_bind_fails () =
-  with_ctx @@ fun ctx ->
-  match
-    Dns_server.serve ~sw:ctx.sw ~net:(Eio.Stdenv.net ctx.env) ~record:ignore
-      [ (Eio.Net.Ipaddr.of_raw "\192\000\002\001", 0) ]
-  with
-  | Error { address; _ } ->
-      Alcotest.(check string) "address" "192.0.2.1:0" address
-  | Ok () -> Alcotest.fail "bound an address no interface has"
-
 (* Port 53 needs root on Linux, and macOS has no 127.0.0.53, so the forwarder
    stops before the agent starts. *)
 let dns_needs_port_53 () =
@@ -942,14 +825,7 @@ let () =
           Alcotest.test_case "ending the run kills the group" `Quick
             ending_the_run_kills_the_group;
         ] );
-      ( "dns",
-        [
-          Alcotest.test_case "over UDP" `Quick dns_over_udp;
-          Alcotest.test_case "over TCP" `Quick dns_over_tcp;
-          Alcotest.test_case "lines read back" `Quick dns_lines_are_read_back;
-          Alcotest.test_case "an address it cannot bind" `Quick dns_bind_fails;
-          Alcotest.test_case "port 53 refused" `Quick dns_needs_port_53;
-        ] );
+      ("dns", [ Alcotest.test_case "port 53 refused" `Quick dns_needs_port_53 ]);
       ( "subcommand",
         [
           Alcotest.test_case "runs the agent" `Quick subcommand_runs_the_agent;

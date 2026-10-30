@@ -22,6 +22,19 @@ val line :
     ["error"] in place of ["name"] and ["type"] (see
     {!Bactrian_core.Sandbox_log.of_relay_line}). *)
 
+val unanswered_nameservers : string -> string list
+(** The addresses of the [nameserver] lines of a [resolv.conf]'s text that are
+    not among {!addresses}, in order. A text without any gives none: a resolver
+    then asks 127.0.0.1. *)
+
+val unrecorded_resolvers : ?path:string -> unit -> string list
+(** The resolvers that the agent's own resolver asks and the forwarder does not
+    answer, so that a lookup through them fails unrecorded, read from [path]
+    ([/etc/resolv.conf]). None when the file is missing or lies under [/run],
+    which the sandbox replaces with an empty directory, so that the agent's
+    resolver asks 127.0.0.1, otherwise {!unanswered_nameservers} of the file its
+    symbolic links lead to. *)
+
 type error = { address : string; reason : string }
 
 val describe_error : error -> string

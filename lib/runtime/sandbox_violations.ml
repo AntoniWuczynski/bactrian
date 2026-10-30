@@ -212,7 +212,7 @@ let relay_violations ~coverage ~gaps path =
    forwarder that did not, never a wait in a normal run. *)
 let drain_timeout = 5.
 
-let relay ~env ~path ~writer ~drained ~coverage =
+let relay ~env ~path ~writer ~drained ~coverage ~gaps:known =
   Eio.Resource.close writer;
   match
     Eio.Time.with_timeout (Eio.Stdenv.clock env) drain_timeout (fun () ->
@@ -221,14 +221,17 @@ let relay ~env ~path ~writer ~drained ~coverage =
   | Ok dropped ->
       relay_violations ~coverage path
         ~gaps:
-          (if dropped then
-             [
-               Printf.sprintf "the log passed %d bytes, the rest was dropped"
-                 max_log;
-             ]
-           else [])
+          (known
+          @
+          if dropped then
+            [
+              Printf.sprintf "the log passed %d bytes, the rest was dropped"
+                max_log;
+            ]
+          else [])
   | Error `Timeout ->
       relay_violations ~coverage path
-        ~gaps:[ "a process still held the log open at the end of the run" ]
+        ~gaps:
+          (known @ [ "a process still held the log open at the end of the run" ])
   | exception ((Eio.Io _ | Unix.Unix_error _) as e) ->
       Not_collected ("sandbox.log: " ^ Printexc.to_string e)

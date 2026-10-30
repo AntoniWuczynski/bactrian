@@ -98,25 +98,11 @@ let test_sigterm_reaches_agent =
     "the agent saw SIGTERM" true
     (Sys.file_exists (Filename.concat (file r "state") "got-term"))
 
-(* Whether the agent's resolver is the forwarder's: a [nameserver] on loopback,
-   or a resolv.conf under /run, which the sandbox hides, so the resolver falls
-   back to 127.0.0.1. Elsewhere a lookup fails with ENETUNREACH, unrecorded. *)
-let resolver_on_loopback () =
-  match Unix.realpath "/etc/resolv.conf" with
-  | exception Unix.Unix_error _ -> true
-  | real when String.starts_with ~prefix:"/run/" real -> true
-  | real ->
-      In_channel.with_open_bin real In_channel.input_all
-      |> String.split_on_char '\n'
-      |> List.exists (String.starts_with ~prefix:"nameserver 127.")
-
-(* On Linux the forwarder answers DNS, so a lookup is a violation. *)
+(* On Linux the forwarder answers DNS, so a lookup is a violation, unless the
+   agent's resolver asks another address, which a gap then names. *)
 let test_dns_is_recorded =
   sandboxed "sandbox-dns" @@ fun ctx ->
-  if not (resolver_on_loopback ()) then begin
-    print_endline "the resolver is not on loopback: skipped";
-    Alcotest.skip ()
-  end;
+  let unrecorded = Bactrian_runtime.Sandbox_dns.unrecorded_resolvers () in
   let sandbox = strict ctx in
   let lookup =
     "import socket\n\
@@ -134,8 +120,8 @@ let test_dns_is_recorded =
          })
   in
   Alcotest.(check string) "outcome" "passed" (outcome_name r);
-  match r.violations with
-  | Collected { items; coverage = Relay_failures_and_dns; gaps = [] } ->
+  match (r.violations, unrecorded) with
+  | Collected { items; coverage = Relay_failures_and_dns; gaps = [] }, [] ->
       Alcotest.(check bool)
         "the lookup is there" true
         (List.exists
@@ -143,11 +129,19 @@ let test_dns_is_recorded =
              String.equal v.kind "dns"
              && String.starts_with ~prefix:"example.com " v.detail)
            items)
-  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ } ->
-      print_endline "this sandbox does not record DNS lookups as such: skipped"
-  | Collected { coverage = Relay_failures_and_dns; gaps = _ :: _; _ } ->
+  | Collected { coverage = Relay_failures_and_dns; gaps; _ }, first :: _ ->
+      Alcotest.(check bool)
+        "a gap names the resolver" true
+        (List.exists
+           (fun g ->
+             List.exists (String.equal first) (String.split_on_char ' ' g))
+           gaps)
+  | Collected { coverage = Relay_failures_and_dns; gaps = _ :: _; _ }, [] ->
       Alcotest.fail "the DNS lookups are incomplete"
-  | Not_collected m -> Alcotest.failf "violations not collected: %s" m
+  | Collected { coverage = Seatbelt_log | Relay_failures_only; _ }, _ ->
+      print_endline "this sandbox does not record DNS lookups as such: skipped";
+      Alcotest.skip ()
+  | Not_collected m, _ -> Alcotest.failf "violations not collected: %s" m
 
 (* An agent that tries to leave: each attempt's result is its reply. *)
 let escape_agent =

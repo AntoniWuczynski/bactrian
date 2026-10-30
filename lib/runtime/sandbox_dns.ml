@@ -21,6 +21,30 @@ let line ~transport query =
            ]
        | Error e -> [ ("error", `String (Dns.describe_error e)) ]))
 
+let answered = List.map (Format.asprintf "%a" Eio.Net.Ipaddr.pp) addresses
+
+let unanswered_nameservers text =
+  String.split_on_char '\n' text
+  |> List.filter_map (fun line ->
+      match
+        String.split_on_char ' '
+          (String.map (function '\t' -> ' ' | c -> c) line)
+        |> List.filter (fun w -> not (String.equal w ""))
+      with
+      | "nameserver" :: address :: _
+        when not (List.exists (String.equal address) answered) ->
+          Some address
+      | _ -> None)
+
+let unrecorded_resolvers ?(path = "/etc/resolv.conf") () =
+  match Unix.realpath path with
+  | exception Unix.Unix_error _ -> []
+  | real when String.starts_with ~prefix:"/run/" real -> []
+  | real -> (
+      match In_channel.with_open_bin real In_channel.input_all with
+      | exception Sys_error _ -> []
+      | text -> unanswered_nameservers text)
+
 type error = { address : string; reason : string }
 
 let describe_error { address; reason } =

@@ -44,7 +44,9 @@ val relay :
   writer:Eio_unix.sink_ty Eio.Resource.t ->
   drained:bool Eio.Promise.or_exn ->
   coverage:coverage ->
+  gaps:string list ->
   violations
 (** Closes bactrian's [writer] of the log's pipe, waits up to 5 seconds for the
     [drained] copy to end and reads the relay failures and DNS lookups in
-    [path], labelled with [coverage]. *)
+    [path], labelled with [coverage] and with [gaps] ahead of those found on the
+    way. *)

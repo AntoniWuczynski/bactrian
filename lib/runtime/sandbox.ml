@@ -694,12 +694,13 @@ type started =
       writer : Eio_unix.sink_ty Eio.Resource.t;
       drained : bool Eio.Promise.or_exn;
       coverage : coverage;
+      gaps : string list;
     }
 
 (* The forwarder's or the bridge's violation log: they get the write end of a
    pipe, not the file, so a process that reopens its descriptor through /proc
    can at most add lines, never truncate or rewrite them. *)
-let relay_log ?signals ~sw run ~argv ~env ~replaces_env ~coverage =
+let relay_log ?signals ?(gaps = []) ~sw run ~argv ~env ~replaces_env ~coverage =
   let path = Filename.concat run.run_dir "sandbox.log" in
   let* fd =
     match
@@ -734,8 +735,13 @@ let relay_log ?signals ~sw run ~argv ~env ~replaces_env ~coverage =
         terminate = Option.map snd signals;
       },
       Relay_log
-        { path; writer :> Eio_unix.sink_ty Eio.Resource.t; drained; coverage }
-    )
+        {
+          path;
+          writer :> Eio_unix.sink_ty Eio.Resource.t;
+          drained;
+          coverage;
+          gaps;
+        } )
 
 (* The forwarder's signal pipe: bubblewrap's new session keeps a signal to its
    process group from the forwarder, so SIGTERM is asked for through the pipe
@@ -747,6 +753,17 @@ let signal_pipe ~sw =
     try Eio.Flow.copy_string "t" writer with Eio.Io _ -> ()
   in
   (Eio_unix.Resource.fd reader, terminate)
+
+(* What the forwarder's DNS coverage misses on this host. *)
+let dns_gaps () =
+  match Sandbox_dns.unrecorded_resolvers () with
+  | [] -> []
+  | resolvers ->
+      [
+        Printf.sprintf
+          "a DNS lookup sent to %s (from /etc/resolv.conf) is not recorded"
+          (String.concat " or " resolvers);
+      ]
 
 let start ~sw t run agent =
   match t with
@@ -790,12 +807,13 @@ let start ~sw t run agent =
               ~listeners:[ { port = run.port; socket = Some socket } ]
               ~tag ~preload:run.preload agent
           in
+          let coverage, gaps =
+            match host.dns_as with
+            | None -> (Relay_failures_only, [])
+            | Some _ -> (Relay_failures_and_dns, dns_gaps ())
+          in
           relay_log ~sw run ~argv ~env:[] ~replaces_env:false
-            ~signals:(signal_pipe ~sw)
-            ~coverage:
-              (match host.dns_as with
-              | Some _ -> Relay_failures_and_dns
-              | None -> Relay_failures_only)
+            ~signals:(signal_pipe ~sw) ~coverage ~gaps
       | Vm vm ->
           let* bridge =
             Sandbox_vm.start ~sw vm (vm_layout host)
@@ -882,5 +900,5 @@ let collect ~env = function
   | Nothing -> Sandbox_violations.unsandboxed_violations
   | Seatbelt_log { tag; since; marker } ->
       Sandbox_violations.seatbelt ~env ~tag ~since ~marker
-  | Relay_log { path; writer; drained; coverage } ->
-      Sandbox_violations.relay ~env ~path ~writer ~drained ~coverage
+  | Relay_log { path; writer; drained; coverage; gaps } ->
+      Sandbox_violations.relay ~env ~path ~writer ~drained ~coverage ~gaps
