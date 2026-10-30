@@ -16,6 +16,14 @@ let runs j =
   | None -> Alcotest.failf "no runs in %s" (Canon.to_string j)
 
 let statuses j = List.map (string_field "status") (runs j)
+let reasons j = List.filter_map (Canon.str_member "reason") (runs j)
+let int_field name j = get name (Canon.int_member name j)
+
+let check_named name j =
+  List.find_opt
+    (fun c -> String.equal (string_field "name" c) name)
+    (get "checks" (Canon.list_member "checks" j))
+
 let all_passed = List.init 4 (fun _ -> "passed")
 
 let meta_of project run =
@@ -68,29 +76,32 @@ let strict_replay_has_no_label () =
   Alcotest.check json "and its meta.json names none" Canon.empty_object
     (field "upstreams" (meta_of project (string_field "run_id" replayed)))
 
-(* https needs TLS, but only for a provider the run calls. *)
+(* https needs the trusted roots, but only for a provider the run calls. A
+   BACTRIAN_EXTRA_CA_CERTS that cannot be read makes them unloadable. *)
 
 let https_url = "https://gateway.invalid"
+let no_roots = ("BACTRIAN_EXTRA_CA_CERTS", "/nonexistent/ca.pem")
 
-let https_is_refused_without_tls () =
-  if Bactrian_app.Features.tls_available then Alcotest.skip ();
+let https_is_refused_without_roots () =
   let agent = List.hd agents in
   with_project "override-https" @@ fun ~parent:_ ~project ->
   with_upstream ~dir:project @@ fun up ->
   write_experiment project (agent.argv ());
   let code, printed =
-    cli ~dir:project ~env:((variable, https_url) :: key_env) run_flags
+    cli ~dir:project
+      ~env:((variable, https_url) :: no_roots :: key_env)
+      run_flags
   in
   Alcotest.(check int) "69, the environment is not ready" 69 code;
   Alcotest.(check bool)
-    "the message names the missing TLS and the provider" true
+    "the message names the variable and the provider" true
     (let message = string_field "error" printed in
-     contains message "no TLS support" && contains message "openai");
+     contains message "BACTRIAN_EXTRA_CA_CERTS" && contains message "openai");
   Alcotest.(check (list string)) "nothing was called" [] (upstream_requests up);
   (* An https upstream for a provider the experiment does not call. *)
   let code, printed =
     cli ~dir:project
-      ~env:(("BACTRIAN_UPSTREAM_ANTHROPIC", https_url) :: env_of up)
+      ~env:(("BACTRIAN_UPSTREAM_ANTHROPIC", https_url) :: no_roots :: env_of up)
       run_flags
   in
   Alcotest.(check int) "an uncalled provider's https upstream is fine" 0 code;
@@ -98,13 +109,145 @@ let https_is_refused_without_tls () =
   (* record is live too. *)
   let code, printed =
     cli ~dir:project
-      ~env:(("BACTRIAN_CAP_OPENAI", "1") :: (variable, https_url) :: key_env)
+      ~env:
+        (("BACTRIAN_CAP_OPENAI", "1")
+        :: (variable, https_url) :: no_roots :: key_env)
       [ "record"; "--json"; "--turn"; "hi"; "--sandbox"; "off"; "--"; "true" ]
   in
   Alcotest.(check int) "record: 69" 69 code;
   Alcotest.(check bool)
-    "record: names TLS" true
-    (contains (string_field "error" printed) "no TLS support")
+    "record: names the variable" true
+    (contains (string_field "error" printed) "BACTRIAN_EXTRA_CA_CERTS");
+  (* A live https MCP server needs the roots too, with an http upstream. *)
+  let calls = upstream_requests up in
+  write_experiment project (agent.argv ())
+    ~extra:
+      {|, "mcp": {"search": {"url": "https://mcp.invalid/mcp", "policy": "passthrough"}}|};
+  let names_the_server what printed =
+    Alcotest.(check bool)
+      (what ^ ": names the MCP server")
+      true
+      (contains (string_field "error" printed) "the MCP server search")
+  in
+  let code, printed = cli ~dir:project ~env:(no_roots :: env_of up) run_flags in
+  Alcotest.(check int) "an https MCP server: 69" 69 code;
+  names_the_server "run" printed;
+  let code, printed =
+    cli ~dir:project ~env:(no_roots :: env_of up)
+      [ "doctor"; "--json"; "--experiment"; "exp.json" ]
+  in
+  Alcotest.(check int) "doctor: 69" 69 code;
+  (match check_named "tls" printed with
+  | Some c ->
+      Alcotest.(check string)
+        "doctor: tls fails" "fail" (string_field "status" c);
+      Alcotest.(check bool)
+        "doctor: names the MCP server" true
+        (contains (string_field "message" c) "the MCP server search")
+  | None -> Alcotest.fail "no tls check");
+  let code, printed =
+    cli ~dir:project
+      ~env:(("BACTRIAN_CAP_OPENAI", "1") :: no_roots :: env_of up)
+      [
+        "record";
+        "--json";
+        "--turn";
+        "hi";
+        "--sandbox";
+        "off";
+        "--mcp-http";
+        "search=https://mcp.invalid/mcp";
+        "--";
+        "true";
+      ]
+  in
+  Alcotest.(check int) "record with an https MCP server: 69" 69 code;
+  names_the_server "record" printed;
+  Alcotest.(check (list string))
+    "no model call after a refusal" calls (upstream_requests up)
+
+(* An https upstream: the fake upstream behind TLS, with a CA minted for the
+   test and trusted through BACTRIAN_EXTRA_CA_CERTS. *)
+
+let with_https_project name f =
+  with_project name @@ fun ~parent:_ ~project ->
+  let ca = Filename.concat project "ca.pem" in
+  with_upstream ~tls_ca:ca ~dir:project @@ fun up -> f ~project ~ca up
+
+let through_https agent () =
+  let argv = agent.argv () in
+  with_https_project ("https-" ^ agent.name) @@ fun ~project ~ca up ->
+  write_experiment project argv;
+  let env =
+    (variable, upstream_url up) :: ("BACTRIAN_EXTRA_CA_CERTS", ca) :: key_env
+  in
+  let code, printed = cli ~dir:project ~env run_flags in
+  Alcotest.(check int) "run: exit status" 0 code;
+  Alcotest.(check (list string))
+    "every run passes" all_passed (statuses printed);
+  Alcotest.(check (list string))
+    "every model call went over HTTPS" completions (upstream_requests up);
+  let live = ("BACTRIAN_CAP_OPENAI", "1") :: env in
+  let code, recorded =
+    cli ~dir:project ~env:live
+      ([ "record"; "--json"; "--turn"; first_turn; "--sandbox"; "off"; "--" ]
+      @ argv)
+  in
+  Alcotest.(check int) "record: exit status" 0 code;
+  let run = string_field "run_id" recorded in
+  let before = List.length (upstream_requests up) in
+  Alcotest.(check int) "record: two calls" (List.length completions + 2) before;
+  let replay extra env =
+    cli ~dir:project ~env
+      ([ "replay"; run; "--json"; "--sandbox"; "off" ] @ extra @ [ "--" ] @ argv)
+  in
+  let code, _ = replay [] env in
+  Alcotest.(check int) "strict replay: exit status" 0 code;
+  Alcotest.(check int)
+    "strict replay: no call" before
+    (List.length (upstream_requests up));
+  (* A changed prompt diverges, and the rest of the run goes live over HTTPS. *)
+  let code, replayed =
+    replay
+      [ "--mode"; "until-divergence"; "--env"; prompt_variable ]
+      ((prompt_variable, terse) :: live)
+  in
+  Alcotest.(check int) "until-divergence: exit status, diverged" 1 code;
+  Alcotest.(check string)
+    "until-divergence: outcome" "diverged"
+    (string_field "kind" (field "outcome" replayed));
+  let findings = field "findings" replayed in
+  Alcotest.(check int)
+    "until-divergence: both calls answered" 2
+    (int_field "exchanges" findings);
+  Alcotest.(check int)
+    "until-divergence: no transport error" 0
+    (int_field "transport_errors" findings);
+  Alcotest.(check bool)
+    "until-divergence: live calls over HTTPS" true
+    (List.length (upstream_requests up) > before)
+
+(* Without the test CA the certificate is not trusted: no request reaches the
+   server, and the runs fail rather than the command. *)
+let untrusted_https () =
+  let agent = List.hd agents in
+  with_https_project "https-untrusted" @@ fun ~project ~ca:_ up ->
+  write_experiment project (agent.argv ());
+  let code, printed = cli ~dir:project ~env:(env_of up) run_flags in
+  Alcotest.(check int) "exit status: the runs failed" 1 code;
+  Alcotest.(check (list string))
+    "every run fails"
+    (List.init 4 (fun _ -> "failed"))
+    (statuses printed);
+  List.iter
+    (fun reason ->
+      Alcotest.(check bool)
+        ("the reason names the TLS failure: " ^ reason)
+        true
+        (contains reason "TLS failure"))
+    (reasons printed);
+  Alcotest.(check int) "a reason for each run" 4 (List.length (reasons printed));
+  Alcotest.(check (list string)) "no request was sent" [] (upstream_requests up)
 
 (* A bad value is a usage error that names the variable, in every command that
    can call a provider. *)
@@ -173,11 +316,6 @@ let invalid_values_are_usage_errors () =
 
 (* doctor *)
 
-let check_named name j =
-  List.find_opt
-    (fun c -> String.equal (string_field "name" c) name)
-    (get "checks" (Canon.list_member "checks" j))
-
 let doctor_shows_the_override () =
   let agent = List.hd agents in
   with_project "override-doctor" @@ fun ~parent:_ ~project ->
@@ -199,7 +337,7 @@ let doctor_shows_the_override () =
     "a provider that is not overridden has no line" true
     (Option.is_none (check_named "upstream-anthropic" printed));
   Alcotest.(check string)
-    "an http upstream does not need TLS" "skip"
+    "the roots load" "ok"
     (string_field "status" (get "tls" (check_named "tls" printed)));
   (* Plain HTTP to another machine sends the key unencrypted. *)
   let _, printed = doctor ((variable, "http://192.0.2.1:11434") :: key_env) in
@@ -207,13 +345,11 @@ let doctor_shows_the_override () =
     "a warning" "warn"
     (string_field "status"
        (get "upstream-openai" (check_named "upstream-openai" printed)));
-  if not Bactrian_app.Features.tls_available then begin
-    let code, printed = doctor ((variable, https_url) :: key_env) in
-    Alcotest.(check int) "an https upstream fails the tls check" 69 code;
-    Alcotest.(check string)
-      "tls" "fail"
-      (string_field "status" (get "tls" (check_named "tls" printed)))
-  end
+  let code, printed = doctor ((variable, https_url) :: no_roots :: key_env) in
+  Alcotest.(check int) "an https upstream without roots fails" 69 code;
+  Alcotest.(check string)
+    "tls" "fail"
+    (string_field "status" (get "tls" (check_named "tls" printed)))
 
 (* Keys and prices of a local server *)
 
@@ -228,8 +364,6 @@ let zero =
   match Canon.float 0. with
   | Ok c -> c
   | Error e -> Alcotest.failf "float: %a" Canon.pp_error e
-
-let reasons j = List.filter_map (Canon.str_member "reason") (runs j)
 
 let key_is_still_required () =
   let agent = List.hd agents in
@@ -292,8 +426,15 @@ let () =
       ( "https",
         [
           Alcotest.test_case "needs TLS only where it is called" `Slow
-            https_is_refused_without_tls;
-        ] );
+            https_is_refused_without_roots;
+          Alcotest.test_case "an untrusted certificate" `Slow untrusted_https;
+        ]
+        @ List.map
+            (fun a ->
+              Alcotest.test_case
+                ("an https upstream, " ^ a.name)
+                `Slow (through_https a))
+            agents );
       ( "invalid values",
         [
           Alcotest.test_case "are usage errors" `Slow

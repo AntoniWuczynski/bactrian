@@ -1,0 +1,13 @@
+(library
+ (name fake_https)
+ (libraries
+  bactrian.runtime
+  bactrian.tls
+  eio
+  eio.unix
+  ipaddr
+  ptime
+  ptime.clock.os
+  tls
+  tls-eio
+  x509))

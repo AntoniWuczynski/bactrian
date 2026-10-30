@@ -1,5 +1,6 @@
 (** What this build can do. *)
 
-val tls_available : bool
-(** Whether this build can call a provider over HTTPS. The TLS connector is a
-    separate library that is not part of this build yet. *)
+val connector : _ Eio.Process.mgr -> Bactrian_runtime.Upstream.connector
+(** The TLS connector for [https] upstreams and HTTP-mode agents
+    ({!Bactrian_tls.Tls_connector.system}), which loads the trusted root
+    certificates on first use. *)

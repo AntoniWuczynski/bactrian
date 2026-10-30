@@ -35,8 +35,18 @@ let http url : Experiment.agent =
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
-    ?(funded = []) ~dir agent : Doctor.target =
-  { agent; dir; sandbox; backend; image; runtime = None; faketime; funded }
+    ?(funded = []) ?(mcp_https = []) ~dir agent : Doctor.target =
+  {
+    agent;
+    dir;
+    sandbox;
+    backend;
+    image;
+    runtime = None;
+    faketime;
+    funded;
+    mcp_https;
+  }
 
 (* Keys *)
 
@@ -221,18 +231,24 @@ let test_clock () =
 (* TLS and egress *)
 
 let test_tls () =
-  let tls ?(available = false) ?(upstream = P.default_upstream) t =
-    Doctor.tls_check ~available ~upstream t
+  let tls ?(available = false) ?extra ?(upstream = P.default_upstream) t =
+    Doctor.tls_check
+      ~tls:(fun () ->
+        if available then Ok { Upstream.roots = 140; extra }
+        else Error "no roots")
+      ~upstream t
   in
   let funded = [ (P.Openai, "openai") ] in
   let local _ = Uri.of_string "http://127.0.0.1:11434" in
-  check_status "built in" Pass (tls ~available:true None);
-  check_status "no experiment" Skip (tls None);
-  check_status "no provider called live" Skip
+  check_status "ready" Pass (tls ~available:true None);
+  check_status "ready with an https agent" Pass
+    (tls ~available:true (Some (target ~dir:"." (http "https://a.example/x"))));
+  check_status "no experiment" Warn (tls None);
+  check_status "no provider called live" Warn
     (tls (Some (target ~dir:"." (command ()))));
   check_status "a provider is called live" Fail
     (tls (Some (target ~funded ~dir:"." (command ()))));
-  check_status "a provider is called live at an http upstream" Skip
+  check_status "a provider is called live at an http upstream" Warn
     (tls ~upstream:local (Some (target ~funded ~dir:"." (command ()))));
   check_status "an https upstream that is not a default" Fail
     (tls
@@ -240,8 +256,36 @@ let test_tls () =
        (Some (target ~funded ~dir:"." (command ()))));
   check_status "an https agent" Fail
     (tls (Some (target ~dir:"." (http "https://a.example/x"))));
-  check_status "an http agent" Skip
+  check_status "an http agent" Warn
     (tls (Some (target ~dir:"." (http "http://127.0.0.1:1/x"))));
+  let mcp = [ "the MCP server docs at https://mcp.example/mcp" ] in
+  let c = tls (Some (target ~mcp_https:mcp ~dir:"." (command ()))) in
+  check_status "an https MCP server" Fail c;
+  Alcotest.(check bool)
+    ("names the MCP server: " ^ c.message)
+    true
+    (contains ~sub:"the MCP server docs" c.message);
+  let c = tls ~available:true None in
+  Alcotest.(check string)
+    "the count" "the trusted root certificates load (140)" c.message;
+  let c =
+    tls ~available:true
+      ~extra:
+        {
+          variable = "BACTRIAN_EXTRA_CA_CERTS";
+          path = "/etc/proxy-ca.pem";
+          count = 2;
+          skipped = 0;
+        }
+      None
+  in
+  check_status "extra certificates" Warn c;
+  Alcotest.(check string)
+    "names the variable, the file and the count"
+    "the trusted root certificates load (140): BACTRIAN_EXTRA_CA_CERTS \
+     (/etc/proxy-ca.pem) adds 2 certificates trusted for every HTTPS host, the \
+     providers included"
+    c.message;
   Alcotest.check pairs "egress is not built"
     [ ("ca", "skip"); ("node", "skip") ]
     (statuses Doctor.egress_checks)
@@ -312,7 +356,8 @@ let test_no_key_value_in_output () =
   Eio_main.run @@ fun env ->
   let report t =
     Doctor.report
-      (Doctor.run ~env ~bactrian_exe:"/nonexistent" ~tls_available:false
+      (Doctor.run ~env ~bactrian_exe:"/nonexistent"
+         ~tls:(fun () -> Ok { Upstream.roots = 1; extra = None })
          ~upstream:P.default_upstream ~keys:sentinels
          ~path:(Some "/usr/bin:/bin") t)
   in

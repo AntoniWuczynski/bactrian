@@ -206,9 +206,9 @@ let redaction source =
   | Ok p -> p
   | Error _ -> Alcotest.failf "pattern %S" source
 
-let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
-    ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default) ?(mcp = [])
-    ctx ~token ~upstream =
+let make_run ?(connector = Upstream.plain) ?(mode = P.Record) ?(record = true)
+    ?(caps = caps) ?(normalise = []) ?(redact = []) ?(pricing = Pricing.default)
+    ?(mcp = []) ctx ~token ~upstream =
   let run_id = run_id_of token in
   {
     P.run_id;
@@ -222,7 +222,7 @@ let make_run ?(mode = P.Record) ?(record = true) ?(caps = caps)
         ~caps;
     keys = real_keys;
     upstream = (fun _ -> Uri.of_string upstream);
-    connector = Upstream.plain;
+    connector;
     normalise = List.map compile normalise;
     redact = List.map redaction redact;
     pricing;

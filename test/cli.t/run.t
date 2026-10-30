@@ -223,8 +223,8 @@ experiment cannot be resumed.
   $ bactrian run capped.yaml
   bactrian: openai has a spend cap but OPENAI_API_KEY is not set
   [69]
-  $ OPENAI_API_KEY=k bactrian run capped.yaml
-  bactrian: this build has no TLS support (bactrian.tls), so it cannot call providers (openai) over HTTPS
+  $ OPENAI_API_KEY=k BACTRIAN_EXTRA_CA_CERTS=/nonexistent/ca.pem bactrian run capped.yaml
+  bactrian: BACTRIAN_EXTRA_CA_CERTS cannot be read: /nonexistent/ca.pem: No such file or directory, so bactrian cannot call providers (openai) over HTTPS
   [69]
   $ OPENAI_API_KEY=k bactrian run capped.yaml --resume nope
   bactrian: no experiment "nope"

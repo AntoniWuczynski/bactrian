@@ -398,7 +398,7 @@ let test_missing_fixtures =
 
 let mcp_extra =
   {|, "mcp": {"calendar": {"command": ["no-such-server"], "env": {"K": "v"}, "cwd": "tools"},
-              "search": {"url": "https://search.example.com/mcp", "policy": "passthrough"}}|}
+              "search": {"url": "http://search.example.com/mcp", "policy": "passthrough"}}|}
 
 let agent_env ctx s =
   match run_ids s with
@@ -437,7 +437,25 @@ let test_mcp_environment =
     (List.exists
        (fun w ->
          String.starts_with ~prefix:"mcp:" (Yojson.Safe.Util.to_string w))
-       unenforced)
+       unenforced);
+  (* The same server at an https URL needs TLS, which the plain connector
+     lacks, so the experiment stops before its first run. *)
+  write ctx "exp.json"
+    (experiment_json ctx
+       ~extra:
+         (Re.replace_string
+            (Re.compile (Re.str "http://search"))
+            ~by:"https://search" mcp_extra)
+       ());
+  match go ctx with
+  | Error (E.Environment m) ->
+      Alcotest.(check bool)
+        ("names the server: " ^ m) true
+        (Re.execp
+           (Re.compile (Re.str "the MCP server search at https://search"))
+           m)
+  | Ok _ | Error (E.Configuration _ | E.Usage _) ->
+      Alcotest.fail "an https MCP server without TLS was not refused"
 
 let test_mcp_not_intercepted =
   settings_ctx "mcpoff" @@ fun ctx ->

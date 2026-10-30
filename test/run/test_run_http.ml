@@ -194,6 +194,45 @@ let test_unreachable =
     (String.starts_with ~prefix:"failed: agent_http_error: agent unreachable"
        (outcome_name r))
 
+(* An agent at an https URL, behind a TLS front with a CA minted for the test:
+   trusted it runs as over http, and another CA's certificate fails the run. *)
+let test_https_agent =
+  with_ctx "http-tls" @@ fun ctx ->
+  with_agent ctx @@ fun agent ->
+  Mirage_crypto_rng_unix.use_default ();
+  Eio.Switch.run @@ fun sw ->
+  let ca = Fake_https.ca () in
+  let backend = Option.get (Uri.port (Uri.of_string (H.url agent))) in
+  let front =
+    Fake_https.start ~sw ~net:(Eio.Stdenv.net ctx.env)
+      ~chain:(Fake_https.leaf ca [ Dns "localhost" ])
+      ~backend ()
+  in
+  let url =
+    Printf.sprintf "https://localhost:%d/agent" (Fake_https.port front)
+  in
+  let r =
+    ok (execute ~connector:(Fake_https.connector ca) ctx (http_config url))
+  in
+  Alcotest.(check string) "outcome" "passed" (outcome_name r);
+  Alcotest.(check int) "exchanges" 1 r.findings.exchanges;
+  Alcotest.(check string)
+    "the server saw the run" r.run_id (List.hd (H.sessions agent)).run_id;
+  let r =
+    ok
+      (execute
+         ~connector:(Fake_https.connector (Fake_https.ca ()))
+         ctx (http_config url))
+  in
+  Alcotest.(check bool)
+    ("an untrusted certificate fails the run: " ^ outcome_name r)
+    true
+    (String.starts_with ~prefix:"failed: agent_http_error: agent unreachable"
+       (outcome_name r));
+  Alcotest.(check int)
+    "it never reached the server" 1
+    (List.length (H.sessions agent))
+
 let () =
   Alcotest.run "run_http"
     [
@@ -203,5 +242,6 @@ let () =
           Alcotest.test_case "the clock is a contract" `Slow test_clock;
           Alcotest.test_case "concurrent runs" `Slow test_concurrent_runs;
           Alcotest.test_case "unreachable server" `Slow test_unreachable;
+          Alcotest.test_case "an agent over https" `Slow test_https_agent;
         ] );
     ]

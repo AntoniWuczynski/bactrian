@@ -1,0 +1,15 @@
+(library
+ (name bactrian_tls)
+ (public_name bactrian.tls)
+ (libraries
+  bactrian.runtime
+  domain-name
+  eio
+  ipaddr
+  ptime
+  ptime.clock.os
+  tls
+  tls-eio
+  unix
+  uri
+  x509))

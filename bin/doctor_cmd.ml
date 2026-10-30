@@ -35,10 +35,10 @@ let cmd ~bactrian_exe =
              $(b,skip), the check's name and a short message. The checks are \
              the provider keys (the variable names, never the values), a \
              loopback port, the agent command or HTTP URL, the sandbox, the \
-             clock and HTTPS support. A missing key is a warning, or a failure \
-             when $(b,--experiment) calls that provider live. No agent is \
-             started and no URL is contacted. Exits 69 when any check fails, \
-             else 0.";
+             clock and HTTPS (the trusted root certificates load). A missing \
+             key is a warning, or a failure when $(b,--experiment) calls that \
+             provider live. No agent is started and no URL is contacted. Exits \
+             69 when any check fails, else 0.";
         ]
   in
   Cmd.v info Term.(const run $ Cli.json $ experiment)

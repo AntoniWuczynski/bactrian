@@ -147,8 +147,8 @@ let mcp_exchanges (c : Cassette.t) =
       match e.channel with Mcp -> true | Model | Http -> false)
     c.exchanges
 
-let record_run ?mode ctx ~token mcp =
-  let run = make_run ?mode ~mcp ctx ~token ~upstream:no_upstream in
+let record_run ?mode ?connector ctx ~token mcp =
+  let run = make_run ?mode ?connector ~mcp ctx ~token ~upstream:no_upstream in
   P.register ctx.proxy run;
   run
 

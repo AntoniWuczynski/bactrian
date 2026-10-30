@@ -290,11 +290,57 @@ let refusals =
   | Transport_error _ -> ()
   | Response _ -> Alcotest.fail "expected a recorded transport error"
 
+(* An https server goes through the run's TLS connector, which checks its
+   certificate. *)
+let over_https =
+  Alcotest.test_case "an https server through the TLS connector" `Quick
+  @@ with_ctx "mcp-http-tls"
+  @@ fun ctx ->
+  Mirage_crypto_rng_unix.use_default ();
+  let fake = start_fake ctx Modern in
+  let ca = Fake_https.ca () in
+  let front =
+    Fake_https.start ~sw:ctx.sw ~net:(Eio.Stdenv.net ctx.env)
+      ~chain:(Fake_https.leaf ca [ Dns "localhost" ])
+      ~backend:(Option.get (Uri.port (Uri.of_string (Fake_mcp.base_url fake))))
+      ()
+  in
+  let url = Printf.sprintf "https://localhost:%d" (Fake_https.port front) in
+  let discover_with ~token connector =
+    ignore
+      (record_run ~connector ctx ~token
+         [ http ~policy:M.Passthrough "search" url ]);
+    let r =
+      post_http ctx ~token ~name:"search"
+        ~headers:(modern_headers "server/discover")
+        (discover (Int_id 1))
+    in
+    ignore (P.unregister ctx.proxy ~token);
+    r
+  in
+  let r = discover_with ~token:token_a (Fake_https.connector ca) in
+  check_status "trusted" 200 r;
+  ignore (result_of r.body);
+  Alcotest.(check int) "forwarded" 1 (List.length (Fake_mcp.requests fake));
+  let r =
+    discover_with ~token:token_b (Fake_https.connector (Fake_https.ca ()))
+  in
+  check_status "another CA" 502 r;
+  Alcotest.(check bool) ("names TLS: " ^ r.body) true (contains r.body "TLS");
+  Alcotest.(check int)
+    "nothing more reached the server" 1
+    (List.length (Fake_mcp.requests fake))
+
 let () =
   Alcotest.run "mcp_http"
     [
       ( "record and replay",
-        [ modern_round_trip; legacy_session; event_stream; event_stream_events ]
-      );
+        [
+          modern_round_trip;
+          legacy_session;
+          event_stream;
+          event_stream_events;
+          over_https;
+        ] );
       ("refusals", [ target; refusals ]);
     ]

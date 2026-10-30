@@ -29,6 +29,8 @@
   bactrian.core
   bactrian.runtime
   fake_mcp
+  fake_https
+  mirage-crypto-rng.unix
   eio_main
   unix
   uri

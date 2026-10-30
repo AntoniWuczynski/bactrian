@@ -8,7 +8,7 @@ The design, including the parts that are still planned, is described in [`docs/d
 
 ## Status
 
-Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls to the real providers do not work yet, because they need HTTPS support that is not built, but a server on plain HTTP does (see [Local and self-hosted models](#local-and-self-hosted-models)). Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
+Early development. Strict replay of existing recordings works, with every agent inside an operating-system sandbox where the host has one, HTTP-mode agents and the simulated clock included. A coding agent can drive bactrian through its MCP server (see [Driving bactrian from a coding agent](#driving-bactrian-from-a-coding-agent)). JSON Schemas for the file formats and prebuilt binaries are not built yet. Live calls go to the providers over HTTPS, and to a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)). HTTPS is tested against a local server with a certificate authority made for the test, not yet against the real providers. Egress recording is also still to come. Until then the `egress` setting is read but not enforced. It is named in a warning when a run starts and recorded in each run's `meta.json` under `unenforced`. A `no_egress` assertion fails as unverifiable, because no HTTP call is recorded yet.
 
 Run `bactrian doctor` to see whether this host is ready (see [Checking the host](#checking-the-host)).
 
@@ -16,7 +16,7 @@ Run `bactrian doctor` to see whether this host is ready (see [Checking the host]
 
 An agent talks to bactrian over a small JSON Lines protocol on stdin and stdout: it receives `start`, one `turn` per user message and `end`, and answers each turn with a `reply`. bactrian points the agent's model SDK at its own proxy through the usual base-URL variables (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) and gives it placeholder API keys. The real keys are never placed in the agent's environment and are added to requests on their way upstream. The agent runs inside a sandbox (see [Sandbox](#sandbox)), which stops it from reaching anything but bactrian's proxy and from writing outside its run. [`examples/agents/`](examples/agents/) has a TypeScript agent (build it with `pnpm install --dir examples/agents/typescript` and `pnpm --dir examples/agents/typescript build`) and a Python agent managed by uv.
 
-Record a run (live spending needs an explicit cap per provider, in US dollars). The real providers need a build with HTTPS support, which does not exist yet, so for now this reaches only a server on plain HTTP (see [Local and self-hosted models](#local-and-self-hosted-models)):
+Record a run (live spending needs an explicit cap per provider, in US dollars):
 
 ```sh
 BACTRIAN_CAP_OPENAI=0.50 bactrian record --turn "What is the weather in Paris?" -- node examples/agents/typescript/dist/agent.js
@@ -94,9 +94,17 @@ prices:
 
 An entry replaces the built-in one with the same model and date, and any other entry adds a model or a new price period. The table is used for spend reservations, settlement and `max_cost_usd`. The names under `caps_usd` must be `openai`, `anthropic`, `gemini` or `openrouter`.
 
+## HTTPS
+
+bactrian's own calls over HTTPS, to the providers, to an `https` upstream, to an HTTP-mode agent at an `https` URL and to a Streamable HTTP MCP server at one, check the server's certificate against the system's root certificates, which are the system keychains on macOS and the distribution's bundle on Linux (`/etc/ssl/certs/ca-certificates.crt` and the other usual paths). The host name in the URL is sent as Server Name Indication and must match the certificate, and an address host must be in the certificate as an address. Only HTTP/1.1 is offered.
+
+To trust another certificate authority as well, for a proxy that inspects TLS or a test server, set `BACTRIAN_EXTRA_CA_CERTS` to a file of PEM certificates. It adds to the system's roots and never replaces them. Its certificates are trusted for every host, the real providers included, so `doctor` shows a `warn` naming the variable, the file and the number of certificates in it, and `record`, `replay` and `run` print the same warning before calling anything over HTTPS. The file must belong to you or to root, and neither its group nor others may write to it. bactrian does not read `SSL_CERT_FILE`, `NIX_SSL_CERT_FILE` or `OCAML_EXTRA_CA_CERTS`, because those are for the agent's own clients (see [decision 0017](docs/decisions/0017-upstream-tls-trust.md)).
+
+When the roots cannot be loaded (no bundle, or a `BACTRIAN_EXTRA_CA_CERTS` that cannot be read, holds no certificate or could be changed by another user), a command that would call a provider, an agent or an MCP server over HTTPS stops with exit status 69 and says why. An MCP server counts when the run calls it live: `passthrough`, or `record` outside a replay. A certificate that does not verify fails the call. The agent gets an error from the proxy, and the run's reason names the TLS failure. `bactrian doctor` shows whether the roots load.
+
 ## Local and self-hosted models
 
-Each provider's address can be replaced with an environment variable, to use a server you run yourself (Ollama, vLLM, LM Studio, LiteLLM or any OpenAI-compatible one) or a gateway: `BACTRIAN_UPSTREAM_OPENAI`, `BACTRIAN_UPSTREAM_ANTHROPIC`, `BACTRIAN_UPSTREAM_GEMINI` and `BACTRIAN_UPSTREAM_OPENROUTER`. A plain `http` URL works in a build without HTTPS support. The agent is not changed: it still calls bactrian's proxy through the usual base-URL variables, and the proxy forwards to your server.
+Each provider's address can be replaced with an environment variable, to use a server you run yourself (Ollama, vLLM, LM Studio, LiteLLM or any OpenAI-compatible one) or a gateway: `BACTRIAN_UPSTREAM_OPENAI`, `BACTRIAN_UPSTREAM_ANTHROPIC`, `BACTRIAN_UPSTREAM_GEMINI` and `BACTRIAN_UPSTREAM_OPENROUTER`. The URL may be `http` or `https`. The agent is not changed: it still calls bactrian's proxy through the usual base-URL variables, and the proxy forwards to your server.
 
 Ollama serves its OpenAI-compatible API under `/v1` at `http://localhost:11434` ([Ollama's documentation](https://docs.ollama.com/api/openai-compatibility)). The `/v1` is part of the path the OpenAI SDKs already send, so leave it out of the variable:
 
@@ -109,7 +117,7 @@ bactrian run experiment.yaml
 
 - The value must be an absolute `http` or `https` URL with a host, an optional port and an optional path prefix, for a gateway that mounts the provider under a path. User information, a query and a fragment are refused with exit 64, and the message names the variable. The path prefix is shown by `doctor` and recorded in `meta.json` as written, so do not put a key in it.
 - bactrian still requires the provider's key variable when the provider has a spend cap above 0, and the cap itself, whatever the upstream. A server that needs no key is given any placeholder value, as Ollama's documentation does. The key is sent to the upstream, so use a placeholder, or a real key only over HTTPS or to your own machine: `record`, `replay`, `run` and `bactrian doctor` warn about plain `http` to another machine (anything but `localhost`, 127.0.0.0/8 and `::1`).
-- The refusal for a build without HTTPS support (exit 69) applies only when a provider the run calls has an `https` upstream.
+- The refusal when the trusted root certificates cannot be loaded (exit 69, see [HTTPS](#https)) applies only when a provider the run calls has an `https` upstream.
 - A model with no price is refused, not treated as free: the agent gets a 402, and the run is `errored` with "no price for model llama3.2". Give the model a price in the experiment's price file, with zero rates for a local model. `record` and `replay` use the built-in prices only, so use an experiment for a local model.
 
 ```yaml
@@ -136,7 +144,7 @@ agent:
   namespace_header: X-Agent-Run
 ```
 
-You start the server yourself, before `bactrian run`. For each message of the conversation (`start`, one `turn` per user message and `end`, the same JSON as in command mode) bactrian sends `POST <url>` with `Content-Type: application/json`, the message as the body, and the run ID in `X-Bactrian-Run` and in the namespace header. The response body is a JSON array of the agent's messages for that step: `[]` for `start` and `end`, and for a turn any `event` messages followed by the `reply`. A status outside 2xx ends the run as `failed` with `agent_http_error`, the status and the first 2 KiB of the body. The turn and total timeouts apply as in command mode, the turn timeout to each request. Only `http://` URLs work for now. This build has no HTTPS support, so an `https://` URL stops with exit status 69.
+You start the server yourself, before `bactrian run`. For each message of the conversation (`start`, one `turn` per user message and `end`, the same JSON as in command mode) bactrian sends `POST <url>` with `Content-Type: application/json`, the message as the body, and the run ID in `X-Bactrian-Run` and in the namespace header. The response body is a JSON array of the agent's messages for that step: `[]` for `start` and `end`, and for a turn any `event` messages followed by the `reply`. A status outside 2xx ends the run as `failed` with `agent_http_error`, the status and the first 2 KiB of the body. The turn and total timeouts apply as in command mode, the turn timeout to each request. An `https://` URL is checked like a provider's (see [HTTPS](#https)), and a certificate that does not verify fails the run with `agent_http_error`.
 
 A server that is already running cannot be given environment variables, so the `start` message of an HTTP-mode agent carries them in an `env` object. It holds exactly the per-run values a command agent gets as its environment: the provider base URLs with the run token, the placeholder API keys, `SIM_NOW`, `TZ`, `BACTRIAN_RUN_ID`, `BACTRIAN_STATE_DIR`, the MCP variables when the run has MCP servers, and the variant's own variables. Nothing else is included. The server owns its own process, so there is no `PATH`, no passthrough variable and none of the variables bactrian redirects for a command agent (`HOME`, the `XDG_*` and npm cache directories, `TMPDIR` and `PYTHONDONTWRITEBYTECODE`), and the real provider keys never appear. The agent has to use these values for the calls of that run, and not its own process environment, and it has to keep its state per run ID, because several runs can be in flight at once when `concurrency` is above 1. The `env` field is absent from command-mode `start` messages, so existing agents are unaffected. The example agents show the pattern: `--http PORT` serves the same logic as a server (port 0 picks a free one), prints the port it bound as the first line of its output, and reads each run's configuration from its `env`.
 
@@ -271,7 +279,7 @@ bactrian doctor --json
 warn  key-openai: OPENAI_API_KEY is not set
 ok    loopback: a port on 127.0.0.1 can be bound
 ok    sandbox: the sandbox works on this host
-skip  tls: HTTPS support is not built in
+ok    tls: the trusted root certificates load (161)
 ```
 
 - `key-<provider>`: whether the provider's key variable is set. Only the variable's name is printed, never any part of its value. A missing key is a `warn`. With `--experiment` it is a `fail` for a provider whose `caps_usd` is above 0, because the experiment calls that provider live, and a `skip` for the others.
@@ -282,7 +290,7 @@ skip  tls: HTTPS support is not built in
 - `vm`: the runtime (the experiment's, or docker else `container`) answers, the experiment's image is present (it is never pulled) and the relay is built or will be on first use. A `fail` under `strict` when the experiment's agent would run in the virtual machine and something is missing. On macOS a `warn` when there is no virtual machine, because the agent then runs under Seatbelt. `skip` when the experiment names `seatbelt` or `bubblewrap`, or its agent is not sandboxed.
 - `clock`: with an experiment, the clock label its command agent would get (`enforced`, or `contract-only` with the reason). Without one, whether `libfaketime` is found on Linux. Contract-only on macOS is expected and is `ok`.
 - `upstream-<provider>` (only for a provider whose `BACTRIAN_UPSTREAM_<PROVIDER>` is set): the URL. A `warn` for plain `http` to a host other than this machine, because the API key is sent to it unencrypted.
-- `tls`: `skip` while this build has no HTTPS support, or `fail` when the experiment calls a provider whose upstream is an `https` URL, or an agent over HTTPS.
+- `tls`: the trusted root certificates load (see [HTTPS](#https)), and how many there are. A `warn` when `BACTRIAN_EXTRA_CA_CERTS` adds some. When they do not load, a `fail` if the experiment calls a provider whose upstream is an `https` URL, an agent or an MCP server over HTTPS, and a `warn` otherwise.
 - `ca` and `node`: `skip`, because egress interception is not built.
 
 `--json` prints `{"checks": [{"name", "status", "message"}], "ok": true}`. A configuration error in the experiment file is reported with its location and exits 64, as for `bactrian run`.
@@ -352,7 +360,7 @@ The server speaks the 2026-07-28 revision, which Claude Code negotiates, and the
 
 ## Building from source
 
-You need [opam](https://opam.ocaml.org). From the repository root:
+You need [opam](https://opam.ocaml.org), and GMP and `pkg-config` for the TLS libraries (`brew install gmp pkgconf` on macOS, `libgmp-dev` and `pkg-config` on Debian and Ubuntu). From the repository root:
 
 ```sh
 opam switch create . ocaml-base-compiler.5.5.1 --deps-only --with-test --locked

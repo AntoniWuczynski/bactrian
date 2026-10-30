@@ -2,21 +2,24 @@ The doctor runs in a controlled environment: only PATH, and key variables set
 to sentinels whose text must never be printed. The sandbox, vm and clock lines
 depend on the host (macOS or Linux, and whether a container runtime runs), so
 they are filtered out here, and the unit tests cover them with the host stated.
+The number of trusted root certificates depends on the host too, so it is
+masked.
 
   $ run() { env -i PATH="$PATH" "$@"; }
+  $ roots() { sed 's/load ([0-9]*)/load (N)/'; }
 
 With no experiment, every known provider is listed and a missing key is a
 warning. Only the variable name is printed.
 
   $ run OPENAI_API_KEY=sk-SENTINEL-one ANTHROPIC_API_KEY=sk-SENTINEL-two bactrian doctor > out.txt; echo "exit $?"
   exit 0
-  $ grep -v -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt
+  $ grep -v -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt | roots
   ok    key-openai: OPENAI_API_KEY is set
   ok    key-anthropic: ANTHROPIC_API_KEY is set
   warn  key-gemini: GEMINI_API_KEY is not set
   warn  key-openrouter: OPENROUTER_API_KEY is not set
   ok    loopback: a port on 127.0.0.1 can be bound
-  skip  tls: HTTPS support is not built in
+  ok    tls: the trusted root certificates load (N)
   skip  ca: egress interception is not built yet
   skip  node: egress interception is not built yet
   $ grep -c -e ' sandbox:' -e ' vm:' -e ' clock:' out.txt
@@ -32,14 +35,14 @@ The same as JSON, with the same shape every time.
   $ grep -c SENTINEL out.json
   0
   [1]
-  $ sed -e 's/{"name"/\n&/g' out.json | grep -v -e '"name":"sandbox"' -e '"name":"vm"' -e '"name":"clock"'
+  $ sed -e 's/{"name"/\n&/g' out.json | grep -v -e '"name":"sandbox"' -e '"name":"vm"' -e '"name":"clock"' | roots
   {"checks":[
   {"name":"key-openai","status":"ok","message":"OPENAI_API_KEY is set"},
   {"name":"key-anthropic","status":"warn","message":"ANTHROPIC_API_KEY is not set"},
   {"name":"key-gemini","status":"warn","message":"GEMINI_API_KEY is not set"},
   {"name":"key-openrouter","status":"warn","message":"OPENROUTER_API_KEY is not set"},
   {"name":"loopback","status":"ok","message":"a port on 127.0.0.1 can be bound"},
-  {"name":"tls","status":"skip","message":"HTTPS support is not built in"},
+  {"name":"tls","status":"ok","message":"the trusted root certificates load (N)"},
   {"name":"ca","status":"skip","message":"egress interception is not built yet"},
   {"name":"node","status":"skip","message":"egress interception is not built yet"}],"ok":true}
 
@@ -63,7 +66,7 @@ experiment, so the caps check fails.
   > YAML
   $ run OPENAI_API_KEY=sk-SENTINEL-one bactrian doctor --experiment exp.yaml > out.txt; echo "exit $?"
   exit 69
-  $ grep -v ' clock:' out.txt | sed 's/ resolves to .*/ resolves to FILE/'
+  $ grep -v ' clock:' out.txt | sed 's/ resolves to .*/ resolves to FILE/' | roots
   ok    key-openai: OPENAI_API_KEY is set
   skip  key-anthropic: ANTHROPIC_API_KEY is not set, and the experiment has no spend cap for anthropic
   skip  key-gemini: GEMINI_API_KEY is not set, and the experiment has no spend cap for gemini
@@ -73,24 +76,23 @@ experiment, so the caps check fails.
   ok    agent: sh resolves to FILE
   skip  sandbox: sandbox: off
   skip  vm: the agent is not sandboxed
-  skip  tls: HTTPS support is not built in
+  ok    tls: the trusted root certificates load (N)
   skip  ca: egress interception is not built yet
   skip  node: egress interception is not built yet
 
-A provider with a spend cap is called live, so its missing key fails, and so
-does HTTPS support while this build has none.
+A provider with a spend cap is called live, so its missing key fails.
 
   $ cat exp.yaml > capped.yaml
   $ echo 'caps_usd: { openai: 1, gemini: 1 }' >> capped.yaml
   $ run GEMINI_API_KEY=sk-SENTINEL-three bactrian doctor --experiment capped.yaml > out.txt; echo "exit $?"
   exit 69
-  $ grep -e key- -e caps: -e tls: out.txt
+  $ grep -e key- -e caps: -e tls: out.txt | roots
   fail  key-openai: OPENAI_API_KEY is not set, and the experiment has a spend cap for openai
   skip  key-anthropic: ANTHROPIC_API_KEY is not set, and the experiment has no spend cap for anthropic
   ok    key-gemini: GEMINI_API_KEY is set
   skip  key-openrouter: OPENROUTER_API_KEY is not set, and the experiment has no spend cap for openrouter
   ok    caps: a spend cap above 0 for openai, gemini
-  fail  tls: HTTPS support is not built in, but the experiment needs it for openai, gemini
+  ok    tls: the trusted root certificates load (N)
   $ grep -c SENTINEL out.txt
   0
   [1]
@@ -125,18 +127,27 @@ listens on this one.
   > variants:
   >   a: { env: {} }
   > YAML
-  $ run bactrian doctor --experiment http.yaml | grep -e ' agent:' -e ' sandbox:' -e ' clock:' -e ' tls:'
+  $ run bactrian doctor --experiment http.yaml | grep -e ' agent:' -e ' sandbox:' -e ' clock:' -e ' tls:' | roots
   ok    agent: http://127.0.0.1:9/agent is a well-formed URL (not contacted)
   skip  sandbox: an HTTP-mode agent is not started by bactrian
   skip  clock: contract-only (http-mode): bactrian does not start an HTTP-mode agent
-  skip  tls: HTTPS support is not built in
+  ok    tls: the trusted root certificates load (N)
   $ sed 's#http://127.0.0.1:9/agent#http:///agent#' http.yaml > nohost.yaml
   $ run bactrian doctor --experiment nohost.yaml | grep ' agent:'
   fail  agent: http:///agent has no host
   $ sed 's#http://127.0.0.1:9/agent#https://agent.example/run#' http.yaml > tls.yaml
-  $ run bactrian doctor --experiment tls.yaml | grep -e ' agent:' -e ' tls:'
+  $ run bactrian doctor --experiment tls.yaml | grep -e ' agent:' -e ' tls:' | roots
   ok    agent: https://agent.example/run is a well-formed URL (not contacted)
-  fail  tls: HTTPS support is not built in, but the experiment needs it for the agent at https://agent.example/run
+  ok    tls: the trusted root certificates load (N)
+
+HTTPS needs the trusted root certificates, the system's and those of
+BACTRIAN_EXTRA_CA_CERTS. When they cannot be loaded, the tls check fails for an
+experiment that needs HTTPS and warns otherwise.
+
+  $ run BACTRIAN_EXTRA_CA_CERTS=/nonexistent/ca.pem bactrian doctor --experiment tls.yaml | grep ' tls:'
+  fail  tls: BACTRIAN_EXTRA_CA_CERTS cannot be read: /nonexistent/ca.pem: No such file or directory, but the experiment needs HTTPS for the agent at https://agent.example/run
+  $ run BACTRIAN_EXTRA_CA_CERTS=/nonexistent/ca.pem bactrian doctor --experiment http.yaml | grep ' tls:'
+  warn  tls: BACTRIAN_EXTRA_CA_CERTS cannot be read: /nonexistent/ca.pem: No such file or directory, so HTTPS will not work
 
 A configuration error in the experiment is reported with its location, as
 for run, and exits 64.

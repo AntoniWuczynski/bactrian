@@ -99,7 +99,7 @@ let read_caps () =
 
 (* A live call needs a spend cap above zero, the key behind it and, for an
    https upstream, TLS. *)
-let live_problem ~upstream caps =
+let live_problem ~upstream ~tls caps =
   Option.map
     (Live_preflight.describe
        ~set_caps:
@@ -111,7 +111,7 @@ let live_problem ~upstream caps =
          match Sys.getenv_opt (Run.key_variable p) with
          | None | Some "" -> false
          | Some _ -> true)
-       ~upstream ~tls_available:Features.tls_available)
+       ~upstream ~tls)
 
 let sandbox_problem (s : sandbox) =
   match (Sandbox.backend_available s.backend, s.backend, s.image) with
@@ -131,11 +131,13 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
   | Error m, _, _ | _, Error m, _ | _, _, Some m ->
       Error (Command_error.Usage m)
   | Ok caps, Ok upstream, None -> (
-      match if live then live_problem ~upstream caps else None with
+      Mirage_crypto_rng_unix.use_default ();
+      let connector = Features.connector (Eio.Stdenv.process_mgr env) in
+      let tls () = Upstream.tls_ready connector in
+      match if live then live_problem ~upstream ~tls caps else None with
       | Some m -> Error (Command_error.Environment m)
       | None -> (
           if live then List.iter warn (Live_preflight.cleartext caps upstream);
-          Mirage_crypto_rng_unix.use_default ();
           Eio.Switch.run @@ fun sw ->
           let root = Eio.Path.(Eio.Stdenv.cwd env / ".bactrian") in
           match Ledger.create ~path:Eio.Path.(root / "ledger.jsonl") ~caps with
@@ -175,18 +177,36 @@ let execute ?stop ~on_progress ~bactrian_exe ~env ~live ~sandbox config_of =
                   let store = Store.create ~root in
                   match
                     Interrupt.run ?stop (fun () ->
-                        Result.bind (config_of store sandbox) (fun config ->
-                            Option.iter warn
-                              (Sandbox.mcp_warning sandbox
-                                 (config : Run.config).mcp);
-                            Run.execute ~upstream ~env ~proxy ~store ~ledger
-                              config))
+                        match config_of store sandbox with
+                        | Error m -> Error (Command_error.Usage m)
+                        | Ok (config : Run.config) -> (
+                            let mcp =
+                              Live_preflight.mcp_https
+                                ~replaying:(Option.is_some config.replay)
+                                config.mcp
+                            in
+                            match Live_preflight.https_refusal ~tls mcp with
+                            | Some m -> Error (Command_error.Environment m)
+                            | None ->
+                                Option.iter warn
+                                  (Sandbox.mcp_warning sandbox config.mcp);
+                                Option.iter warn
+                                  (Live_preflight.trust_warning ~tls
+                                     (mcp
+                                     @
+                                     if live then
+                                       Live_preflight.https_funded caps upstream
+                                     else []));
+                                Result.map_error
+                                  (fun m -> Command_error.Usage m)
+                                  (Run.execute ~upstream ~connector ~env ~proxy
+                                     ~store ~ledger config)))
                   with
                   | Error signal ->
                       Error
                         (Command_error.Interrupted
                            { signal; experiment_id = None })
-                  | Ok (Error m) -> Error (Command_error.Usage m)
+                  | Ok (Error e) -> Error e
                   | Ok (Ok result) -> Ok result))))
 
 let exit_code (r : Run.result) = Exit_code.of_outcome r.outcome

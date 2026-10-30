@@ -48,6 +48,7 @@ type target = {
   runtime : Experiment.sandbox_runtime option;
   faketime : bool;
   funded : (P.provider * string) list;
+  mcp_https : string list;
 }
 
 let target ~dir (e : Experiment.t) =
@@ -60,6 +61,22 @@ let target ~dir (e : Experiment.t) =
     runtime = e.sandbox_runtime;
     faketime = e.faketime;
     funded = Live_preflight.funded e.caps_usd;
+    mcp_https =
+      (if List.mem `Mcp e.intercept then
+         Live_preflight.mcp_https ~replaying:false
+           (List.filter_map
+              (fun (name, (s : Experiment.mcp_server)) ->
+                match s.transport with
+                | Mcp_http { url } ->
+                    Some
+                      {
+                        Mcp_proxy.name;
+                        server = Http { url = Uri.of_string url };
+                        policy = s.policy;
+                      }
+                | Mcp_stdio _ -> None)
+              e.mcp)
+       else []);
   }
 
 let check name status message = { name; status; message }
@@ -387,30 +404,35 @@ let clock_check ~linux ~library_override ~path target =
 
 (* TLS *)
 
-let tls_check ~available ~upstream target =
-  if available then check "tls" Pass "HTTPS support is built in"
-  else
-    let needed =
-      match target with
-      | None -> []
-      | Some t -> (
-          List.filter_map
-            (fun (p, name) ->
-              if Upstream.is_https (upstream p) then Some name else None)
-            t.funded
-          @
-          match t.agent with
+let tls_check ~tls ~upstream target =
+  let needed =
+    match target with
+    | None -> []
+    | Some t ->
+        List.filter_map
+          (fun (p, name) ->
+            if Upstream.is_https (upstream p) then Some name else None)
+          t.funded
+        @ (match t.agent with
           | Http { url; _ } when Upstream.is_https (Uri.of_string url) ->
               [ "the agent at " ^ url ]
           | Http _ | Command _ -> [])
-    in
-    match needed with
-    | [] -> check "tls" Skip "HTTPS support is not built in"
-    | _ :: _ ->
-        check "tls" Fail
-          (Printf.sprintf
-             "HTTPS support is not built in, but the experiment needs it for %s"
-             (String.concat ", " needed))
+        @ t.mcp_https
+  in
+  match (tls (), needed) with
+  | Ok ({ roots; extra } : Upstream.trust), _ -> (
+      let loaded =
+        Printf.sprintf "the trusted root certificates load (%d)" roots
+      in
+      match extra with
+      | None -> check "tls" Pass loaded
+      | Some e -> check "tls" Warn (loaded ^ ": " ^ Live_preflight.extra_trust e)
+      )
+  | Error reason, [] -> check "tls" Warn (reason ^ ", so HTTPS will not work")
+  | Error reason, _ :: _ ->
+      check "tls" Fail
+        (Printf.sprintf "%s, but the experiment needs HTTPS for %s" reason
+           (String.concat ", " needed))
 
 (* Egress *)
 
@@ -422,7 +444,7 @@ let egress_checks =
 
 (* All of them *)
 
-let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
+let run ~env ~bactrian_exe ~tls ~upstream ~keys ~path target =
   let keys = List.map fst keys in
   let cwd = match target with Some t -> t.dir | None -> Sys.getcwd () in
   let http_agent =
@@ -463,6 +485,6 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)
         ~path target;
-      tls_check ~available:tls_available ~upstream target;
+      tls_check ~tls ~upstream target;
     ]
   @ egress_checks

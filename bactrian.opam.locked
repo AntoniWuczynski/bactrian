@@ -12,6 +12,7 @@ bug-reports: "https://github.com/AntoniWuczynski/bactrian/issues"
 depends: [
   "alcotest" {= "1.9.1" & with-test}
   "angstrom" {= "0.16.1"}
+  "asn1-combinators" {= "0.3.3"}
   "astring" {= "0.8.5"}
   "base" {= "v0.17.3"}
   "base-bigarray" {= "base"}
@@ -29,6 +30,9 @@ depends: [
   "cohttp" {= "dev"}
   "cohttp-eio" {= "dev"}
   "compiler-cloning" {= "enabled"}
+  "conf-gmp" {= "5"}
+  "conf-gmp-powm-sec" {= "4"}
+  "conf-pkg-config" {= "5"}
   "cppo" {= "1.8.0"}
   "crunch" {= "4.1.0" & with-doc}
   "csexp" {= "1.5.2"}
@@ -47,12 +51,14 @@ depends: [
   "fmt" {= "0.11.0"}
   "fpath" {= "0.7.3"}
   "gen" {= "1.1"}
+  "gmap" {= "0.3.0"}
   "hmap" {= "0.8.1"}
   "http" {= "dev"}
   "integers" {= "0.8.0"}
   "iomux" {= "0.4"}
   "ipaddr" {= "5.6.2"}
   "js_of_ocaml-compiler" {= "6.4.1"}
+  "kdf" {= "1.1.2"}
   "logs" {= "0.10.0"}
   "lwt" {= "6.1.2"}
   "lwt-dllist" {= "1.1.0"}
@@ -63,6 +69,8 @@ depends: [
   "menhirLib" {= "20260209"}
   "menhirSdk" {= "20260209"}
   "mirage-crypto" {= "2.4.1"}
+  "mirage-crypto-ec" {= "2.4.1"}
+  "mirage-crypto-pk" {= "2.4.1"}
   "mirage-crypto-rng" {= "2.4.1"}
   "mtime" {= "2.2.0"}
   "ocaml" {= "5.5.1"}
@@ -77,6 +85,7 @@ depends: [
   "ocplib-endian" {= "1.2"}
   "odoc" {= "3.2.1" & with-doc}
   "odoc-parser" {= "3.2.1" & with-doc}
+  "ohex" {= "0.2.0"}
   "optint" {= "0.3.0"}
   "ppx_derivers" {= "1.2.1"}
   "ppx_deriving" {= "6.2.0"}
@@ -98,13 +107,17 @@ depends: [
   "stdlib-shims" {= "0.3.0"}
   "stringext" {= "1.6.0"}
   "thread-table" {= "1.0.0"}
+  "tls" {= "2.1.4"}
+  "tls-eio" {= "2.1.4"}
   "topkg" {= "1.1.1"}
   "tyxml" {= "5.0.0"}
   "uri" {= "4.4.0"}
   "uri-sexp" {= "4.4.0"}
   "uutf" {= "1.0.4"}
+  "x509" {= "1.2.0"}
   "yaml" {= "3.2.0"}
   "yojson" {= "3.0.0"}
+  "zarith" {= "1.14"}
 ]
 build: [
   ["dune" "subst"] {dev}

@@ -69,13 +69,16 @@ val write_experiment :
 
 type upstream
 
-val with_upstream : ?hold:string -> dir:string -> (upstream -> 'a) -> 'a
+val with_upstream :
+  ?hold:string -> ?tls_ca:string -> dir:string -> (upstream -> 'a) -> 'a
 (** Starts the fake upstream server, which answers the weather conversation to
     any model, for the duration of the function. While the file [hold] exists it
-    answers no request. The requests it receives are logged in [dir]. *)
+    answers no request. The requests it receives are logged in [dir]. With
+    [tls_ca] it serves HTTPS with a certificate of a CA minted for it, whose
+    certificate it writes to that file. *)
 
 val upstream_url : upstream -> string
-(** [http://127.0.0.1:<port>]. *)
+(** [http://127.0.0.1:<port>], or [https://localhost:<port>] with [tls_ca]. *)
 
 val upstream_requests : upstream -> string list
 (** The path of every request received so far, oldest first. *)
