@@ -13,7 +13,10 @@ environment, so runs in flight at once stay apart.
 When AGENT_MCP_COMMAND holds a JSON array (for example
 ["bactrian", "mcp-shim", "weather"]), get_weather runs on that stdio MCP server
 instead of returning a canned answer. AGENT_MCP_PROTOCOL picks the protocol
-revision: 2026-07-28 (the default) or 2025-11-25, which opens with initialize."""
+revision: 2026-07-28 (the default) or 2025-11-25, which opens with initialize.
+
+AGENT_MAX_TOKENS (default 256) is sent as max_completion_tokens, so that the
+worst-case cost bactrian reserves for a call fits a spend cap of a few cents."""
 
 import json
 import os
@@ -33,6 +36,7 @@ from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 
 WEATHER_RESULT = "18 degrees Celsius, cloudy"
 MAX_MODEL_CALLS = 5
+DEFAULT_MAX_TOKENS = 256
 DEFAULT_SYSTEM_PROMPT = (
     "You are a concise assistant. Use the get_weather tool for weather questions."
 )
@@ -168,6 +172,7 @@ class Session:
     def __init__(self, env: Mapping[str, str]) -> None:
         self.env = env
         self.model = env.get("AGENT_MODEL", "gpt-6-luna")
+        self.max_tokens = int(env.get("AGENT_MAX_TOKENS", DEFAULT_MAX_TOKENS))
         self.mcp_command = env.get("AGENT_MCP_COMMAND")
         self.mcp_protocol = env.get("AGENT_MCP_PROTOCOL", "2026-07-28")
         self.mcp: McpClient | None = None
@@ -204,6 +209,7 @@ class Session:
                 messages=self.history,
                 tools=TOOLS,
                 reasoning_effort="none",
+                max_completion_tokens=self.max_tokens,
             )
             if not completion.choices:
                 raise RuntimeError("model returned no choices")
