@@ -10,17 +10,17 @@ let nt_go_build_id = 4
 
 (* Bounds-checked little-endian reads. *)
 let u16 s off =
-  if off >= 0 && off + 2 <= String.length s then
+  if off >= 0 && off <= String.length s - 2 then
     Some (String.get_uint16_le s off)
   else None
 
 let u32 s off =
-  if off >= 0 && off + 4 <= String.length s then
+  if off >= 0 && off <= String.length s - 4 then
     Some (Int32.to_int (String.get_int32_le s off) land 0xffff_ffff)
   else None
 
 let u64 s off =
-  if off >= 0 && off + 8 <= String.length s then
+  if off >= 0 && off <= String.length s - 8 then
     let v = String.get_int64_le s off in
     if Int64.compare v 0L >= 0 && Int64.compare v (Int64.of_int max_int) <= 0
     then Some (Int64.to_int v)
@@ -85,7 +85,9 @@ let rec has_go_note s pos stop =
 let go_note s { kind; offset; size } =
   kind = pt_note
   && Option.value
-       (has_go_note s offset (min (offset + size) (String.length s)))
+       (has_go_note s offset
+          (if size > String.length s - offset then String.length s
+           else offset + size))
        ~default:false
 
 let probe s =
@@ -99,7 +101,7 @@ let probe s =
 let interpreter s =
   let* segs = segments s in
   let* seg = List.find_opt (fun seg -> seg.kind = pt_interp) segs in
-  if seg.offset >= 0 && seg.size > 0 && seg.offset + seg.size <= String.length s
+  if seg.offset >= 0 && seg.size > 0 && seg.offset <= String.length s - seg.size
   then
     let raw = String.sub s seg.offset seg.size in
     Some
