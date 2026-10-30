@@ -679,6 +679,76 @@ let test_off_probes_nothing =
         "label" {|{"mode":"off","applied":false,"reason":"sandbox: off"}|}
         (Yojson.Safe.to_string (Sandbox.label_json (Sandbox.label t)))
 
+(* A host that refuses the DNS path, here a bubblewrap that fails whenever it
+   is asked for a capability, runs the plain sandbox after a warning. Root and a
+   set-user-ID bubblewrap never take the DNS path. *)
+let test_dns_path_falls_back =
+  sandboxed "sandbox-dns-fallback" @@ fun ctx ->
+  let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  let real =
+    List.find_opt
+      (fun d -> Sys.file_exists (Filename.concat d "bwrap"))
+      (String.split_on_char ':' path)
+  in
+  match real with
+  | None ->
+      print_endline "not Linux: skipped";
+      Alcotest.skip ()
+  | Some _ when Unix.geteuid () = 0 ->
+      print_endline "root has no DNS path: skipped";
+      Alcotest.skip ()
+  | Some dir
+    when (Unix.stat (Filename.concat dir "bwrap")).st_perm land 0o4000 <> 0 ->
+      print_endline "a set-user-ID bubblewrap has no DNS path: skipped";
+      Alcotest.skip ()
+  | Some dir ->
+      let fake = Filename.concat (Eio.Path.native_exn ctx.dir) "fake-bin" in
+      Unix.mkdir fake 0o700;
+      Out_channel.with_open_bin (Filename.concat fake "bwrap") (fun oc ->
+          Printf.fprintf oc
+            "#!/bin/sh\n\
+             for a in \"$@\"; do\n\
+            \  if [ \"$a\" = --cap-add ]; then echo 'no capability here' >&2; \
+             exit 1; fi\n\
+             done\n\
+             exec %s \"$@\"\n"
+            (Filename.quote (Filename.concat dir "bwrap")));
+      Unix.chmod (Filename.concat fake "bwrap") 0o755;
+      Unix.putenv "PATH" (fake ^ ":" ^ path);
+      Fun.protect ~finally:(fun () -> Unix.putenv "PATH" path) @@ fun () ->
+      let warnings = ref [] in
+      let t =
+        match
+          Sandbox.preflight ~env:ctx.env
+            ~warn:(fun w -> warnings := w :: !warnings)
+            {
+              mode = `Strict;
+              backend = `Bubblewrap;
+              image = None;
+              runtime = None;
+              allow_write = [];
+              deny_read = [];
+              bactrian_exe = bactrian_bin;
+              bactrian_dir = root ctx;
+            }
+        with
+        | Ok t -> t
+        | Error m -> Alcotest.failf "preflight: %s" m
+      in
+      Alcotest.(check bool) "applied" true (Sandbox.label t).applied;
+      Alcotest.(check (list bool))
+        "one warning, about DNS" [ true ]
+        (List.map
+           (fun w -> contains w "DNS lookups are not recorded")
+           !warnings);
+      let r = ok (execute ctx { (config ()) with sandbox = t }) in
+      Alcotest.(check string) "the run passes" "passed" (outcome_name r);
+      Alcotest.(check (option string))
+        "coverage" (Some "relay-failures-only")
+        (match r.violations with
+        | Collected { coverage; _ } -> Some (Sandbox.coverage_name coverage)
+        | Not_collected _ -> None)
+
 (* The probe run outside any sandbox must be judged a failure: the preflight
    cannot report a sandbox that does not enforce. *)
 let test_unsandboxed_probe_is_rejected () =
@@ -795,6 +865,8 @@ let () =
           Alcotest.test_case "auto falls back, labelled" `Slow
             test_auto_falls_back;
           Alcotest.test_case "off probes nothing" `Quick test_off_probes_nothing;
+          Alcotest.test_case "the DNS path falls back" `Slow
+            test_dns_path_falls_back;
           Alcotest.test_case "the seatbelt hint" `Quick test_seatbelt_hint;
           Alcotest.test_case "an unsandboxed probe is rejected" `Quick
             test_unsandboxed_probe_is_rejected;
