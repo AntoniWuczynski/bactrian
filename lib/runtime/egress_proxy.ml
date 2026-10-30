@@ -269,7 +269,8 @@ let answer r ~host ~port ~authority act request body : response =
         "bactrian does not intercept WebSocket or other upgraded connections"
   | Body _, Error reason ->
       log 400;
-      r.shared.note (Printf.sprintf "egress to %s: %s" authority reason);
+      r.shared.note
+        (Printf.sprintf "egress to %s: %s" authority (r.shared.scrub reason));
       error_response ~status:400 ~type_:"bactrian_bad_request" reason
   | Body body, Ok (_, query) -> (
       let raw_query = match query with Some "" -> None | q -> q in

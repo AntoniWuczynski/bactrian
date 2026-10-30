@@ -269,6 +269,22 @@ let test_head_too_large =
   let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
   Alcotest.(check bool) "noted" true (noted f "over 1048576 bytes")
 
+(* The note for a refused target is redacted like the path. *)
+let test_refused_target_redacted =
+  with_world "refused-redacted" @@ fun w ->
+  let _ =
+    register w ~redact:[ "tok-[0-9]+" ] ~token:token_a
+      (Some (policy [ ("127.0.0.1", Record) ]))
+  in
+  let a =
+    through ~creds:(creds token_a) w ~meth:"GET"
+      ~path:"https://other.example/bot/tok-12345" ()
+  in
+  Alcotest.(check int) "refused" 400 a.status;
+  let f = Model_proxy.unregister w.ctx.proxy ~token:token_a in
+  Alcotest.(check bool) "noted" true (noted f "other.example");
+  Alcotest.(check bool) "without the secret" false (noted f "tok-12345")
+
 let cut_short (r : F.request) : F.reply =
   if String.equal r.path "/cut" then
     {
@@ -362,6 +378,8 @@ let () =
         [
           Alcotest.test_case "413 and 501" `Quick test_refusals;
           Alcotest.test_case "headers over the cap" `Quick test_head_too_large;
+          Alcotest.test_case "a refused target's note is redacted" `Quick
+            test_refused_target_redacted;
           Alcotest.test_case "a dropped and an unreachable host" `Quick
             test_upstream_failures;
           Alcotest.test_case "TLS that never starts" `Quick test_tls_refused;
