@@ -2,6 +2,23 @@ open Bactrian_runtime
 
 type request = { experiment : string option }
 
+(* Whether any scenario of the experiment has checkers. A glob or a scenario
+   that does not load counts as none: [run] reports those, [doctor] does not
+   read the scenarios for anything else. *)
+let has_checkers ~base (e : Bactrian_core.Experiment.t) =
+  List.exists
+    (fun glob ->
+      match Config_loader.expand_globs ~base [ glob ] with
+      | Error _ -> false
+      | Ok files ->
+          List.exists
+            (fun file ->
+              match Config_loader.load_scenario Eio.Path.(base / file) with
+              | Ok s -> not (List.is_empty s.checkers)
+              | Error _ -> false)
+            files)
+    e.scenarios
+
 let run ?files ~bactrian_exe ~env r =
   Mirage_crypto_rng_unix.use_default ();
   match Upstream_env.from_environment () with
@@ -18,11 +35,12 @@ let run ?files ~bactrian_exe ~env r =
                   Filename.concat (Sys.getcwd ()) dir
               | dir -> dir
             in
+            let files = Option.value files ~default:(Eio.Stdenv.fs env) in
             Result.map
-              (fun e -> Some (Doctor.target ~dir e))
-              (Config_loader.load_experiment
-                 Eio.Path.(
-                   Option.value files ~default:(Eio.Stdenv.fs env) / file))
+              (fun e ->
+                let base = Eio.Path.(files / Filename.dirname file) in
+                Some (Doctor.target ~dir ~checkers:(has_checkers ~base e) e))
+              (Config_loader.load_experiment Eio.Path.(files / file))
       in
       match target with
       | Error errors -> Error (Command_error.Configuration errors)

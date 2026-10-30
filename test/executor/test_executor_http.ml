@@ -34,12 +34,19 @@ let test_experiment_runs =
   in
   write ctx "exp.json" (experiment (H.url agent));
   let warnings = ref [] in
+  let checker_labels = ref [] in
   (* The mode is [auto] and the executable the probe would run does not exist,
      so a preflight would have warned. *)
   let s =
     ok
-      (go ~sandbox:(Some `Auto) ~warn:(fun w -> warnings := w :: !warnings) ctx)
+      (go ~sandbox:(Some `Auto)
+         ~warn:(fun w -> warnings := w :: !warnings)
+         ~on_checker_sandbox:(fun l -> checker_labels := l :: !checker_labels)
+         ctx)
   in
+  Alcotest.(check int)
+    "no checkers, no checker label" 0
+    (List.length !checker_labels);
   Alcotest.(check (list string))
     "all passed"
     (List.init 4 (fun _ -> "passed"))
@@ -89,14 +96,24 @@ let test_checkers_probed =
   in
   write ctx "exp.json" (experiment (H.url agent));
   let warnings = ref [] in
+  let checker_labels = ref [] in
   let s =
     ok
-      (go ~sandbox:(Some `Auto) ~warn:(fun w -> warnings := w :: !warnings) ctx)
+      (go ~sandbox:(Some `Auto)
+         ~warn:(fun w -> warnings := w :: !warnings)
+         ~on_checker_sandbox:(fun l -> checker_labels := l :: !checker_labels)
+         ctx)
   in
   Alcotest.(check (list string))
     "all passed"
     (List.init 4 (fun _ -> "passed"))
     (kinds s);
+  (match !checker_labels with
+  | [ { mode = `Auto; applied = false; reason = Some reason; _ } ] ->
+      Alcotest.(check bool)
+        "reported once, with the checkers' own reason" true
+        (String.starts_with ~prefix:"unavailable: " reason)
+  | [] | _ :: _ -> Alcotest.fail "expected one unapplied checker label");
   Alcotest.(check bool)
     "the probe ran and warned" true
     (List.exists (String.starts_with ~prefix:"sandbox: auto") !warnings);

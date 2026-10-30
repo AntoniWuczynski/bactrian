@@ -593,8 +593,9 @@ let run_experiment ?seatbelt_hint ?root
     ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
     ?(announce = fun (_ : string) -> ()) ?(warn = fun (_ : string) -> ()) ?keys
     ?(upstream = P.default_upstream) ?connector ?sandbox
-    ?(on_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env ?files
-    ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
+    ?(on_sandbox = fun (_ : Sandbox.label) -> ())
+    ?(on_checker_sandbox = fun (_ : Sandbox.label) -> ()) ~bactrian_exe ~env
+    ?files ?(vet = fun (_ : contents) -> Ok ()) ~experiment_file ~resume () =
   let fs = Eio.Stdenv.fs env in
   let files = Option.value files ~default:fs in
   let root =
@@ -675,6 +676,7 @@ let run_experiment ?seatbelt_hint ?root
         else Ok (agent, agent)
   in
   on_sandbox (Sandbox.label sandbox);
+  if has_checkers then on_checker_sandbox (Sandbox.label checker_sandbox);
   Option.iter warn (Sandbox.mcp_warning sandbox (mcp_configs ~fs l));
   let* jobs =
     List.mapi

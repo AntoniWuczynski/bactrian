@@ -20,6 +20,9 @@ type t = {
   sandbox : Sandbox.label option;
       (** The label every run carries; [None] when the experiment stopped before
           its sandbox preflight. *)
+  checker_sandbox : Sandbox.label option;
+      (** The label every run's checkers carry; [None] when no scenario has
+          checkers, or the experiment stopped before its sandbox preflight. *)
 }
 
 val run :
@@ -46,8 +49,9 @@ val exit_code : t -> int
 (** {!Exit_code.of_summary}. *)
 
 val to_json : t -> Yojson.Safe.t
-(** The experiment ID, the sandbox label and every run with its index, scenario,
-    variant, repeat, status, reason and run ID. *)
+(** The experiment ID, the sandbox label, the checkers' sandbox label (or
+    [null]) and every run with its index, scenario, variant, repeat, status,
+    reason and run ID. *)
 
 val status_kind : Executor.status -> string
 (** ["pending"], ["interrupted"], or the outcome's kind

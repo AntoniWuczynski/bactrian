@@ -35,8 +35,8 @@ let http url : Experiment.agent =
     { url; namespace_header = "X-Run"; turn_timeout = 1.; total_timeout = 1. }
 
 let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
-    ?(faketime_requested = false) ?(deny_read = []) ?(funded = []) ~dir agent :
-    Doctor.target =
+    ?(faketime_requested = false) ?(deny_read = []) ?(checkers = false)
+    ?(funded = []) ~dir agent : Doctor.target =
   {
     agent;
     dir;
@@ -47,6 +47,7 @@ let target ?(sandbox = `Off) ?(backend = `Auto) ?image ?(faketime = true)
     deny_read;
     faketime;
     faketime_requested;
+    checkers;
     funded;
   }
 
@@ -138,6 +139,26 @@ let test_sandbox () =
   Alcotest.(check bool)
     "the cause and its fix commands are kept" true
     (contains ~sub:"sudo sysctl -w a=0" c.message)
+
+let test_checkers_sandbox () =
+  let calls = ref 0 in
+  let run mode result =
+    Doctor.checkers_sandbox_check ~mode ~probe:(fun () ->
+        incr calls;
+        result)
+  in
+  check_status "works" Pass (run `Strict (Ok ()));
+  check_status "unavailable under auto" Warn (run `Auto (Error "no bwrap"));
+  check_status "unavailable under strict" Fail (run `Strict (Error "no bwrap"));
+  Alcotest.(check int) "probed three times" 3 !calls;
+  calls := 0;
+  check_status "off" Skip (run `Off (Error "no bwrap"));
+  Alcotest.(check int) "off does not probe" 0 !calls;
+  let c = run `Strict (Error "no bwrap") in
+  Alcotest.(check string) "its own name" "sandbox-checkers" c.name;
+  Alcotest.(check bool)
+    "the cause is kept" true
+    (contains ~sub:"no bwrap" c.message)
 
 (* The virtual machine *)
 
@@ -438,6 +459,7 @@ let () =
             test_keys_with_experiment;
           Alcotest.test_case "agent" `Quick test_agent;
           Alcotest.test_case "sandbox" `Quick test_sandbox;
+          Alcotest.test_case "checkers' sandbox" `Quick test_checkers_sandbox;
           Alcotest.test_case "virtual machine" `Quick test_vm;
           Alcotest.test_case "clock" `Quick test_clock;
           Alcotest.test_case "library masked" `Quick test_library_masked;

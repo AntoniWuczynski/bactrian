@@ -49,10 +49,11 @@ type target = {
   deny_read : string list;
   faketime : bool;
   faketime_requested : bool;
+  checkers : bool;
   funded : (P.provider * string) list;
 }
 
-let target ~dir (e : Experiment.t) =
+let target ~dir ~checkers (e : Experiment.t) =
   let in_dir path =
     if Filename.is_relative path then Filename.concat dir path else path
   in
@@ -66,6 +67,7 @@ let target ~dir (e : Experiment.t) =
     deny_read = List.map in_dir e.sandbox_deny_read;
     faketime = e.faketime;
     faketime_requested = e.faketime_requested;
+    checkers;
     funded = Live_preflight.funded e.caps_usd;
   }
 
@@ -177,6 +179,17 @@ let loopback_check () =
 
 (* The sandbox *)
 
+(* [probe] ran under [mode], which is not [Off]. *)
+let probed name ~(mode : [ `Auto | `Strict ]) ~works ~probe =
+  match probe () with
+  | Ok () -> check name Pass works
+  | Error cause ->
+      let status = match mode with `Strict -> Fail | `Auto -> Warn in
+      check name status
+        (Printf.sprintf "sandbox: %s: %s"
+           (Sandbox.mode_name (mode :> Sandbox.mode))
+           cause)
+
 let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~relay_pending ~probe =
   if http_agent then
     check "sandbox" Skip "an HTTP-mode agent is not started by bactrian"
@@ -188,17 +201,23 @@ let sandbox_check ~(mode : Sandbox.mode) ~http_agent ~relay_pending ~probe =
           "the agent runs in the virtual machine, whose relay is not built \
            yet: the first run builds it (it needs the network once) and probes \
            the sandbox then"
-    | (`Auto | `Strict) as mode -> (
-        match probe () with
-        | Ok () -> check "sandbox" Pass "the sandbox works on this host"
-        | Error cause ->
-            let status = match mode with `Strict -> Fail | `Auto -> Warn in
-            check "sandbox" status
-              (Printf.sprintf "sandbox: %s: %s" (Sandbox.mode_name mode) cause))
+    | (`Auto | `Strict) as mode ->
+        probed "sandbox" ~mode ~works:"the sandbox works on this host" ~probe
+
+(* The checkers share the agent's sandbox unless the agent has none of its own
+   (an HTTP-mode agent) or runs in the virtual machine: then they run in the
+   host's, and a run probes it for them. *)
+let checkers_sandbox_check ~(mode : Sandbox.mode) ~probe =
+  match mode with
+  | `Off -> check "sandbox-checkers" Skip "sandbox: off"
+  | (`Auto | `Strict) as mode ->
+      probed "sandbox-checkers" ~mode
+        ~works:"the sandbox the checkers run in works on this host" ~probe
 
 (* Runs the preflight probe in a directory of its own, so the check leaves no
-   [.bactrian] behind. *)
-let sandbox_probe ~env ~bactrian_exe (target : target option) () =
+   [.bactrian] behind. [for_checkers] probes the sandbox the checkers run in. *)
+let sandbox_probe ~env ~bactrian_exe ?(for_checkers = false)
+    (target : target option) () =
   let mode, backend, image, runtime =
     match target with
     | Some t -> (t.sandbox, t.backend, t.image, t.runtime)
@@ -210,20 +229,22 @@ let sandbox_probe ~env ~bactrian_exe (target : target option) () =
       Fun.protect ~finally:(fun () ->
           Eio.Path.rmtree ~missing_ok:true Eio.Path.(Eio.Stdenv.fs env / dir))
       @@ fun () ->
+      let settings : Sandbox.settings =
+        {
+          mode = (match mode with `Strict -> `Strict | `Auto | `Off -> `Auto);
+          backend;
+          image;
+          runtime;
+          allow_write = [];
+          deny_read = [];
+          bactrian_exe;
+          bactrian_dir = Filename.concat dir ".bactrian";
+        }
+      in
       match
         Sandbox.preflight ~env
           ~warn:(fun (_ : string) -> ())
-          {
-            mode =
-              (match mode with `Strict -> `Strict | `Auto | `Off -> `Auto);
-            backend;
-            image;
-            runtime;
-            allow_write = [];
-            deny_read = [];
-            bactrian_exe;
-            bactrian_dir = Filename.concat dir ".bactrian";
-          }
+          (if for_checkers then Sandbox.checker_settings settings else settings)
       with
       | Error cause -> Error cause
       | Ok sandbox -> (
@@ -481,6 +502,15 @@ let run ~env ~bactrian_exe ~tls_available ~upstream ~keys ~path target =
   @ [
       sandbox_check ~mode ~http_agent ~relay_pending
         ~probe:(sandbox_probe ~env ~bactrian_exe target);
+    ]
+  @ (match target with
+    | Some t when t.checkers && (http_agent || uses_vm ~macos t) ->
+        [
+          checkers_sandbox_check ~mode
+            ~probe:(sandbox_probe ~env ~bactrian_exe ~for_checkers:true target);
+        ]
+    | Some _ | None -> [])
+  @ [
       vm_check ~host:vm target;
       clock_check ~linux:(Agent_clock.linux ())
         ~library_override:(Sys.getenv_opt Agent_clock.override_variable)

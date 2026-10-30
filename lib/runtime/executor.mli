@@ -83,6 +83,7 @@ val run_experiment :
   ?connector:Upstream.connector ->
   ?sandbox:Sandbox.mode ->
   ?on_sandbox:(Sandbox.label -> unit) ->
+  ?on_checker_sandbox:(Sandbox.label -> unit) ->
   bactrian_exe:string ->
   env:Eio_unix.Stdenv.base ->
   ?files:Eio.Fs.dir_ty Eio.Path.t ->
@@ -129,8 +130,11 @@ val run_experiment :
     executable the probe re-runs. A sandbox that does not work is [Environment]
     (exit 69) under [strict], and a warning and unsandboxed runs under [auto].
     The scenarios' checkers run in the same sandbox ({!Sandbox.checker}).
-    [on_sandbox] is called with the label every run will carry. [warn] is also
-    called once per setting that is accepted but not enforced (see
+    [on_sandbox] is called with the label every run will carry, and
+    [on_checker_sandbox], when a scenario has checkers, with the one its
+    checkers will carry (the agent's own unless the agent runs in the virtual
+    machine or is an HTTP-mode agent). [warn] is also called once per setting
+    that is accepted but not enforced (see
     {!Bactrian_core.Experiment.unenforced}) before the first run, and the same
     lines are recorded in every run's [meta.json].
 

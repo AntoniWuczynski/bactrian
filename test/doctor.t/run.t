@@ -138,6 +138,30 @@ listens on this one.
   ok    agent: https://agent.example/run is a well-formed URL (not contacted)
   fail  tls: HTTPS support is not built in, but the experiment needs it for the agent at https://agent.example/run
 
+An HTTP-mode agent has no sandbox, but its scenarios' checkers do, and a run
+probes it for them. The doctor does too, in a line of its own that appears only
+when a scenario has checkers (its result depends on the host, so only whether
+the line is there is shown).
+
+  $ mkdir s
+  $ printf 'version: 1\nid: plain\nturns: [{ user: hi }]\n' > s/plain.yaml
+  $ run bactrian doctor --experiment http.yaml | grep -c ' sandbox-checkers:'
+  0
+  [1]
+  $ printf 'version: 1\nid: checked\nturns: [{ user: hi }]\ncheckers: [{ command: ["true"] }]\n' > s/checked.yaml
+  $ run bactrian doctor --experiment http.yaml | grep -c ' sandbox-checkers:'
+  1
+  $ { cat http.yaml; echo 'sandbox: off'; } > http-off.yaml
+  $ run bactrian doctor --experiment http-off.yaml | grep ' sandbox-checkers:'
+  skip  sandbox-checkers: sandbox: off
+
+A command agent's checkers share its sandbox, so they get no line of their own.
+
+  $ run bactrian doctor --experiment exp.yaml | grep -c ' sandbox-checkers:'
+  0
+  [1]
+  $ rm -r s
+
 A configuration error in the experiment is reported with its location, as
 for run, and exits 64.
 

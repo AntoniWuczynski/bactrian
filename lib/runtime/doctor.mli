@@ -36,12 +36,13 @@ type target = {
   faketime : bool;
   faketime_requested : bool;
       (** The experiment says [faketime: auto] by name ({!Experiment.t}). *)
+  checkers : bool;  (** Some scenario of the experiment has checkers. *)
   funded : (Model_proxy.provider * string) list;
       (** The providers the experiment calls live ({!Executor.funded}). *)
 }
 (** What an experiment says that the checks depend on. *)
 
-val target : dir:string -> Experiment.t -> target
+val target : dir:string -> checkers:bool -> Experiment.t -> target
 
 (** {2 The checks}
 
@@ -82,6 +83,15 @@ val sandbox_check :
     are [Skip], and so is an agent in the virtual machine whose relay is not
     built yet ([relay_pending]): the probe would build it, which [doctor] does
     not do. *)
+
+val checkers_sandbox_check :
+  mode:Sandbox.mode -> probe:(unit -> (unit, string) result) -> check
+(** [sandbox-checkers]: the sandbox the checkers run in works. It is a separate
+    check, present only for an experiment whose scenarios have checkers and
+    whose agent does not share their sandbox (an HTTP-mode agent, or one in the
+    virtual machine, whose checkers run in the host's own). Like
+    {!sandbox_check} it is [Fail] under [`Strict] and [Warn] under [`Auto] when
+    [probe] fails, and [Skip] under [`Off]. *)
 
 type vm_host = {
   macos : bool;

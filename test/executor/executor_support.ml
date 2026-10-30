@@ -107,9 +107,10 @@ let with_ctx name ?(scenarios = [ "s1"; "s2" ]) f () =
 
 (* The agents here write outside their state directory, so the sandbox is off
    unless a test asks for it. *)
-let go ?(resume = None) ?announce ?warn ?(sandbox = Some `Off) ctx =
+let go ?(resume = None) ?announce ?warn ?(sandbox = Some `Off)
+    ?on_checker_sandbox ctx =
   E.run_experiment ~root:ctx.root ~random_bytes ?announce ?warn ?sandbox
-    ~bactrian_exe:"/nonexistent/bactrian"
+    ?on_checker_sandbox ~bactrian_exe:"/nonexistent/bactrian"
     ~keys:[ (P.Openai, "real-key") ]
     ~upstream:(fun _ -> Uri.of_string (F.base_url ctx.up))
     ~env:ctx.env ~experiment_file:(ctx.dir ^ "/exp.json") ~resume ()
