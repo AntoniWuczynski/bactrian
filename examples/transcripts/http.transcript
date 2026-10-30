@@ -8,8 +8,9 @@
 # Every POST has the method POST, "Content-Type: application/json", the header
 # "X-Bactrian-Run" and the experiment's namespace header, both holding the run
 # ID of the "start" message. The "start" message carries "env", the per-run
-# environment a command agent would get as process variables (the test suite
-# writes its keys in sorted order, so the line here does too).
+# environment a command agent would get as process variables. Its keys are in
+# sorted order because decoding sorts the keys of a JSON object, and the test
+# suite's round trip from decode to encode relies on that.
 #
 # The ">" lines are the bytes the agent driver writes for these messages. A
 # real run builds its own messages from a scenario, includes the variables of
