@@ -186,7 +186,8 @@ module Http : sig
       (default 30), killing it by its PID when that runs out. *)
 
   val dispose : server -> unit
-  (** Kills the server by its PID if it is still running. *)
+  (** Kills the server by its PID if it is still running, and removes its
+      {!log}. *)
 
   val auth : server -> string * string
   (** The [Authorization] header with the server's token. *)

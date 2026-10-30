@@ -553,7 +553,8 @@ module Http = struct
       (try Unix.kill s.pid Sys.sigkill
        with Unix.Unix_error (ESRCH, _, _) -> ());
       ignore (waitpid [] s.pid : (int * Unix.process_status) option)
-    end
+    end;
+    try Sys.remove s.log with Sys_error _ -> ()
 
   let listening text =
     let prefix = "listening on http://127.0.0.1:" in
