@@ -342,8 +342,14 @@ let readable_home () =
       (".aws/credentials", "aws_secret_access_key = x\n");
     ];
   (* The docker client keeps finding its own configuration and the bactrian
-     cache stays where it was. *)
-  let kept name default = (name, Option.value (Sys.getenv_opt name) ~default) in
+     cache stays where it was. An empty value, as an earlier case restores an
+     unset one, counts as unset: kept, it would move the cache under HOME. *)
+  let kept name default =
+    ( name,
+      match Sys.getenv_opt name with
+      | Some v when not (String.equal v "") -> v
+      | Some _ | None -> default )
+  in
   with_env
     [
       ("HOME", home);
