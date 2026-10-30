@@ -747,22 +747,26 @@ let relay_full_buffer () =
   (* Alive for longer than the timeout while the file changes. *)
   let timeout = Bactrian_core.Vm_frame.liveness_timeout in
   let until = Unix.gettimeofday () +. (2. *. timeout) in
+  let last_change = ref (Unix.gettimeofday ()) in
   while Unix.gettimeofday () < until do
     Unix.utimes beat 0. 0.;
+    last_change := Unix.gettimeofday ();
     Unix.sleepf Bactrian_core.Vm_frame.heartbeat_interval;
     match Unix.waitpid [ WNOHANG ] pid with
     | 0, _ -> ()
     | _, _ -> Alcotest.fail "the relay stopped while the heartbeat file changed"
   done;
   Alcotest.(check bool) "still running" true (container_exists name);
-  (* Then the file stops changing, as when bactrian and its bridge are dead. *)
-  let stopped = Unix.gettimeofday () in
+  (* Then the file stops changing, as when bactrian and its bridge are dead.
+     The timeout counts from the last change, which was up to one interval
+     ago. *)
   (match wait_exit pid with
   | WEXITED 70 -> ()
   | WEXITED n -> Alcotest.failf "exit %d" n
   | WSIGNALED n | WSTOPPED n -> Alcotest.failf "signal %d" n);
-  let took = Unix.gettimeofday () -. stopped in
+  let took = Unix.gettimeofday () -. !last_change in
   Printf.printf "the relay stopped %.1f seconds after the last change\n" took;
+  Alcotest.(check bool) "not before the timeout" true (took >= timeout -. 0.5);
   Alcotest.(check bool) "soon after it" true (took < timeout +. 20.);
   gone ~within:10. name
 
