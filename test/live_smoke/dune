@@ -6,6 +6,8 @@
  (alias acceptance)
  (deps
   ../../dev/live-smoke.py
+  ../../dev/live-smoke-probe.py
+  ../../lib/core/pricing.ml
   fake_bactrian.py
   test_live_smoke.py
   ../../examples/agents/python/uv.lock)

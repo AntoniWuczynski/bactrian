@@ -16,11 +16,23 @@ variable below is set explicitly:
                                 so earlier spend counts against it, and so
                                 does every until-divergence replay that goes
                                 live
-    BACTRIAN_SMOKE_MODEL        the model the agents call (AGENT_MODEL)
+    BACTRIAN_SMOKE_MODEL        the model the agents call (AGENT_MODEL). It
+                                must be in bactrian's OpenAI price table
+    AGENT_MAX_TOKENS            optional, default 256: the output limit the
+                                agents send as max_completion_tokens
     BACTRIAN_SMOKE_LEDGER       a JSON-lines file the spend is appended to,
                                 one line per model call, in the format of
                                 dev/capture: date, provider, model,
                                 input_tokens, output_tokens, usd
+
+bactrian reserves the worst-case cost of a call before it forwards it: the
+input estimate plus the request's own output limit. Without a limit that is the
+model's maximum output, 65,536 tokens, which would not fit a cap of a few cents
+for any but the cheapest models, so the example agents send AGENT_MAX_TOKENS.
+The script refuses a model whose worst-case reservation for one call, with
+that limit and an input allowance of 1,000 tokens, is above the cap. The rates
+it uses are in OPENAI_RATES, which test/live_smoke checks against
+lib/core/pricing.ml.
 
 It also refuses to start when BACTRIAN_UPSTREAM_OPENAI is set. The smoke would
 then pass without reaching OpenAI, and over an http override bactrian would
@@ -33,7 +45,9 @@ Python one (`uv sync --locked` in examples/agents/python):
     BACTRIAN_LIVE_SMOKE=1 BACTRIAN_CAP_OPENAI=0.05 BACTRIAN_SMOKE_MODEL=<model> \\
         BACTRIAN_SMOKE_LEDGER=<file> uv run dev/live-smoke.py
 
-For each agent it records one short turn, replays it offline, and replays it
+First it runs a probe agent (dev/live-smoke-probe.py) under bactrian and
+requires that its OPENAI_API_KEY is bactrian's "bactrian-" placeholder, not the
+real key. Then, for each agent, it records one short turn, replays it offline, and replays it
 with `--mode until-divergence`. It checks that every run exits 0, that the
 record made at least one exchange and no request was refused for using a key
 other than bactrian's placeholder, that the cost in `meta.json` of every run,
@@ -41,7 +55,8 @@ replays included, matches its settled spend in `.bactrian/ledger.jsonl`, and
 that no run directory and none of bactrian's output holds the first 12
 characters of the real key. The spend
 of every bactrian call is read from the ledger and logged whatever the exit
-code.
+code, and also when the call is interrupted or raises. Then no run id is known,
+so every reservation appended meanwhile counts.
 
 Caveat: this runs under bactrian's default sandbox. On macOS that is Seatbelt,
 under which the agent can read the launch environment of your other processes
@@ -67,6 +82,15 @@ BACTRIAN_LEDGER = ROOT / ".bactrian" / "ledger.jsonl"
 TURN = "What is the weather in Paris?"
 MAX_CAP_USD = 0.10
 KEY_PREFIX_LENGTH = 12
+DEFAULT_MAX_TOKENS = 256
+INPUT_ALLOWANCE_TOKENS = 1_000
+# Dollars per million input and output tokens of bactrian's OpenAI price table.
+OPENAI_RATES: dict[str, tuple[float, float]] = {
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-5-nano": (0.05, 0.40),
+    "gpt-6-sol": (2.00, 10.00),
+    "gpt-6-astra": (10.00, 50.00),
+}
 AGENTS: dict[str, list[str]] = {
     "typescript": ["node", "examples/agents/typescript/dist/agent.js"],
     "python": [
@@ -78,6 +102,14 @@ AGENTS: dict[str, list[str]] = {
         "examples/agents/python/agent.py",
     ],
 }
+PROBE = [
+    "uv",
+    "run",
+    "--no-sync",
+    "--project",
+    "examples/agents/python",
+    "dev/live-smoke-probe.py",
+]
 
 
 def require_env(name: str) -> str:
@@ -96,6 +128,33 @@ def cap_from_env() -> float:
     if not math.isfinite(cap) or cap <= 0 or cap > MAX_CAP_USD:
         sys.exit(f"live-smoke: BACTRIAN_CAP_OPENAI must be above 0 and at most {MAX_CAP_USD}")
     return cap
+
+
+def max_tokens_from_env() -> int:
+    raw = os.environ.get("AGENT_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))
+    if not raw.isdecimal() or int(raw) < 1:
+        sys.exit(f"live-smoke: AGENT_MAX_TOKENS is not a positive integer: {raw}")
+    return int(raw)
+
+
+def check_reservation(model: str, max_tokens: int, cap: float) -> None:
+    """Refuses a model that bactrian would not let make one call under the cap."""
+    # As bactrian finds a price: the longest name that is the model or a prefix
+    # of it followed by a dash.
+    names = [n for n in OPENAI_RATES if model == n or model.startswith(n + "-")]
+    if not names:
+        sys.exit(
+            f"live-smoke: no price is known for {model}, so bactrian would refuse it. "
+            f"Known models: {', '.join(OPENAI_RATES)}"
+        )
+    rate_in, rate_out = OPENAI_RATES[max(names, key=len)]
+    worst = (INPUT_ALLOWANCE_TOKENS * rate_in + max_tokens * rate_out) / 1_000_000
+    if worst > cap:
+        sys.exit(
+            f"live-smoke: {model} could reserve ${worst:.4f} for one call with "
+            f"AGENT_MAX_TOKENS={max_tokens}, above the BACTRIAN_CAP_OPENAI cap of ${cap}. "
+            "Lower AGENT_MAX_TOKENS, raise the cap (at most 0.10) or pick a cheaper model"
+        )
 
 
 def string_keyed(value: object) -> dict[str, object] | None:
@@ -186,6 +245,14 @@ def tokens_of(run_dir: Path | None) -> list[tuple[int, int] | None]:
     return calls
 
 
+def replies_of(run_dir: Path | None) -> list[str]:
+    """The content of each reply the agent sent, from the run's trace."""
+    if run_dir is None or not (run_dir / "trace.jsonl").exists():
+        return []
+    entries = json_lines((run_dir / "trace.jsonl").read_text())
+    return [c for e in entries if e.get("type") == "reply" and (c := str_at(e, "content"))]
+
+
 def cost_of(run_dir: Path) -> float | None:
     meta = run_dir / "meta.json"
     return number_at(parse_object(meta.read_text()), "cost_usd") if meta.exists() else None
@@ -213,22 +280,40 @@ class Session:
         exit code. `--json` and `--env` go before the `--` that ends bactrian's
         options, because everything after it is the agent's command line."""
         offset = BACTRIAN_LEDGER.stat().st_size if BACTRIAN_LEDGER.exists() else 0
-        done = subprocess.run(
-            ["bactrian", sub, "--json", "--env", "AGENT_MODEL", *options, "--", *command],
-            cwd=ROOT,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.outputs += [done.stdout, done.stderr]
-        report = parse_object(done.stdout)
-        dir_field = str_at(report, "run_dir")
-        run_dir = ROOT / dir_field if dir_field else None
-        if run_dir is not None:
-            self.run_dirs.append(run_dir)
-        spends = spends_since(offset, str_at(report, "run_id"))
-        self.log(spends, tokens_of(run_dir))
+        done: subprocess.CompletedProcess[str] | None = None
+        report: dict[str, object] | None = None
+        run_dir: Path | None = None
+        try:
+            done = subprocess.run(
+                [
+                    "bactrian",
+                    sub,
+                    "--json",
+                    "--env",
+                    "AGENT_MODEL",
+                    "--env",
+                    "AGENT_MAX_TOKENS",
+                    *options,
+                    "--",
+                    *command,
+                ],
+                cwd=ROOT,
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.outputs += [done.stdout, done.stderr]
+            report = parse_object(done.stdout)
+            dir_field = str_at(report, "run_dir")
+            run_dir = ROOT / dir_field if dir_field else None
+            if run_dir is not None:
+                self.run_dirs.append(run_dir)
+        finally:
+            # Also on an interrupt or an exception, which leave no report and so
+            # no run id: every reservation since `offset` is then logged.
+            spends = spends_since(offset, str_at(report, "run_id"))
+            self.log(spends, tokens_of(run_dir))
         if report is None:
             self.problems.append(f"{label}: no JSON report, exit {done.returncode}")
         return Call(done.returncode, report, run_dir, spends)
@@ -293,6 +378,19 @@ def check_record(name: str, call: Call, session: Session, model: str) -> str | N
     return str_at(call.report, "run_id")
 
 
+def check_placeholder(session: Session) -> bool:
+    """Runs the probe agent and returns whether its OPENAI_API_KEY is the placeholder."""
+    call = session.invoke("probe", "record", ["--turn", TURN], PROBE)
+    replies = replies_of(call.run_dir)
+    if call.code == 0 and replies == ["placeholder"]:
+        return True
+    session.problems.append(
+        f"probe: exit {call.code}, the agent's OPENAI_API_KEY is {replies}, expected the "
+        "bactrian- placeholder. Not running the agents"
+    )
+    return False
+
+
 def smoke(name: str, command: list[str], session: Session, model: str) -> None:
     record = session.invoke(name, "record", ["--turn", TURN], command)
     run_id = check_record(name, record, session, model)
@@ -316,13 +414,17 @@ def main() -> None:
             f"live-smoke: unset BACTRIAN_UPSTREAM_OPENAI ({upstream}), the smoke must reach OpenAI"
         )
     key = require_env("OPENAI_API_KEY")
-    cap_from_env()
+    cap = cap_from_env()
     model = require_env("BACTRIAN_SMOKE_MODEL")
+    max_tokens = max_tokens_from_env()
+    check_reservation(model, max_tokens, cap)
     ledger = Path(require_env("BACTRIAN_SMOKE_LEDGER"))
     ledger.open("a").close()
-    session = Session({**os.environ, "AGENT_MODEL": model}, ledger, key[:KEY_PREFIX_LENGTH].encode())
-    for name, command in AGENTS.items():
-        smoke(name, command, session, model)
+    env = {**os.environ, "AGENT_MODEL": model, "AGENT_MAX_TOKENS": str(max_tokens)}
+    session = Session(env, ledger, key[:KEY_PREFIX_LENGTH].encode())
+    if check_placeholder(session):
+        for name, command in AGENTS.items():
+            smoke(name, command, session, model)
     session.problems += [f"the real key is in {leak}" for leak in session.leaks()]
     for p in session.problems:
         print(f"FAIL {p}", file=sys.stderr)

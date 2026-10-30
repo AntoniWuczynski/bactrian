@@ -31,8 +31,8 @@ jobs:
       - name: Type-check the sandbox escape agents, the live smoke script and its test
         run: |
           pnpm --dir examples/agents/typescript exec tsc -p ../../../test/sandbox/tsconfig.json
-          uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py dev/live-smoke.py test/live_smoke
-          uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py dev/live-smoke.py test/live_smoke
+          uv run --no-sync --project examples/agents/python mypy --strict test/sandbox/escape.py dev/live-smoke.py dev/live-smoke-probe.py test/live_smoke
+          uv run --no-sync --project examples/agents/python pyright test/sandbox/escape.py dev/live-smoke.py dev/live-smoke-probe.py test/live_smoke
       # The TLS stack (zarith under mirage-crypto-ec) needs GMP, and its conf-*
       # packages find it with pkg-config. On Linux the sandbox tests also need
       # bubblewrap and unprivileged user namespaces, which Ubuntu's AppArmor
