@@ -15,6 +15,9 @@
 // server instead of returning a canned answer. AGENT_MCP_PROTOCOL picks the
 // protocol revision: 2026-07-28 (the default) or 2025-11-25, which opens with
 // initialize.
+//
+// AGENT_MAX_TOKENS (default 256) is sent as max_completion_tokens, so that the
+// worst-case cost bactrian reserves for a call fits a spend cap of a few cents.
 import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
 import { createServer } from "node:http";
@@ -30,6 +33,7 @@ import type {
 
 const WEATHER_RESULT = "18 degrees Celsius, cloudy";
 const MAX_MODEL_CALLS = 5;
+const DEFAULT_MAX_TOKENS = "256";
 const DEFAULT_SYSTEM_PROMPT =
   "You are a concise assistant. Use the get_weather tool for weather questions.";
 
@@ -48,6 +52,14 @@ const TOOLS: ChatCompletionTool[] = [
     },
   },
 ];
+
+function parseMaxTokens(value: string): number {
+  const tokens = Number(value);
+  if (!Number.isInteger(tokens) || tokens < 1) {
+    throw new Error("AGENT_MAX_TOKENS must be a positive integer");
+  }
+  return tokens;
+}
 
 // A string-valued environment: the process's or a start message's.
 type Env = Record<string, string | undefined>;
@@ -195,6 +207,7 @@ class McpClient {
 // environment in command mode, the start message's env in HTTP mode.
 class Session {
   private readonly model: string;
+  private readonly maxTokens: number;
   private readonly mcpCommand: string | undefined;
   private readonly mcpProtocol: string;
   private mcp: McpClient | undefined;
@@ -203,6 +216,7 @@ class Session {
 
   constructor(private readonly env: Env) {
     this.model = env["AGENT_MODEL"] ?? "gpt-6-luna";
+    this.maxTokens = parseMaxTokens(env["AGENT_MAX_TOKENS"] ?? DEFAULT_MAX_TOKENS);
     this.mcpCommand = env["AGENT_MCP_COMMAND"];
     this.mcpProtocol = env["AGENT_MCP_PROTOCOL"] ?? "2026-07-28";
     this.client = new OpenAI({
@@ -239,6 +253,7 @@ class Session {
         messages: this.history,
         tools: TOOLS,
         reasoning_effort: "none",
+        max_completion_tokens: this.maxTokens,
       });
       const message = completion.choices[0]?.message;
       if (message === undefined) throw new Error("model returned no choices");
