@@ -60,9 +60,19 @@ let env ~ca ~models ~url c =
 let passthrough = [ "--env"; "AGENT_WEATHER_URL"; "--env"; "AGENT_HTTP_CLIENT" ]
 let outcome j = string_field "kind" (field "outcome" j)
 
-let record_and_replay c () =
+(* A month back, as a scenario's fixed [now] or an old recording would give.
+   On Linux libfaketime sets the agent's clock there, and the tunnel's
+   certificates must still verify. *)
+let month_ago () =
+  let tm = Unix.gmtime (Unix.time () -. (30. *. 86_400.)) in
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
+    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
+
+let record_and_replay ?sim_now c () =
   let argv = c.agent.argv () in
-  with_services ("egress-" ^ c.agent.name ^ "-" ^ c.http_client)
+  with_services
+    ("egress-" ^ c.agent.name ^ "-" ^ c.http_client
+    ^ match sim_now with Some _ -> "-past" | None -> "")
   @@ fun ~project ~ca ~models ~weather ~port ->
   let url = Printf.sprintf "https://127.0.0.1:%d/weather" port in
   let env = env ~ca ~models ~url c in
@@ -71,6 +81,7 @@ let record_and_replay c () =
     cli ~dir:project ~env:live
       ([ "record"; "--json"; "--turn"; first_turn; "--sandbox" ]
       @ sandbox
+      @ (match sim_now with Some t -> [ "--sim-now"; t ] | None -> [])
       @ [ "--egress"; Printf.sprintf "127.0.0.1:%d=record" port ]
       @ passthrough @ [ "--" ] @ argv)
   in
@@ -165,5 +176,9 @@ let () =
         List.map
           (fun c -> Alcotest.test_case c.label `Slow (record_and_replay c))
           clients
-        @ [ Alcotest.test_case "a blocked host" `Slow blocked ] );
+        @ [
+            Alcotest.test_case "node fetch, SIM_NOW a month back" `Slow
+              (record_and_replay ~sim_now:(month_ago ()) (List.hd clients));
+            Alcotest.test_case "a blocked host" `Slow blocked;
+          ] );
     ]

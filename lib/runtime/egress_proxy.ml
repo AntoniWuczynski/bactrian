@@ -6,7 +6,7 @@ type tls = {
   failure : exn -> string option;
 }
 
-type interception = { tls : tls; bundle : string }
+type interception = { tls : sim_now:string -> tls; bundle : string }
 
 type run = {
   policy : Egress.t;

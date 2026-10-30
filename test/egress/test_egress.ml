@@ -174,8 +174,8 @@ let test_ca_files =
 let test_ca_leaves =
   with_dir "leaves" @@ fun dir ->
   let ca, _ = load dir in
-  let leaf host =
-    match Ca.leaf ca ~now:(now ()) ~host with
+  let leaf ?(sim_now = now ()) host =
+    match Ca.leaf ca ~now:(now ()) ~sim_now ~host with
     | Ok (c, _) -> c
     | Error m -> Alcotest.fail m
   in
@@ -205,7 +205,7 @@ let test_ca_leaves =
           ip_chain));
   Alcotest.(check bool)
     "a bad host" true
-    (Result.is_error (Ca.leaf ca ~now:(now ()) ~host:"a b"));
+    (Result.is_error (Ca.leaf ca ~now:(now ()) ~sim_now:(now ()) ~host:"a b"));
   let leaves =
     Eio.Fiber.List.map
       (fun () -> leaf "same.example.com")
@@ -213,7 +213,36 @@ let test_ca_leaves =
   in
   Alcotest.(check bool)
     "minted once for concurrent requests" true
-    (List.for_all (fun c -> List.hd c == List.hd (List.hd leaves)) leaves)
+    (List.for_all (fun c -> List.hd c == List.hd (List.hd leaves)) leaves);
+  (* An agent under libfaketime checks the chain at the run's SIM_NOW: a
+     recording's, or a scenario's fixed date, long before the CA was made. *)
+  let days_ago d =
+    Option.get (Ptime.sub_span (now ()) (Ptime.Span.of_int_s (d * 86_400)))
+  in
+  let at time chain =
+    X509.Validation.verify_chain_of_trust
+      ~host:
+        (Some (Domain_name.host_exn (Domain_name.of_string_exn "past.example")))
+      ~time:(fun () -> Some time)
+      ~anchors:[ ca_cert ca ]
+      chain
+  in
+  List.iter
+    (fun d ->
+      let chain = leaf ~sim_now:(days_ago d) "past.example" in
+      List.iter
+        (fun (what, time) ->
+          match at time chain with
+          | Ok _ -> ()
+          | Error e ->
+              Alcotest.failf "SIM_NOW %d days back, valid %s: %a" d what
+                X509.Validation.pp_validation_error e)
+        [ ("then", days_ago d); ("now", now ()) ])
+    [ 30; 3 * 365 ];
+  let recent = leaf ~sim_now:(days_ago 30) "past.example" in
+  Alcotest.(check bool)
+    "reused for the same SIM_NOW" true
+    (List.hd recent == List.hd (leaf ~sim_now:(days_ago 30) "past.example"))
 
 (* The proxy *)
 

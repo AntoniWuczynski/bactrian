@@ -3,11 +3,10 @@
 
     It lives in [.bactrian/ca/]: the directory has mode 0700, the private key
     [ca.key] mode 0600 and the certificate [ca.pem] mode 0644. It is a P-256
-    key, valid for one year from a day before it was made, and is replaced with
-    [bactrian ca rotate]. The key never leaves the directory and is never
-    printed. Leaf certificates are valid for 7 days from 2 days back (an agent
-    whose clock is set back still accepts them), live only in memory and are
-    cached per host. *)
+    key, valid from the Unix epoch (so that an agent whose clock is a scenario's
+    past [SIM_NOW] accepts it) until a year after it was made, and is replaced
+    with [bactrian ca rotate]. The key never leaves the directory and is never
+    printed. Leaf certificates live only in memory and are cached per host. *)
 
 type t
 
@@ -43,8 +42,15 @@ val fingerprint : t -> string
 (** The SHA-256 fingerprint of the certificate, in lowercase hex. *)
 
 val leaf :
-  t -> now:Ptime.t -> host:string -> (Tls.Config.certchain, string) result
+  t ->
+  now:Ptime.t ->
+  sim_now:Ptime.t ->
+  host:string ->
+  (Tls.Config.certchain, string) result
 (** A certificate for [host] (a DNS name, or an IP address as its address)
-    signed by the CA, with the CA's certificate after it. A host gets one leaf,
-    reused while it is valid for at least another day, however many fibres ask
-    for it at once. [Error] for a host that is neither a name nor an address. *)
+    signed by the CA, with the CA's certificate after it. It is valid from 2
+    days before the earlier of [now] and [sim_now] (the clock an agent under
+    libfaketime reads) to 7 days after the later, and never after the CA. A host
+    gets one leaf, reused while it is valid from at least a day before the
+    earlier until at least a day after the later, however many fibres ask for it
+    at once. [Error] for a host that is neither a name nor an address. *)

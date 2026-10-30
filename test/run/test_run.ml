@@ -227,10 +227,11 @@ let test_egress_environment =
   let interception : Egress_proxy.interception =
     {
       tls =
-        {
-          terminate = (fun ~host:_ _ -> Error "not in this test");
-          failure = (fun _ -> None);
-        };
+        (fun ~sim_now:_ : Egress_proxy.tls ->
+          {
+            terminate = (fun ~host:_ _ -> Error "not in this test");
+            failure = (fun _ -> None);
+          });
       bundle = "-----BEGIN CERTIFICATE-----\n";
     }
   in

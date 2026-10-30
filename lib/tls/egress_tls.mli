@@ -2,10 +2,12 @@
     leaf certificate of the project CA for the [CONNECT] host (decision record
     0018). *)
 
-val tls : Ca.t -> Bactrian_runtime.Egress_proxy.tls
+val tls : Ca.t -> sim_now:string -> Bactrian_runtime.Egress_proxy.tls
 (** A fresh single-certificate server configuration per tunnel (tls-eio has no
     Server Name Indication callback, so the certificate comes from the [CONNECT]
-    host), offering only [http/1.1] by ALPN. *)
+    host), offering only [http/1.1] by ALPN. The leaf is valid now and at
+    [sim_now] (the run's [SIM_NOW], RFC 3339), so an agent whose clock
+    libfaketime sets there accepts it too. *)
 
 val interception :
   Ca.t ->

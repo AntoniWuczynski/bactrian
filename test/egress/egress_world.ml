@@ -105,7 +105,7 @@ let with_world ?(handler = backend) ?raw name f =
 let policy hosts : E.t = { default = Block; hosts }
 
 let register w ?connector ?(mode = Model_proxy.Record) ?(record = true) ?redact
-    ~token egress =
+    ?(sim_now = "") ~token egress =
   let run =
     {
       (make_run
@@ -114,7 +114,7 @@ let register w ?connector ?(mode = Model_proxy.Record) ?(record = true) ?redact
       with
       egress =
         Option.map
-          (fun p -> (p, Bactrian_tls.Egress_tls.tls w.project_ca))
+          (fun p -> (p, Bactrian_tls.Egress_tls.tls w.project_ca ~sim_now))
           egress;
     }
   in
@@ -233,7 +233,7 @@ let request_text ?(host = "127.0.0.1") ~meth ~path ?(body = "") () =
 (* An agent's HTTPS call through the proxy. [creds] is the Proxy-Authorization
    user and password, none when [None]. *)
 let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
-    ?host_header w ~meth ~path ?body () =
+    ?host_header ?(at = now) w ~meth ~path ?body () =
   let net = Eio.Stdenv.net w.ctx.env in
   Eio.Switch.run @@ fun sw ->
   let socket =
@@ -256,7 +256,7 @@ let through ?(pipelined = false) ?creds ?(target_host = "127.0.0.1")
       (Tls.Config.client
          ~authenticator:
            (X509.Authenticator.chain_of_trust
-              ~time:(fun () -> Some (now ()))
+              ~time:(fun () -> Some (at ()))
               [ ca_cert w.project_ca ])
          ())
   in

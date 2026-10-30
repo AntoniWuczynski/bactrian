@@ -22,7 +22,9 @@ type tls = {
 }
 
 type interception = {
-  tls : tls;
+  tls : sim_now:string -> tls;
+      (** For a run whose [SIM_NOW] is [sim_now]: its leaf certificates are
+          valid at that time as well as now. *)
   bundle : string;
       (** The PEM certificates the agent trusts: the system's roots and the
           project CA. *)

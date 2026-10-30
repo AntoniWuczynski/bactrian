@@ -593,7 +593,7 @@ let execute ?(random_bytes = fun n -> Mirage_crypto_rng.generate n)
         Eio.Path.save ~create:(`Or_truncate 0o644)
           Eio.Path.(temp_dir / bundle_file)
           i.bundle;
-        Ok (Some (policy, i.tls, bundle))
+        Ok (Some (policy, i.tls ~sim_now, bundle))
     | Some _, Command _, None ->
         Error "egress is intercepted, but no project CA was given"
   in

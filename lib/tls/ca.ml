@@ -8,7 +8,7 @@ type t = {
   signer : X509.Private_key.t;
   cert : X509.Certificate.t;
   path : string;
-  leaves : (Tls.Config.certchain * Ptime.t) Hosts.t;
+  leaves : (Tls.Config.certchain * Ptime.t * Ptime.t) Hosts.t;
   lock : Eio.Mutex.t;
 }
 
@@ -54,7 +54,7 @@ let mint now =
   in
   let* cert =
     sign ~issuer:signer ~issuer_dn:name ~subject_key:signer ~subject:name
-      ~extensions ~valid_from:(shift now (-1)) ~valid_until:(shift now 365)
+      ~extensions ~valid_from:Ptime.epoch ~valid_until:(shift now 365)
   in
   Ok (signer, cert)
 
@@ -189,7 +189,7 @@ let subject_alt_name host =
       | Error (`Msg reason) ->
           Error (Printf.sprintf "%S is not a host name: %s" host reason))
 
-let mint_leaf t ~now ~host =
+let mint_leaf t ~valid_from ~until ~host =
   let* san = subject_alt_name host in
   let signer = X509.Private_key.generate `P256 in
   let ca_id = X509.Public_key.id (X509.Private_key.public t.signer) in
@@ -207,25 +207,34 @@ let mint_leaf t ~now ~host =
                        ( false,
                          X509.Public_key.id (X509.Private_key.public signer) )))))))
   in
-  let until = shift now 7 in
   let valid_until =
     if Ptime.is_later until ~than:(not_after t) then not_after t else until
   in
   let* cert =
     sign ~issuer:t.signer
       ~issuer_dn:(X509.Certificate.subject t.cert)
-      ~subject_key:signer ~subject:(dn host) ~extensions
-      ~valid_from:(shift now (-2)) ~valid_until
+      ~subject_key:signer ~subject:(dn host) ~extensions ~valid_from
+      ~valid_until
   in
   Ok (([ cert; t.cert ], signer), valid_until)
 
-let leaf t ~now ~host =
+(* Valid at both times: the agent may read the real clock or, under
+   libfaketime, the run's simulated one. *)
+let leaf t ~now ~sim_now ~host =
   let host = String.lowercase_ascii host in
+  let earliest, latest =
+    if Ptime.is_earlier sim_now ~than:now then (sim_now, now) else (now, sim_now)
+  in
   Eio.Mutex.use_rw ~protect:true t.lock (fun () ->
       match Hosts.find_opt t.leaves host with
-      | Some (chain, until) when Ptime.is_later until ~than:(shift now 1) ->
+      | Some (chain, from, until)
+        when Ptime.is_earlier from ~than:(shift earliest (-1))
+             && Ptime.is_later until ~than:(shift latest 1) ->
           Ok chain
       | Some _ | None ->
-          let* chain, until = mint_leaf t ~now ~host in
-          Hosts.replace t.leaves host (chain, until);
+          let valid_from = shift earliest (-2) in
+          let* chain, until =
+            mint_leaf t ~valid_from ~until:(shift latest 7) ~host
+          in
+          Hosts.replace t.leaves host (chain, valid_from, until);
           Ok chain)

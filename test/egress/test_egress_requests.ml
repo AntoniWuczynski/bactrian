@@ -161,6 +161,27 @@ let test_bodiless =
          | Transport_error _ -> false)
        (recording w.ctx run).exchanges)
 
+(* An agent whose clock libfaketime set to the run's SIM_NOW, a month back,
+   still accepts the tunnel's certificate. *)
+let test_past_sim_now =
+  with_world "past-sim-now" @@ fun w ->
+  let then_ =
+    Option.get (Ptime.sub_span (now ()) (Ptime.Span.of_int_s (30 * 86_400)))
+  in
+  let _ =
+    register w
+      ~sim_now:(Ptime.to_rfc3339 ~tz_offset_s:0 then_)
+      ~token:token_a
+      (Some (policy [ ("127.0.0.1", Passthrough) ]))
+  in
+  let a =
+    through
+      ~at:(fun () -> then_)
+      ~creds:(creds token_a) w ~meth:"GET" ~path:"/x" ()
+  in
+  Alcotest.(check int) "answered" 200 a.status;
+  ignore (Model_proxy.unregister w.ctx.proxy ~token:token_a)
+
 let () =
   Alcotest.run "egress requests"
     [
@@ -172,6 +193,9 @@ let () =
         ] );
       ( "framing",
         [ Alcotest.test_case "HEAD and 204 have no body" `Quick test_bodiless ]
+      );
+      ( "clock",
+        [ Alcotest.test_case "a SIM_NOW a month back" `Quick test_past_sim_now ]
       );
       ( "redaction",
         [ Alcotest.test_case "a secret in the path" `Quick test_path_redacted ]
