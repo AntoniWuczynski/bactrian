@@ -11,8 +11,11 @@
 # environment a command agent would get as process variables (the test suite
 # writes its keys in sorted order, so the line here does too).
 #
-# The ">" lines are exactly the bytes bactrian sends. An agent may answer with
-# other key order or spacing: the test suite decodes it.
+# The ">" lines are the bytes the agent driver writes for these messages. A
+# real run builds its own messages from a scenario, includes the variables of
+# all four providers, and the order of the keys of "env" is not part of the
+# contract. An agent may answer with other key order or spacing: the test suite
+# decodes it.
 
 > {"v":1,"type":"start","run_id":"run-1","scenario":"weather","variant":"baseline","sim_now":"2026-03-01T09:00:00Z","state_dir":"/work/.bactrian/runs/run-1/state","env":{"BACTRIAN_RUN_ID":"run-1","BACTRIAN_STATE_DIR":"/work/.bactrian/runs/run-1/state","OPENAI_API_KEY":"bactrian-00000000000000000000000000000001","OPENAI_BASE_URL":"http://127.0.0.1:41000/r/00000000000000000000000000000001/openai/v1","SIM_NOW":"2026-03-01T09:00:00Z","TZ":"Europe/London"}}
 > {"v":1,"type":"turn","turn":1,"content":"What is the weather in Paris?"}

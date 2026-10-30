@@ -3,7 +3,9 @@
    transcript and must get the "<" messages back. The agent side is the
    transcript itself: a process that compares each line it reads with the
    transcript byte for byte (command mode), or a server that does the same with
-   each request body and also checks the headers (HTTP mode). *)
+   each request body and also checks the headers (HTTP mode). So the lines are
+   the bytes the driver writes for these messages, not the conversation a run
+   builds from a scenario. *)
 
 open Bactrian_core
 module D = Bactrian_runtime.Agent_driver
@@ -115,12 +117,11 @@ let test_command () =
    refuses it and exits, which is what makes the test above mean something. *)
 let test_command_detects_a_difference () =
   with_dir @@ fun env dir ->
-  let start, rest =
+  let start =
     match transcript "command" with
-    | start :: rest -> (start, rest)
+    | start :: _ -> start
     | [] -> Alcotest.fail "empty transcript"
   in
-  ignore rest;
   let wrong =
     Agent_protocol.Turn { turn = 7; content = "not in the transcript" }
   in
@@ -218,7 +219,8 @@ let with_transcript_server f =
   Eio.Fiber.fork_daemon ~sw (fun () ->
       Cohttp_eio.Server.run sock
         (Cohttp_eio.Server.make ~callback:(handler served) ())
-        ~on_error:(fun _ -> ()));
+        ~on_error:(fun exn ->
+          prerr_endline ("transcript server: " ^ Printexc.to_string exn)));
   let config run_id : D.http_config =
     {
       url = Uri.of_string (Printf.sprintf "http://127.0.0.1:%d/agent" port);
