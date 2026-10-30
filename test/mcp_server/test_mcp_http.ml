@@ -1,0 +1,365 @@
+(* The MCP server over Streamable HTTP: the checks on each request, as pure
+   functions, and the listener in this process with tools that answer at once
+   or wait to be cancelled. The client runs in a system thread, so the server's
+   event loop keeps going while it waits. *)
+
+open Bactrian_core
+open Bactrian_server
+open Server_support
+module Interrupt = Bactrian_runtime.Interrupt
+module H = Mcp_client.Http
+
+let port = 4000
+let token = "a-token-that-is-long-enough-0123456789"
+
+let config : Mcp_http.config =
+  { port; token; allowed_origins = [ "http://localhost:5173" ] }
+
+let good =
+  [
+    ("host", "127.0.0.1:4000");
+    ("authorization", "Bearer " ^ token);
+    ("content-type", "application/json");
+  ]
+
+let replace name value headers =
+  (name, value) :: List.filter (fun (k, _) -> not (String.equal k name)) headers
+
+let without name headers =
+  List.filter (fun (k, _) -> not (String.equal k name)) headers
+
+let admitted ?(meth = `POST) ?(resource = "/mcp") headers =
+  match
+    Mcp_http.admit config
+      (Http.Request.make ~meth ~headers:(Http.Header.of_list headers) resource)
+  with
+  | Ok () -> 200
+  | Error r -> r.status
+
+let test_admit () =
+  let check what expected ?meth ?resource headers =
+    Alcotest.(check int) what expected (admitted ?meth ?resource headers)
+  in
+  check "a good request" 200 good;
+  check "localhost names it too" 200 (replace "host" "localhost:4000" good);
+  check "a JSON media type with parameters" 200
+    (replace "content-type" "application/json; charset=utf-8" good);
+  check "another host: DNS rebinding" 403
+    (replace "host" "evil.example:4000" good);
+  check "another port" 403 (replace "host" "127.0.0.1:4001" good);
+  check "no host" 403 (without "host" good);
+  check "an origin of this server" 200
+    (("origin", "http://127.0.0.1:4000") :: good);
+  check "an allowed origin" 200 (("origin", "http://localhost:5173") :: good);
+  check "another origin" 403 (("origin", "http://evil.example") :: good);
+  check "the null origin" 403 (("origin", "null") :: good);
+  check "another path" 404 ~resource:"/other" good;
+  check "a query on the endpoint" 200 ~resource:"/mcp?x=1" good;
+  check "GET" 405 ~meth:`GET good;
+  check "DELETE" 405 ~meth:`DELETE good;
+  check "no token" 401 (without "authorization" good);
+  check "a wrong token" 401
+    (replace "authorization" ("Bearer " ^ String.uppercase_ascii token) good);
+  check "the scheme in any case" 200
+    (replace "authorization" ("bearer " ^ token) good);
+  check "not bearer" 401 (replace "authorization" ("Basic " ^ token) good);
+  check "not JSON" 415 (replace "content-type" "text/plain" good);
+  check "no content type" 415 (without "content-type" good);
+  (* Origin before the token: a page learns nothing about the token. *)
+  check "a bad origin without the token" 403
+    (("origin", "http://evil.example") :: without "authorization" good)
+
+let test_header_value () =
+  let check what expected v =
+    Alcotest.(check (option string)) what expected (Mcp_http.header_value v)
+  in
+  check "plain" (Some "run_start") "run_start";
+  check "Base64" (Some "Hello, \u{4e16}\u{754c}")
+    "=?base64?SGVsbG8sIOS4lueVjA==?=";
+  check "a sentinel, encoded" (Some "=?base64?literal?=")
+    "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?=";
+  check "broken Base64" None "=?base64?***?=";
+  check "a control character" None "a\001b";
+  check "a byte outside ASCII" None "caf\xc3\xa9"
+
+let rpc ?(meta = true) ~id method_ params =
+  let params =
+    if meta then H.with_meta ~tasks:false (canon params) else canon params
+  in
+  match Mcp_msg.decode (H.body ~id method_ params) with
+  | Ok m -> m
+  | Error _ -> Alcotest.fail "the test's request does not decode"
+
+let modern_headers method_ params =
+  Http.Header.of_list
+    (H.rpc_headers ~token method_ (H.with_meta ~tasks:false (canon params)))
+
+let era_name : Mcp_dispatch.era -> string = function
+  | Undecided -> "undecided"
+  | Legacy v -> "legacy " ^ v
+  | Modern -> "modern"
+
+let verdict headers msg =
+  match Mcp_http.era_of_request headers msg with
+  | Ok era -> era_name era
+  | Error (Error_response { code; _ }) -> string_of_int code
+  | Error (Response _ | Request _ | Notification _) -> "not an error"
+
+let test_era_of_request () =
+  let check what expected headers msg =
+    Alcotest.(check string) what expected (verdict headers msg)
+  in
+  let call = {|{"name":"run_start","arguments":{}}|} in
+  let edit f method_ params =
+    Http.Header.of_list
+      (f (Http.Header.to_list (modern_headers method_ params)))
+  in
+  let drop name =
+    List.filter (fun (k, _) ->
+        not
+          (String.equal (String.lowercase_ascii k)
+             (String.lowercase_ascii name)))
+  in
+  let set name v h = (name, v) :: drop name h in
+  check "a modern call" "modern"
+    (modern_headers "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "no MCP-Protocol-Version" "-32020"
+    (edit (drop "MCP-Protocol-Version") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "another MCP-Protocol-Version" "-32020"
+    (edit (set "MCP-Protocol-Version" "2025-11-25") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "no Mcp-Method" "-32020"
+    (edit (drop "Mcp-Method") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "another Mcp-Method" "-32020"
+    (edit (set "Mcp-Method" "tools/list") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "no Mcp-Name on a call" "-32020"
+    (edit (drop "Mcp-Name") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "another Mcp-Name" "-32020"
+    (edit (set "Mcp-Name" "record_start") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "Mcp-Name in Base64" "modern"
+    (edit (set "Mcp-Name" "=?base64?cnVuX3N0YXJ0?=") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  check "an Mcp-Name outside ASCII" "-32020"
+    (edit (set "Mcp-Name" "run_start\xc3\xa9") "tools/call" call)
+    (rpc ~id:1 "tools/call" call);
+  let task = {|{"taskId":"job-1"}|} in
+  check "a task method names its task" "modern"
+    (modern_headers "tasks/get" task)
+    (rpc ~id:2 "tasks/get" task);
+  check "a task method naming another" "-32020"
+    (edit (set "Mcp-Name" "job-2") "tasks/get" task)
+    (rpc ~id:2 "tasks/get" task);
+  check "the version header, unsupported, as the body" "modern"
+    (Http.Header.of_list
+       [ ("MCP-Protocol-Version", "2099-01-01"); ("Mcp-Method", "tools/list") ])
+    (rpc ~meta:false ~id:3 "tools/list"
+       {|{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}|});
+  let init = {|{"protocolVersion":"2025-11-25","capabilities":{}}|} in
+  check "initialize" "undecided" (Http.Header.init ())
+    (rpc ~meta:false ~id:4 "initialize" init);
+  check "no _meta, no header" "legacy 2025-03-26" (Http.Header.init ())
+    (rpc ~meta:false ~id:5 "tools/list" "{}");
+  check "no _meta, a legacy header" "legacy 2025-06-18"
+    (Http.Header.of_list [ ("mcp-protocol-version", "2025-06-18") ])
+    (rpc ~meta:false ~id:5 "tools/list" "{}");
+  check "no _meta, the modern header" "modern"
+    (Http.Header.of_list [ ("mcp-protocol-version", "2026-07-28") ])
+    (rpc ~meta:false ~id:5 "tools/list" "{}");
+  check "no _meta, an unknown header" "-32600"
+    (Http.Header.of_list [ ("mcp-protocol-version", "1999-01-01") ])
+    (rpc ~meta:false ~id:5 "tools/list" "{}")
+
+let test_status () =
+  let err code : Mcp_msg.message =
+    Error_response { id = None; code; message = ""; data = None }
+  in
+  let ok : Mcp_msg.message = Response { id = Int_id 1; result = canon "{}" } in
+  let check what expected era m =
+    Alcotest.(check int) what expected (Mcp_http.status era m)
+  in
+  check "a result" 200 Modern ok;
+  check "an unknown method" 404 Modern (err (-32601));
+  check "an internal error" 500 Modern (err (-32603));
+  check "a header mismatch" 400 Modern (err (-32020));
+  check "missing _meta" 400 Modern (err (-32602));
+  check "an unsupported version" 400 Modern (err (-32022));
+  check "a legacy unknown method" 200 (Legacy "2025-11-25") (err (-32601));
+  check "a legacy malformed request" 400 (Legacy "2025-11-25") (err (-32600))
+
+(* The listener *)
+
+(* A request from a system thread, which leaves the event loop to the
+   server. *)
+let client ~port g = Eio_unix.run_in_systhread (fun () -> g ~port)
+
+let with_listener f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let started, set_started = Eio.Promise.create () in
+  let cancelled, set_cancelled = Eio.Promise.create () in
+  let handlers : Mcp_dispatch.handlers =
+    {
+      call =
+        (fun ~tasks:_ name _ ->
+          match name with
+          | "slow" ->
+              Eio.Promise.resolve set_started ();
+              Fun.protect
+                ~finally:(fun () ->
+                  ignore (Eio.Promise.try_resolve set_cancelled () : bool))
+                Eio.Fiber.await_cancel
+          | _ -> Complete (canon {|{"isError":false}|}));
+      task = (fun _ _ -> None);
+    }
+  in
+  match Mcp_http.listen ~sw ~net:(Eio.Stdenv.net env) 0 with
+  | Error m -> Alcotest.fail m
+  | Ok (socket, port) ->
+      let stop = Interrupt.trigger () in
+      let config = { config with port } in
+      let ended =
+        Eio.Fiber.pair
+          (fun () ->
+            Mcp_http.serve
+              ~server:
+                {
+                  server with
+                  tools = [ ("echo", canon "{}"); ("slow", canon "{}") ];
+                }
+              ~handlers ~stop ~log:ignore config socket)
+          (fun () ->
+            let within p () =
+              Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 10. (fun () ->
+                  Eio.Promise.await p)
+            in
+            f ~port ~started:(within started) ~cancelled:(within cancelled);
+            Interrupt.fire stop Sys.sigterm)
+        |> fst
+      in
+      Alcotest.(check bool)
+        "stopped by the trigger" true
+        (match ended with
+        | Stopped s -> s = Sys.sigterm
+        | Input_closed -> false)
+
+let call_params name =
+  H.with_meta ~tasks:false
+    (canon (Printf.sprintf {|{"name":"%s","arguments":{}}|} name))
+
+let call_headers ?accept name =
+  H.rpc_headers ?accept ~token "tools/call" (call_params name)
+
+let test_listener () =
+  with_listener @@ fun ~port ~started:_ ~cancelled:_ ->
+  let sse =
+    client ~port (fun ~port ->
+        H.send ~port (call_headers "echo")
+          (H.body ~id:1 "tools/call" (call_params "echo")))
+  in
+  Alcotest.(check int) "200" 200 sse.status;
+  Alcotest.(check (option string))
+    "an SSE stream" (Some "text/event-stream")
+    (H.header sse "content-type");
+  Alcotest.(check (option string))
+    "unbuffered by proxies" (Some "no")
+    (H.header sse "x-accel-buffering");
+  Alcotest.(check int) "one event" 1 (List.length (H.events sse.body));
+  Alcotest.(check (option string))
+    "the result" (Some "complete")
+    (Result.to_option (H.outcome sse)
+    |> Fun.flip Option.bind (Canon.str_member "resultType"));
+  let json =
+    client ~port (fun ~port ->
+        H.send ~port
+          (call_headers ~accept:"application/json" "echo")
+          (H.body ~id:2 "tools/call" (call_params "echo")))
+  in
+  Alcotest.(check (option string))
+    "JSON when SSE is not accepted" (Some "application/json")
+    (H.header json "content-type");
+  Alcotest.(check bool) "a response" true (Result.is_ok (H.outcome json));
+  let note =
+    client ~port (fun ~port ->
+        H.send ~port
+          (List.filter
+             (fun (k, _) ->
+               String.equal k "Authorization" || String.equal k "Content-Type")
+             (call_headers "echo"))
+          {|{"jsonrpc":"2.0","method":"notifications/initialized"}|})
+  in
+  Alcotest.(check int) "a notification is accepted" 202 note.status;
+  let answer =
+    client ~port (fun ~port ->
+        H.send ~port (call_headers "echo")
+          {|{"jsonrpc":"2.0","id":3,"result":{}}|})
+  in
+  Alcotest.(check int) "a response from the client" 400 answer.status;
+  let garbage =
+    client ~port (fun ~port -> H.send ~port (call_headers "echo") "{")
+  in
+  Alcotest.(check int) "not JSON" 400 garbage.status;
+  Alcotest.(check (option int))
+    "a parse error" (Some (-32700))
+    (match H.outcome garbage with Error e -> Some e.code | Ok _ -> None);
+  let refused = client ~port (fun ~port -> H.send ~port [] "{}") in
+  Alcotest.(check int) "a request without the token" 401 refused.status;
+  Alcotest.(check (option string))
+    "says how to authenticate" (Some "Bearer")
+    (H.header refused "www-authenticate");
+  let forbidden =
+    client ~port (fun ~port ->
+        H.send ~port
+          (("Origin", "http://evil.example") :: call_headers "echo")
+          "{}")
+  in
+  Alcotest.(check int) "a foreign origin" 403 forbidden.status;
+  (match H.message forbidden with
+  | Error_response { id = None; _ } -> ()
+  | Error_response { id = Some _; _ } | Response _ | Request _ | Notification _
+    ->
+      Alcotest.fail "an error without an id");
+  let get =
+    client ~port (fun ~port ->
+        H.send ~meth:"GET" ~port (call_headers "echo") "")
+  in
+  Alcotest.(check int) "GET" 405 get.status;
+  Alcotest.(check (option string))
+    "names POST" (Some "POST") (H.header get "allow")
+
+(* Hanging up cancels the call, and the server goes on. *)
+let test_hang_up () =
+  with_listener @@ fun ~port ~started ~cancelled ->
+  client ~port (fun ~port ->
+      H.hang_up ~port (call_headers "slow")
+        (H.body ~id:1 "tools/call" (call_params "slow")));
+  started ();
+  cancelled ();
+  let after =
+    client ~port (fun ~port ->
+        H.send ~port (call_headers "echo")
+          (H.body ~id:2 "tools/call" (call_params "echo")))
+  in
+  Alcotest.(check int) "the next request is answered" 200 after.status
+
+let () =
+  Alcotest.run "mcp_http"
+    [
+      ( "checks",
+        [
+          Alcotest.test_case "admission" `Quick test_admit;
+          Alcotest.test_case "header values" `Quick test_header_value;
+          Alcotest.test_case "headers and eras" `Quick test_era_of_request;
+          Alcotest.test_case "statuses" `Quick test_status;
+        ] );
+      ( "listener",
+        [
+          Alcotest.test_case "answers" `Quick test_listener;
+          Alcotest.test_case "hanging up cancels" `Quick test_hang_up;
+        ] );
+    ]

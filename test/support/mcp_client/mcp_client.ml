@@ -162,18 +162,22 @@ let raw_request t method_ params =
       violation "the server sent a request or a notification during %s" method_
 
 let version_of = function Modern -> "2026-07-28" | Legacy -> "2025-11-25"
+let tasks_extension = "io.modelcontextprotocol/tasks"
 
-let meta =
+let meta ~tasks =
   obj
     [
       ("io.modelcontextprotocol/protocolVersion", Canon.string "2026-07-28");
-      ("io.modelcontextprotocol/clientCapabilities", Canon.empty_object);
+      ( "io.modelcontextprotocol/clientCapabilities",
+        if tasks then
+          obj [ ("extensions", obj [ (tasks_extension, Canon.empty_object) ]) ]
+        else Canon.empty_object );
     ]
 
-let request t method_ params =
+let request ?(tasks = false) t method_ params =
   let params =
     match t.era with
-    | Some Modern -> Canon.set_member "_meta" meta params
+    | Some Modern -> Canon.set_member "_meta" (meta ~tasks) params
     | Some Legacy | None -> params
   in
   raw_request t method_ params
@@ -222,16 +226,10 @@ let tools_list t = must "tools/list" (request t "tools/list" Canon.empty_object)
 
 type outcome = Structured of Canon.t | Tool_error of Canon.t
 
-let call_tool t name arguments =
-  let result =
-    must "tools/call"
-      (request t "tools/call"
-         (obj [ ("name", Canon.string name); ("arguments", arguments) ]))
-  in
-  (match (t.era, Canon.str_member "resultType" result) with
-  | Some Modern, Some "complete" | Some Legacy, None | None, _ -> ()
-  | Some Modern, _ | Some Legacy, Some _ ->
-      violation "%s: unexpected resultType" name);
+let tool_params name arguments =
+  obj [ ("name", Canon.string name); ("arguments", arguments) ]
+
+let tool_outcome ~name result =
   let structured =
     match Canon.member "structuredContent" result with
     | Some s -> s
@@ -253,27 +251,83 @@ let call_tool t name arguments =
   | Some true -> Tool_error structured
   | Some false | None -> Structured structured
 
-let poll_job ?(timeout = 120.) ?(interval = 0.1) t job_id =
+let call_tool t name arguments =
+  let result =
+    must "tools/call" (request t "tools/call" (tool_params name arguments))
+  in
+  (match (t.era, Canon.str_member "resultType" result) with
+  | Some Modern, Some "complete" | Some Legacy, None | None, _ -> ()
+  | Some Modern, _ | Some Legacy, Some _ ->
+      violation "%s: unexpected resultType" name);
+  tool_outcome ~name result
+
+let check_task ~what result =
+  match
+    (Canon.str_member "resultType" result, Canon.str_member "taskId" result)
+  with
+  | Some "task", Some _ -> result
+  | _ -> violation "%s: not a task: %s" what (Canon.to_string result)
+
+let call_task t name arguments =
+  check_task ~what:name
+    (must "tools/call"
+       (request ~tasks:true t "tools/call" (tool_params name arguments)))
+
+let task_ended status =
+  List.mem status [ Some "completed"; Some "failed"; Some "cancelled" ]
+
+let poll_until ~timeout ~interval ~what step =
   let deadline = Unix.gettimeofday () +. timeout in
   let rec go () =
-    match
-      call_tool t "job_status" (obj [ ("job_id", Canon.string job_id) ])
-    with
-    | Tool_error e -> violation "job_status: %s" (Canon.to_string e)
-    | Structured status -> (
-        match Canon.str_member "state" status with
-        | Some "running" ->
-            if Unix.gettimeofday () > deadline then
-              timed_out t
-                (Printf.sprintf "job %s still running after %gs" job_id timeout)
-            else begin
-              Unix.sleepf interval;
-              go ()
-            end
-        | Some _ -> status
-        | None -> violation "job_status: no state")
+    match step () with
+    | Some v -> v
+    | None ->
+        if Unix.gettimeofday () > deadline then
+          raise (Timeout (Printf.sprintf "%s after %gs" what timeout))
+        else begin
+          Unix.sleepf interval;
+          go ()
+        end
   in
   go ()
+
+let poll_task ?(timeout = 120.) ?(interval = 0.1) t task_id =
+  let get () =
+    must "tasks/get"
+      (request ~tasks:true t "tasks/get"
+         (obj [ ("taskId", Canon.string task_id) ]))
+  in
+  match
+    poll_until ~timeout ~interval
+      ~what:("task " ^ task_id ^ " still working")
+      (fun () ->
+        let task = get () in
+        if task_ended (Canon.str_member "status" task) then Some task else None)
+  with
+  | task -> task
+  | exception (Timeout _ as e) ->
+      dispose t;
+      raise e
+
+let poll_job ?(timeout = 120.) ?(interval = 0.1) t job_id =
+  match
+    poll_until ~timeout ~interval
+      ~what:("job " ^ job_id ^ " still running")
+      (fun () ->
+        match
+          call_tool t "job_status" (obj [ ("job_id", Canon.string job_id) ])
+        with
+        | Tool_error e -> violation "job_status: %s" (Canon.to_string e)
+        | Structured status -> (
+            match Canon.str_member "state" status with
+            | Some "running" -> None
+            | Some _ -> Some status
+            | None -> violation "job_status: no state"))
+  with
+  | status -> status
+  | exception (Timeout _ as e) ->
+      dispose t;
+      raise e
 
 let close ?(timeout = 30.) t =
   if t.input_open then begin
@@ -303,3 +357,339 @@ let close ?(timeout = 30.) t =
   let status = wait () in
   dispose t;
   status
+
+module Http = struct
+  type response = {
+    status : int;
+    headers : (string * string) list;
+    body : string;
+  }
+
+  let header r name =
+    List.find_map
+      (fun (k, v) ->
+        if String.equal (String.lowercase_ascii k) (String.lowercase_ascii name)
+        then Some v
+        else None)
+      r.headers
+
+  let has name headers =
+    List.exists
+      (fun (k, _) ->
+        String.equal (String.lowercase_ascii k) (String.lowercase_ascii name))
+      headers
+
+  let connect ~timeout port =
+    let fd = Unix.socket ~cloexec:true PF_INET SOCK_STREAM 0 in
+    Unix.setsockopt_float fd SO_RCVTIMEO timeout;
+    Unix.setsockopt_float fd SO_SNDTIMEO timeout;
+    (match Unix.connect fd (ADDR_INET (Unix.inet_addr_loopback, port)) with
+    | () -> ()
+    | exception e ->
+        Unix.close fd;
+        raise e);
+    fd
+
+  let write_all fd s =
+    let rec go off =
+      if off < String.length s then
+        go (off + Unix.write_substring fd s off (String.length s - off))
+    in
+    go 0
+
+  let request_text ~meth ~path ~port headers body =
+    let headers =
+      (if has "host" headers then []
+       else [ ("Host", Printf.sprintf "127.0.0.1:%d" port) ])
+      @ headers
+      @ [
+          ("Content-Length", string_of_int (String.length body));
+          ("Connection", "close");
+        ]
+    in
+    Printf.sprintf "%s %s HTTP/1.1\r\n%s\r\n%s" meth path
+      (String.concat ""
+         (List.map (fun (k, v) -> k ^ ": " ^ v ^ "\r\n") headers))
+      body
+
+  let read_some fd buf =
+    let chunk = Bytes.create 65536 in
+    match Unix.read fd chunk 0 (Bytes.length chunk) with
+    | 0 -> false
+    | n ->
+        Buffer.add_subbytes buf chunk 0 n;
+        true
+    | exception Unix.Unix_error ((EAGAIN | EWOULDBLOCK), _, _) ->
+        raise (Timeout "no answer from the HTTP server")
+
+  let find s sub =
+    let n = String.length sub in
+    let rec go i =
+      if i + n > String.length s then None
+      else if String.equal (String.sub s i n) sub then Some i
+      else go (i + 1)
+    in
+    go 0
+
+  let rec dechunk s =
+    match find s "\r\n" with
+    | None -> violation "a chunked body without a size line"
+    | Some i -> (
+        match int_of_string_opt ("0x" ^ String.trim (String.sub s 0 i)) with
+        | None -> violation "a chunk size that is not hex"
+        | Some 0 -> ""
+        | Some n ->
+            String.sub s (i + 2) n
+            ^ dechunk (String.sub s (i + 4 + n) (String.length s - i - 4 - n)))
+
+  let parse text =
+    match find text "\r\n\r\n" with
+    | None -> violation "an HTTP answer without a head: %S" text
+    | Some i -> (
+        let head = String.split_on_char '\n' (String.sub text 0 i) in
+        let rest = String.sub text (i + 4) (String.length text - i - 4) in
+        match head with
+        | [] -> violation "an empty HTTP head"
+        | status_line :: lines ->
+            let status =
+              match String.split_on_char ' ' status_line with
+              | _ :: code :: _ -> (
+                  match int_of_string_opt code with
+                  | Some c -> c
+                  | None -> violation "a status line without a code")
+              | _ -> violation "a malformed status line: %S" status_line
+            in
+            let headers =
+              List.filter_map
+                (fun l ->
+                  match String.index_opt l ':' with
+                  | Some j ->
+                      Some
+                        ( String.sub l 0 j,
+                          String.trim
+                            (String.sub l (j + 1) (String.length l - j - 1)) )
+                  | None -> None)
+                lines
+            in
+            let r = { status; headers; body = rest } in
+            if
+              Option.equal String.equal
+                (header r "transfer-encoding")
+                (Some "chunked")
+            then { r with body = dechunk rest }
+            else r)
+
+  let send ?(meth = "POST") ?(path = "/mcp") ?(timeout = 60.) ~port headers body
+      =
+    let fd = connect ~timeout port in
+    Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
+    write_all fd (request_text ~meth ~path ~port headers body);
+    let buf = Buffer.create 4096 in
+    while read_some fd buf do
+      ()
+    done;
+    parse (Buffer.contents buf)
+
+  let hang_up ?(timeout = 60.) ?(linger = 0.2) ~port headers body =
+    let fd = connect ~timeout port in
+    Fun.protect ~finally:(fun () -> Unix.close fd) @@ fun () ->
+    write_all fd (request_text ~meth:"POST" ~path:"/mcp" ~port headers body);
+    let buf = Buffer.create 4096 in
+    let rec head () =
+      match find (Buffer.contents buf) "\r\n\r\n" with
+      | Some _ -> ()
+      | None ->
+          if read_some fd buf then head ()
+          else violation "the connection closed before the head"
+    in
+    head ();
+    Unix.sleepf linger
+
+  let events body =
+    String.split_on_char '\n' body
+    |> List.filter_map (fun l ->
+        if String.starts_with ~prefix:"data: " l then
+          Some (String.sub l 6 (String.length l - 6))
+        else None)
+
+  let message r =
+    let text =
+      match header r "content-type" with
+      | Some "text/event-stream" -> (
+          match events r.body with
+          | [ data ] -> data
+          | _ -> violation "expected one SSE event: %S" r.body)
+      | Some _ | None -> r.body
+    in
+    match Mcp_msg.decode text with
+    | Ok m -> m
+    | Error (Invalid_json e | Not_jsonrpc e) ->
+        violation "not a JSON-RPC message (%s): %S" e text
+
+  let outcome r =
+    match message r with
+    | Response { result; _ } -> Ok result
+    | Error_response { code; message; data; _ } -> Error { code; message; data }
+    | Request _ | Notification _ -> violation "a request in an HTTP answer"
+
+  type server = {
+    pid : int;
+    port : int;
+    token : string;
+    log : string;
+    mutable running : bool;
+  }
+
+  let test_token = "bactrian-test-token-0123456789abcdef"
+  let port s = s.port
+  let token s = s.token
+  let pid s = s.pid
+  let log s = In_channel.with_open_bin s.log In_channel.input_all
+
+  let dispose s =
+    if s.running then begin
+      s.running <- false;
+      (try Unix.kill s.pid Sys.sigkill
+       with Unix.Unix_error (ESRCH, _, _) -> ());
+      ignore (waitpid [] s.pid : (int * Unix.process_status) option)
+    end
+
+  let listening text =
+    let prefix = "listening on http://127.0.0.1:" in
+    Option.bind (find text prefix) (fun i ->
+        let rest =
+          String.sub text
+            (i + String.length prefix)
+            (String.length text - i - String.length prefix)
+        in
+        Option.bind (String.index_opt rest '/') (fun j ->
+            int_of_string_opt (String.sub rest 0 j)))
+
+  let start ?(env = []) ?(args = []) ?(token = test_token) ?(timeout = 60.) ~exe
+      ~dir () =
+    let log = Filename.temp_file "serve-mcp-http" ".log" in
+    let err = Unix.openfile log [ O_WRONLY; O_TRUNC; O_CLOEXEC ] 0o600 in
+    let null = Unix.openfile "/dev/null" [ O_RDONLY; O_CLOEXEC ] 0 in
+    let pid =
+      Unix.create_process_env "/bin/sh"
+        (Array.of_list
+           ([
+              "sh";
+              "-c";
+              "cd \"$1\" && exe=\"$2\" && shift 2 && exec \"$exe\" serve-mcp \
+               --http 0 \"$@\"";
+              "sh";
+              dir;
+              exe;
+            ]
+           @ args))
+        (environment (("BACTRIAN_MCP_TOKEN", token) :: env))
+        null err err
+    in
+    Unix.close err;
+    Unix.close null;
+    let s = { pid; port = 0; token; log; running = true } in
+    match
+      poll_until ~timeout ~interval:0.05 ~what:"the server did not listen"
+        (fun () ->
+          listening (In_channel.with_open_bin log In_channel.input_all))
+    with
+    | port -> { s with port }
+    | exception e ->
+        dispose s;
+        raise e
+
+  let stop ?(timeout = 30.) s =
+    Unix.kill s.pid Sys.sigterm;
+    match
+      poll_until ~timeout ~interval:0.02 ~what:"the server did not exit"
+        (fun () ->
+          match waitpid [ WNOHANG ] s.pid with
+          | Some (0, _) -> None
+          | Some (_, status) -> Some status
+          | None -> violation "the server's exit status is not available")
+    with
+    | status ->
+        s.running <- false;
+        status
+    | exception e ->
+        dispose s;
+        raise e
+
+  let auth s = ("Authorization", "Bearer " ^ s.token)
+
+  let rpc_headers ?(accept = "application/json, text/event-stream") ~token
+      method_ params =
+    let named =
+      match method_ with
+      | "tools/call" -> Canon.str_member "name" params
+      | "tasks/get" | "tasks/update" | "tasks/cancel" ->
+          Canon.str_member "taskId" params
+      | _ -> None
+    in
+    [
+      ("Authorization", "Bearer " ^ token);
+      ("Content-Type", "application/json");
+      ("Accept", accept);
+      ("MCP-Protocol-Version", "2026-07-28");
+      ("Mcp-Method", method_);
+    ]
+    @ Option.fold ~none:[] ~some:(fun n -> [ ("Mcp-Name", n) ]) named
+
+  let next_id = ref 0
+
+  let body ?id method_ params =
+    let id =
+      match id with
+      | Some id -> id
+      | None ->
+          incr next_id;
+          !next_id
+    in
+    Mcp_msg.encode (Request { id = Int_id id; method_; params = Some params })
+
+  let with_meta ~tasks params = Canon.set_member "_meta" (meta ~tasks) params
+
+  let rpc ?(tasks = false) ?accept ?(headers = fun h -> h) s method_ params =
+    let params = with_meta ~tasks params in
+    send ~port:s.port
+      (headers (rpc_headers ?accept ~token:s.token method_ params))
+      (body method_ params)
+
+  let must method_ r =
+    match outcome r with
+    | Ok result when r.status = 200 -> result
+    | Ok _ -> violation "%s: a result with status %d" method_ r.status
+    | Error e -> violation "%s failed with %d: %s" method_ e.code e.message
+
+  let call_tool ?accept s name arguments =
+    let result =
+      must "tools/call"
+        (rpc ?accept s "tools/call" (tool_params name arguments))
+    in
+    if
+      not
+        (Option.equal String.equal
+           (Canon.str_member "resultType" result)
+           (Some "complete"))
+    then violation "%s: unexpected resultType" name;
+    tool_outcome ~name result
+
+  let call_task s name arguments =
+    check_task ~what:name
+      (must "tools/call"
+         (rpc ~tasks:true s "tools/call" (tool_params name arguments)))
+
+  let task s method_ task_id =
+    outcome
+      (rpc ~tasks:true s method_ (obj [ ("taskId", Canon.string task_id) ]))
+
+  let poll_task ?(timeout = 120.) ?(interval = 0.1) s task_id =
+    poll_until ~timeout ~interval
+      ~what:("task " ^ task_id ^ " still working")
+      (fun () ->
+        match task s "tasks/get" task_id with
+        | Ok t when task_ended (Canon.str_member "status" t) -> Some t
+        | Ok _ -> None
+        | Error e -> violation "tasks/get failed with %d: %s" e.code e.message)
+end

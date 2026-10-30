@@ -1,8 +1,10 @@
 (tests
- (names test_mcp_dispatch test_mcp_server test_mcp_tasks)
+ (names test_mcp_dispatch test_mcp_server test_mcp_tasks test_mcp_http)
  (package bactrian)
  (libraries
   bactrian.server
+  mcp_client
+  http
   bactrian.app
   bactrian.core
   bactrian.runtime

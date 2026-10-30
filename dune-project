@@ -23,6 +23,7 @@
   (cohttp (= dev))
   (cohttp-eio (= dev))
   (uri (>= 4.4.0))
+  (base64 (>= 3.5.2))
   (mirage-crypto-rng (>= 2.4.1))
   (yaml (>= 3.2.0))
   (tyxml (>= 5.0.0))

@@ -1,9 +1,10 @@
 (** [bactrian serve-mcp]: the MCP server over stdio (decision record 0011), and
-    the job table any transport serves. One JSON-RPC message per line in each
-    direction. Replies go out through one writer, so lines never interleave, and
-    the server never sends a request. Each [tools/call] runs in its own fibre,
-    so calls are answered as they finish, and [notifications/cancelled] stops
-    the call it names, which then gets no reply. *)
+    the job table any transport serves (Streamable HTTP is {!Mcp_http}). One
+    JSON-RPC message per line in each direction. Replies go out through one
+    writer, so lines never interleave, and the server never sends a request.
+    Each [tools/call] runs in its own fibre, so calls are answered as they
+    finish, and [notifications/cancelled] stops the call it names, which then
+    gets no reply. *)
 
 type ended =
   | Input_closed  (** End of input: the client is done. *)
@@ -40,9 +41,9 @@ val run :
   (Mcp_dispatch.server -> Mcp_dispatch.handlers -> ended) ->
   ended
 (** [run ~env ~root config transport] serves the tools of {!Mcp_tools} and a job
-    table through [transport] ({!serve}, given {!server} and the tools'
-    handlers). The table ends with it: when [transport] returns, every running
-    job is cancelled as SIGINT cancels its command (a [run] stays resumable) and
-    [run] returns once all of them have unwound, their agents gone. Seeds the
-    random generator, and must be called inside [Eio_main.run], after
-    {!Bactrian_runtime.Launch_env.scrub}. *)
+    table through [transport] ({!serve} or {!Mcp_http.serve}, given {!server}
+    and the tools' handlers). The table ends with it: when [transport] returns,
+    every running job is cancelled as SIGINT cancels its command (a [run] stays
+    resumable) and [run] returns once all of them have unwound, their agents
+    gone. Seeds the random generator, and must be called inside [Eio_main.run],
+    after {!Bactrian_runtime.Launch_env.scrub}. *)
