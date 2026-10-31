@@ -1,5 +1,7 @@
-// Toy bactrian agent (design §5.1): model calls through OPENAI_BASE_URL with a
-// get_weather tool.
+// Toy bactrian agent (design §5.1): model calls with a get_weather tool, through
+// OPENAI_BASE_URL (OpenAI chat completions) or ANTHROPIC_BASE_URL (Anthropic
+// Messages). AGENT_PROVIDER picks one: openai (the default) or anthropic. Any
+// other value is an error. The Python example agent speaks only OpenAI.
 //
 // Command mode (the default): one JSON object per line on stdin and stdout,
 // the configuration in the process environment.
@@ -16,7 +18,9 @@
 // protocol revision: 2026-07-28 (the default) or 2025-11-25, which opens with
 // initialize.
 //
-// AGENT_MAX_TOKENS (default 256) is sent as max_completion_tokens, so that the
+// AGENT_MODEL is the model to call, gpt-6-luna for openai and claude-haiku-5-5
+// for anthropic by default. AGENT_MAX_TOKENS (default 256) is sent as
+// max_completion_tokens (openai) or max_tokens (anthropic), so that the
 // worst-case cost bactrian reserves for a call fits a spend cap of a few cents.
 import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
@@ -25,11 +29,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
 import type { Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import Anthropic from "@anthropic-ai/sdk";
+import type { MessageParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/messages";
 import OpenAI from "openai";
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-} from "openai/resources/chat/completions";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 const WEATHER_RESULT = "18 degrees Celsius, cloudy";
 const MAX_MODEL_CALLS = 5;
@@ -37,21 +40,29 @@ const DEFAULT_MAX_TOKENS = "256";
 const DEFAULT_SYSTEM_PROMPT =
   "You are a concise assistant. Use the get_weather tool for weather questions.";
 
-const TOOLS: ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "get_weather",
-      description: "Get the current weather for a city.",
-      parameters: {
-        type: "object",
-        properties: { city: { type: "string", description: "City name." } },
-        required: ["city"],
-        additionalProperties: false,
-      },
-    },
+// The one definition of get_weather: each provider wraps it in its own shape.
+const WEATHER_TOOL = {
+  name: "get_weather",
+  description: "Get the current weather for a city.",
+  schema: {
+    type: "object" as const,
+    properties: { city: { type: "string", description: "City name." } },
+    required: ["city"],
+    additionalProperties: false,
   },
-];
+};
+
+type Provider = "openai" | "anthropic";
+
+const DEFAULT_MODELS: Record<Provider, string> = {
+  openai: "gpt-6-luna",
+  anthropic: "claude-haiku-5-5",
+};
+
+function parseProvider(value: string): Provider {
+  if (value === "openai" || value === "anthropic") return value;
+  throw new Error(`AGENT_PROVIDER must be openai or anthropic, not ${value}`);
+}
 
 function parseMaxTokens(value: string): number {
   const tokens = Number(value);
@@ -203,30 +214,145 @@ class McpClient {
   }
 }
 
-// One conversation. The env is its whole configuration: the process
-// environment in command mode, the start message's env in HTTP mode.
-class Session {
-  private readonly model: string;
-  private readonly maxTokens: number;
-  private readonly mcpCommand: string | undefined;
-  private readonly mcpProtocol: string;
-  private mcp: McpClient | undefined;
+// Runs get_weather on the arguments, a JSON object as text.
+type RunWeather = (argumentsJson: string) => Promise<string>;
+
+// The model side of one conversation, in one provider's protocol.
+interface Conversation {
+  answer(content: string, runWeather: RunWeather): Promise<string>;
+}
+
+class OpenAiConversation implements Conversation {
   private readonly client: OpenAI;
   private readonly history: ChatCompletionMessageParam[];
 
-  constructor(private readonly env: Env) {
-    this.model = env["AGENT_MODEL"] ?? "gpt-6-luna";
-    this.maxTokens = parseMaxTokens(env["AGENT_MAX_TOKENS"] ?? DEFAULT_MAX_TOKENS);
-    this.mcpCommand = env["AGENT_MCP_COMMAND"];
-    this.mcpProtocol = env["AGENT_MCP_PROTOCOL"] ?? "2026-07-28";
+  constructor(
+    env: Env,
+    private readonly model: string,
+    private readonly maxTokens: number,
+    system: string,
+  ) {
     this.client = new OpenAI({
       maxRetries: 0,
       apiKey: env["OPENAI_API_KEY"] ?? null,
       baseURL: env["OPENAI_BASE_URL"] ?? null,
     });
-    this.history = [
-      { role: "system", content: env["AGENT_SYSTEM_PROMPT"] ?? DEFAULT_SYSTEM_PROMPT },
-    ];
+    this.history = [{ role: "system", content: system }];
+  }
+
+  async answer(content: string, runWeather: RunWeather): Promise<string> {
+    this.history.push({ role: "user", content });
+    for (let call = 0; call < MAX_MODEL_CALLS; call++) {
+      const completion = await this.client.chat.completions.create({
+        model: this.model,
+        messages: this.history,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: WEATHER_TOOL.name,
+              description: WEATHER_TOOL.description,
+              parameters: WEATHER_TOOL.schema,
+            },
+          },
+        ],
+        reasoning_effort: "none",
+        max_completion_tokens: this.maxTokens,
+      });
+      const message = completion.choices[0]?.message;
+      if (message === undefined) throw new Error("model returned no choices");
+      this.history.push(message);
+      const toolCalls = message.tool_calls ?? [];
+      if (toolCalls.length === 0) return message.content ?? "";
+      for (const toolCall of toolCalls) {
+        this.history.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content:
+            toolCall.type === "function" && toolCall.function.name === WEATHER_TOOL.name
+              ? await runWeather(toolCall.function.arguments)
+              : "unknown tool",
+        });
+      }
+    }
+    throw new Error(`no final answer after ${MAX_MODEL_CALLS} model calls`);
+  }
+}
+
+class AnthropicConversation implements Conversation {
+  private readonly client: Anthropic;
+  private readonly history: MessageParam[] = [];
+
+  constructor(
+    env: Env,
+    private readonly model: string,
+    private readonly maxTokens: number,
+    private readonly system: string,
+  ) {
+    this.client = new Anthropic({
+      maxRetries: 0,
+      apiKey: env["ANTHROPIC_API_KEY"] ?? null,
+      baseURL: env["ANTHROPIC_BASE_URL"] ?? null,
+    });
+  }
+
+  async answer(content: string, runWeather: RunWeather): Promise<string> {
+    this.history.push({ role: "user", content });
+    for (let call = 0; call < MAX_MODEL_CALLS; call++) {
+      const message = await this.client.messages.create({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        system: this.system,
+        messages: this.history,
+        tools: [
+          {
+            name: WEATHER_TOOL.name,
+            description: WEATHER_TOOL.description,
+            input_schema: WEATHER_TOOL.schema,
+          },
+        ],
+      });
+      this.history.push({ role: "assistant", content: message.content });
+      const results: ToolResultBlockParam[] = [];
+      for (const block of message.content) {
+        if (block.type !== "tool_use") continue;
+        results.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content:
+            block.name === WEATHER_TOOL.name
+              ? await runWeather(JSON.stringify(block.input))
+              : "unknown tool",
+        });
+      }
+      if (results.length === 0) {
+        return message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+      }
+      this.history.push({ role: "user", content: results });
+    }
+    throw new Error(`no final answer after ${MAX_MODEL_CALLS} model calls`);
+  }
+}
+
+// One conversation. The env is its whole configuration: the process
+// environment in command mode, the start message's env in HTTP mode.
+class Session {
+  private readonly mcpCommand: string | undefined;
+  private readonly mcpProtocol: string;
+  private mcp: McpClient | undefined;
+  private readonly conversation: Conversation;
+
+  constructor(private readonly env: Env) {
+    const provider = parseProvider(env["AGENT_PROVIDER"] ?? "openai");
+    const model = env["AGENT_MODEL"] ?? DEFAULT_MODELS[provider];
+    const maxTokens = parseMaxTokens(env["AGENT_MAX_TOKENS"] ?? DEFAULT_MAX_TOKENS);
+    const system = env["AGENT_SYSTEM_PROMPT"] ?? DEFAULT_SYSTEM_PROMPT;
+    this.mcpCommand = env["AGENT_MCP_COMMAND"];
+    this.mcpProtocol = env["AGENT_MCP_PROTOCOL"] ?? "2026-07-28";
+    this.conversation =
+      provider === "openai"
+        ? new OpenAiConversation(env, model, maxTokens, system)
+        : new AnthropicConversation(env, model, maxTokens, system);
   }
 
   private async weather(argumentsJson: string): Promise<string> {
@@ -245,38 +371,10 @@ class Session {
     return this.mcp.callTool("get_weather", args);
   }
 
-  private async answer(content: string): Promise<string> {
-    this.history.push({ role: "user", content });
-    for (let call = 0; call < MAX_MODEL_CALLS; call++) {
-      const completion = await this.client.chat.completions.create({
-        model: this.model,
-        messages: this.history,
-        tools: TOOLS,
-        reasoning_effort: "none",
-        max_completion_tokens: this.maxTokens,
-      });
-      const message = completion.choices[0]?.message;
-      if (message === undefined) throw new Error("model returned no choices");
-      this.history.push(message);
-      const toolCalls = message.tool_calls ?? [];
-      if (toolCalls.length === 0) return message.content ?? "";
-      for (const toolCall of toolCalls) {
-        this.history.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content:
-            toolCall.type === "function" && toolCall.function.name === "get_weather"
-              ? await this.weather(toolCall.function.arguments)
-              : "unknown tool",
-        });
-      }
-    }
-    throw new Error(`no final answer after ${MAX_MODEL_CALLS} model calls`);
-  }
-
   async replyTo(turn: number, content: string): Promise<Message> {
     try {
-      return { type: "reply", turn, content: await this.answer(content) };
+      const answer = await this.conversation.answer(content, (args) => this.weather(args));
+      return { type: "reply", turn, content: answer };
     } catch (error: unknown) {
       const text = error instanceof Error ? error.message : String(error);
       return { type: "error", turn, message: text };

@@ -8,6 +8,7 @@
     "start": "node dist/agent.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.137.0",
     "openai": "7.28.0"
   },
   "devDependencies": {
