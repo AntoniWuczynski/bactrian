@@ -56,6 +56,69 @@ let through_the_override agent () =
         (contains (Canon.to_string (field "upstreams" meta)) "@"))
     (runs printed)
 
+(* The TypeScript agent in anthropic mode, over the Messages API: an
+   experiment, then a record and a strict replay that calls nobody. *)
+
+let anthropic_variable = "BACTRIAN_UPSTREAM_ANTHROPIC"
+let anthropic_model = "claude-haiku-5-5"
+let messages n = List.init n (fun _ -> "/v1/messages")
+
+let anthropic_keys up =
+  [ (anthropic_variable, upstream_url up); ("ANTHROPIC_API_KEY", real_key) ]
+
+(* What record and replay need on top: the cap, and the agent's configuration,
+   which an experiment takes from its variants. *)
+let anthropic_env up =
+  anthropic_keys up
+  @ [
+      ("BACTRIAN_CAP_ANTHROPIC", "1");
+      ("AGENT_PROVIDER", "anthropic");
+      ("AGENT_MODEL", anthropic_model);
+    ]
+
+let through_the_anthropic_override () =
+  let argv = (List.hd agents).argv () in
+  with_project "override-anthropic" @@ fun ~parent:_ ~project ->
+  with_upstream ~dir:project @@ fun up ->
+  write_experiment project argv ~provider:"anthropic" ~model:anthropic_model;
+  let code, printed = cli ~dir:project ~env:(anthropic_keys up) run_flags in
+  Alcotest.(check int) "exit status" 0 code;
+  Alcotest.(check (list string))
+    "every run passes" all_passed (statuses printed);
+  Alcotest.(check (list string))
+    "the fake upstream answered every model call over Messages" (messages 8)
+    (upstream_requests up);
+  let env = anthropic_env up in
+  let passed = [ "--env"; "AGENT_PROVIDER"; "--env"; "AGENT_MODEL" ] in
+  let code, recorded =
+    cli ~dir:project ~env
+      ([ "record"; "--json"; "--turn"; first_turn; "--sandbox"; "off" ]
+      @ passed @ [ "--" ] @ argv)
+  in
+  Alcotest.(check int) "record: exit status" 0 code;
+  Alcotest.(check int)
+    "record: two exchanges" 2
+    (int_field "exchanges" (field "findings" recorded));
+  Alcotest.(check int)
+    "record: no request refused for its key" 0
+    (int_field "refused_keys" (field "findings" recorded));
+  let before = List.length (upstream_requests up) in
+  Alcotest.(check int) "record: two more calls" (8 + 2) before;
+  let code, replayed =
+    cli ~dir:project ~env
+      ([
+         "replay"; string_field "run_id" recorded; "--json"; "--sandbox"; "off";
+       ]
+      @ passed @ [ "--" ] @ argv)
+  in
+  Alcotest.(check int) "replay: exit status" 0 code;
+  Alcotest.(check string)
+    "replay: passed" "passed"
+    (string_field "kind" (field "outcome" replayed));
+  Alcotest.(check int)
+    "replay: no call" before
+    (List.length (upstream_requests up))
+
 (* A run that calls nobody is not labelled with an upstream. *)
 let strict_replay_has_no_label () =
   let agent = List.hd agents in
@@ -420,6 +483,8 @@ let () =
           (fun a -> Alcotest.test_case a.name `Slow (through_the_override a))
           agents
         @ [
+            Alcotest.test_case "the TypeScript agent over Messages" `Slow
+              through_the_anthropic_override;
             Alcotest.test_case "a strict replay is unlabelled" `Slow
               strict_replay_has_no_label;
           ] );

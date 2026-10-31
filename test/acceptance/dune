@@ -34,6 +34,7 @@
  (alias acceptance)
  (deps
   (source_tree ../fixtures/protocols/openai_chat)
+  (source_tree ../fixtures/protocols/anthropic_messages)
   ../../examples/agents/typescript/src/agent.ts
   ../../examples/agents/typescript/dist/agent.js
   ../../examples/agents/python/agent.py

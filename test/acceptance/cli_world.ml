@@ -107,9 +107,11 @@ let host_backend =
   | `Seatbelt -> "seatbelt"
   | `Bubblewrap -> "bubblewrap"
 
-let experiment_text ?(extra = "") ?model argv =
+let experiment_text ?(extra = "") ?(provider = "openai") ?model argv =
   let model_env =
-    match model with Some m -> [ ("AGENT_MODEL", `String m) ] | None -> []
+    (if String.equal provider "openai" then []
+     else [ ("AGENT_PROVIDER", `String provider) ])
+    @ match model with Some m -> [ ("AGENT_MODEL", `String m) ] | None -> []
   in
   let variants =
     `Assoc
@@ -129,15 +131,17 @@ let experiment_text ?(extra = "") ?model argv =
  "variants": %s,
  "repeats": 2, "concurrency": 1, "seed": 3,
  "sandbox": {"mode": "off", "backend": "%s"},
- "caps_usd": {"openai": 100},
+ "caps_usd": {%S: 100},
  "compare": {"baseline": "base", "thresholds": {"pass_rate": 0.1}}%s}|}
     (Yojson.Safe.to_string (`List (List.map (fun s -> `String s) argv)))
     (Yojson.Safe.to_string variants)
-    host_backend extra
+    host_backend provider extra
 
-let write_experiment ?extra ?model dir argv =
+let write_experiment ?extra ?provider ?model dir argv =
   write (Filename.concat dir "scenarios/weather.json") scenario_text;
-  write (Filename.concat dir "exp.json") (experiment_text ?extra ?model argv)
+  write
+    (Filename.concat dir "exp.json")
+    (experiment_text ?extra ?provider ?model argv)
 
 (* A fake upstream in a process of its own: the binary under test runs while
    the test waits, so an upstream in the test's own process would never get to
@@ -156,9 +160,7 @@ let upstream_server = "FAKE_UPSTREAM_SERVER"
 
 let with_upstream ?hold ?tls_ca ~dir f =
   let log = Filename.concat dir "upstream.log" in
-  let fixtures =
-    Filename.concat (Sys.getcwd ()) "../fixtures/protocols/openai_chat"
-  in
+  let fixtures = Filename.concat (Sys.getcwd ()) "../fixtures/protocols" in
   let exe = executable upstream_server in
   let args =
     [ exe; "--fixtures"; fixtures; "--log"; log ]

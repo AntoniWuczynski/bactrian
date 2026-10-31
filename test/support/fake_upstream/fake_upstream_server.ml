@@ -1,7 +1,8 @@
-(* The weather conversation of test/fixtures/protocols/openai_chat as a server
-   process: a request that already holds a tool message gets the second
-   recorded reply, any other the first, whatever the model or the system
-   prompt. It prints its port as its first line, serves until its standard
+(* The weather conversation of test/fixtures/protocols/openai_chat, and for
+   POST /v1/messages that of anthropic_messages, as a server process: a request
+   that already holds a tool message (a tool_result block for Anthropic) gets
+   the second recorded reply, any other the first, whatever the model or the
+   system prompt. It prints its port as its first line, serves until its standard
    input closes, and holds every request while the --hold file exists. With
    --tls-ca it serves HTTPS for localhost and 127.0.0.1, with a certificate of
    a CA minted at start and written to that file. *)
@@ -15,7 +16,9 @@ let fixtures =
     required
     & opt (some string) None
     & info [ "fixtures" ] ~docv:"DIR"
-        ~doc:"The openai_chat fixture directory (luna_nonstream, luna_turn2).")
+        ~doc:
+          "The protocols fixture directory, with openai_chat (luna_nonstream, \
+           luna_turn2) and anthropic_messages (haiku_nonstream, haiku_turn2).")
 
 let hold =
   Arg.(
@@ -38,14 +41,27 @@ let tls_ca =
     & info [ "tls-ca" ] ~docv:"FILE"
         ~doc:"Serve HTTPS, and write the certificate of its CA to $(docv).")
 
-let has_tool_message (r : F.request) =
+let messages (r : F.request) =
   match Canon.of_string r.body with
-  | Error _ -> false
-  | Ok body ->
+  | Error _ -> []
+  | Ok body -> Option.value ~default:[] (Canon.list_member "messages" body)
+
+let has_tool_message r =
+  List.exists
+    (fun m ->
+      Option.equal String.equal (Canon.str_member "role" m) (Some "tool"))
+    (messages r)
+
+let has_tool_result r =
+  List.exists
+    (fun m ->
       List.exists
-        (fun m ->
-          Option.equal String.equal (Canon.str_member "role" m) (Some "tool"))
-        (Option.value ~default:[] (Canon.list_member "messages" body))
+        (fun b ->
+          Option.equal String.equal
+            (Canon.str_member "type" b)
+            (Some "tool_result"))
+        (Option.value ~default:[] (Canon.list_member "content" m)))
+    (messages r)
 
 let reply dir case =
   match F.case_reply (Filename.concat dir case) with
@@ -57,8 +73,12 @@ let reply dir case =
 let main fixtures hold log tls_ca =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let first = reply fixtures "luna_nonstream"
-  and second = reply fixtures "luna_turn2" in
+  let case protocol first second =
+    let dir = Filename.concat fixtures protocol in
+    (reply dir first, reply dir second)
+  in
+  let openai = case "openai_chat" "luna_nonstream" "luna_turn2"
+  and anthropic = case "anthropic_messages" "haiku_nonstream" "haiku_turn2" in
   let clock = Eio.Stdenv.clock env in
   let handler (r : F.request) =
     Option.iter
@@ -72,7 +92,11 @@ let main fixtures hold log tls_ca =
           Eio.Time.sleep clock 0.02
         done)
       hold;
-    if has_tool_message r then second else first
+    let (first, second), answered =
+      if String.equal r.path "/v1/messages" then (anthropic, has_tool_result r)
+      else (openai, has_tool_message r)
+    in
+    if answered then second else first
   in
   match F.start ~sw ~net:(Eio.Stdenv.net env) (F.Handler handler) with
   | Error e ->

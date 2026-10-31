@@ -54,14 +54,22 @@ val terse : string
 val host_backend : string
 (** The name of the host's own sandbox backend: [seatbelt] or [bubblewrap]. *)
 
-val experiment_text : ?extra:string -> ?model:string -> string list -> string
+val experiment_text :
+  ?extra:string -> ?provider:string -> ?model:string -> string list -> string
 (** The experiment for an agent command: scenarios [scenarios/*.json], variants
-    [base] and [terse], two repeats, a cap of 100 USD on OpenAI and no sandbox.
-    [extra] is more members of the object, starting with a comma. [model] is the
+    [base] and [terse], two repeats, a cap of 100 USD on one provider and no
+    sandbox. [extra] is more members of the object, starting with a comma.
+    [provider] (default [openai]) is the provider that has the cap and, unless
+    it is [openai], the [AGENT_PROVIDER] of both variants. [model] is the
     [AGENT_MODEL] of both variants. *)
 
 val write_experiment :
-  ?extra:string -> ?model:string -> string -> string list -> unit
+  ?extra:string ->
+  ?provider:string ->
+  ?model:string ->
+  string ->
+  string list ->
+  unit
 (** Writes the scenario under [scenarios/] and the experiment as [exp.json] in
     the directory. *)
 
