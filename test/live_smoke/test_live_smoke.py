@@ -44,6 +44,8 @@ class LiveSmoke(unittest.TestCase):
         self.root = Path(scratch.name)
         (self.root / "dev").mkdir()
         shutil.copy(SCRIPT, self.root / "dev" / "live-smoke.py")
+        (self.root / "dev" / "live-compare").mkdir()
+        (self.root / "dev" / "live-compare" / "experiment.yaml").write_text(EXPERIMENT.read_text())
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "bactrian"
@@ -134,26 +136,23 @@ class LiveSmoke(unittest.TestCase):
                 self.assertGreater(len(rates), 0)
 
     def test_the_comparison_constants_are_those_of_the_experiment(self) -> None:
-        module = load_script()
+        missing = cast(list[str], load_script().compare_experiment_missing(EXPERIMENT.read_text()))
+        self.assertEqual(missing, [])
+
+    def test_compare_refuses_an_experiment_that_is_not_what_it_checks(self) -> None:
         text = EXPERIMENT.read_text()
-        variants = re.findall(
-            r"(\w+):\s+env: \{ AGENT_PROVIDER: (\w+), AGENT_MODEL: ([\w.-]+), "
-            r'AGENT_MAX_TOKENS: "(\d+)" \}',
-            text,
+        edits = (
+            ("openai: 0.05", "openai: 5"),
+            ('claude-haiku-5-5, AGENT_MAX_TOKENS: "256"', 'claude-haiku-5-5, AGENT_MAX_TOKENS: "9"'),
+            ("AGENT_MODEL: gpt-6-luna", "AGENT_MODEL: gpt-6-astra"),
+            ("repeats: 3", "caps_usd: { openai: 5 }\nrepeats: 3"),
         )
-        self.assertEqual(
-            {name: {"AGENT_PROVIDER": p, "AGENT_MODEL": m} for name, p, m, _ in variants},
-            module.COMPARE_VARIANTS,
-        )
-        self.assertEqual({int(t) for *_, t in variants}, {module.COMPARE_MAX_TOKENS})
-        caps = re.search(
-            r"caps_usd: \{ openai: ([0-9.]+), anthropic: ([0-9.]+), gemini: 0, openrouter: 0 \}",
-            text,
-        )
-        assert caps is not None
-        self.assertEqual({float(c) for c in caps.groups()}, {module.COMPARE_CAP_USD})
-        _, script = module.AGENTS["typescript"]
-        self.assertIn(f'command: ["node", "../../{script}"]', text)
+        for old, new in edits:
+            with self.subTest(new=new):
+                self.assertIn(old, text)
+                experiment = self.root / "dev" / "live-compare" / "experiment.yaml"
+                experiment.write_text(text.replace(old, new, 1))
+                self.assert_refused(self.compare(), "experiment.yaml does not hold")
 
     def test_fails_when_the_real_key_is_in_a_run_directory(self) -> None:
         done = self.smoke(FAKE_LEAK="file")

@@ -66,7 +66,8 @@ BACTRIAN_UPSTREAM_ANTHROPIC is set, and takes BACTRIAN_CAP_OPENAI,
 BACTRIAN_SMOKE_MODEL (it must be gpt-6-luna, the experiment's) and
 BACTRIAN_SMOKE_LEDGER as above. AGENT_MAX_TOKENS is not read: the experiment
 file sets 256, and the caps of 0.05 dollars for each provider are in it too.
-The script refuses when one call of either model could reserve more than its
+The script refuses when that file does not set the agent, the variants' models
+and limit, and the caps it holds in COMPARE_*, and when one call of either model could reserve more than its
 cap, using ANTHROPIC_RATES as well as OPENAI_RATES. It runs the probe, which
 checks the placeholder for both keys, then `bactrian check` of the scenario,
 `bactrian run` of the experiment, `bactrian compare` of its result and an
@@ -127,8 +128,8 @@ ANTHROPIC_RATES: dict[str, tuple[float, float]] = {
 }
 RATES = {"openai": OPENAI_RATES, "anthropic": ANTHROPIC_RATES}
 PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic"}
-# What dev/live-compare/experiment.yaml sets, which test/live_smoke checks:
-# the variants' environment, and the cap for each provider.
+# What dev/live-compare/experiment.yaml must set, which main checks before
+# anything runs: the variants' environment, and the cap for each provider.
 COMPARE_EXPERIMENT = "dev/live-compare/experiment.yaml"
 COMPARE_SCENARIO = "dev/live-compare/scenarios/weather.yaml"
 COMPARE_VARIANTS: dict[str, dict[str, str]] = {
@@ -501,6 +502,28 @@ def smoke(name: str, command: list[str], session: Session, model: str) -> None:
             print(f"{name}: {label} went live, cost {settled}")
 
 
+def compare_experiment_missing(text: str) -> list[str]:
+    """The lines of COMPARE_EXPERIMENT, given as `text`, that are not as this
+    script assumes: the agent, each variant's environment and the caps, which
+    bactrian enforces. caps_usd must be named once, so no other value of it
+    applies."""
+    _, script = AGENTS["typescript"]
+    caps = ", ".join(f"{p}: {COMPARE_CAP_USD}" for p in RATES)
+    wanted = [
+        f'\n  command: ["node", "../../{script}"]\n',
+        *(
+            f"\n  {name}:\n    env: {{ AGENT_PROVIDER: {c['AGENT_PROVIDER']}, "
+            f'AGENT_MODEL: {c["AGENT_MODEL"]}, AGENT_MAX_TOKENS: "{COMPARE_MAX_TOKENS}" }}\n'
+            for name, c in COMPARE_VARIANTS.items()
+        ),
+        f"\ncaps_usd: {{ {caps}, gemini: 0, openrouter: 0 }}\n",
+    ]
+    missing = [w.strip() for w in wanted if w not in text]
+    if text.count("caps_usd") != 1:
+        missing.append("caps_usd named once")
+    return missing
+
+
 def compare_variant_env(variant: str) -> dict[str, str]:
     return COMPARE_VARIANTS[variant] | {"AGENT_MAX_TOKENS": str(COMPARE_MAX_TOKENS)}
 
@@ -614,6 +637,8 @@ def main() -> None:
                 f"live-smoke: with --compare BACTRIAN_SMOKE_MODEL must be {compared}, "
                 "the experiment's"
             )
+        if missing := compare_experiment_missing((ROOT / COMPARE_EXPERIMENT).read_text()):
+            sys.exit(f"live-smoke: {COMPARE_EXPERIMENT} does not hold {'; '.join(missing)}")
         max_tokens = COMPARE_MAX_TOKENS
         for config in COMPARE_VARIANTS.values():
             provider, variant_model = config["AGENT_PROVIDER"], config["AGENT_MODEL"]
