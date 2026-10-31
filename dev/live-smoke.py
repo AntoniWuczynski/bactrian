@@ -389,7 +389,13 @@ class Session:
             # no run id: every reservation since `offset` is then logged.
             fresh = sorted(experiment_dirs() - experiments)
             self.run_dirs += fresh
-            spends = spends_since(BACTRIAN_LEDGER, offset, str_at(report, "run_id"))
+            # A command without an agent spends only in an experiment's own
+            # ledger: once it has answered, what the checkout's ledger gained
+            # is another process's.
+            owned = command is not None or report is None
+            spends = (
+                spends_since(BACTRIAN_LEDGER, offset, str_at(report, "run_id")) if owned else []
+            )
             for directory in fresh:
                 spends += spends_since(directory / "ledger.jsonl", 0, None)
             self.log(spends)

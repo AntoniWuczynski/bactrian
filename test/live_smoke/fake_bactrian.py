@@ -11,8 +11,9 @@ replies FAKE_PROBE_REPLY, "placeholder" by default.
 
 The experiment commands are faked too: `check` passes, `run` makes the six runs
 of dev/live-compare (luna on openai, haiku on anthropic, 3 repeats each) in an
-experiment of its own, with its own ledger, `compare` prints the arms and a
-`replay` with AGENT_PROVIDER set replays one run on that provider.
+experiment of its own, with its own ledger, while another process spends on
+the checkout's, `compare` prints the arms and a `replay` with AGENT_PROVIDER set
+replays one run on that provider.
 
 Faults, by environment variable: FAKE_REPLAY_COST_ERROR is added to the cost
 in meta.json of an until-divergence replay. FAKE_LEAK=file writes the first 12
@@ -157,6 +158,14 @@ def experiment_command(sub: str, args: list[str], runs: Path) -> int:
     if sub == "compare":
         print(json.dumps(compare_report(args[args.index("--json") + 1])))
         return 0
+    # Another process spends on the checkout's ledger meanwhile.
+    checkout = Path(".bactrian") / "ledger.jsonl"
+    ident = len(checkout.read_text().splitlines()) if checkout.exists() else 0
+    with checkout.open("a") as other:
+        common = {"id": ident, "model": "gpt-6-luna", "provider": "openai"}
+        reserve = {"event": "reserve", "owner": OTHER_OWNER, "reserved_usd": 0.01}
+        other.write(json.dumps(common | reserve) + "\n")
+        other.write(json.dumps(common | {"event": "settle", "usd": 0.5}) + "\n")
     experiments = Path(".bactrian") / "experiments"
     experiment_id = f"experiment-{len(list(experiments.iterdir())) if experiments.exists() else 0}"
     directory = experiments / experiment_id

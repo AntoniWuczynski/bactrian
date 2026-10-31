@@ -339,9 +339,11 @@ class LiveSmoke(unittest.TestCase):
     def test_compare_logs_the_spend_of_an_interrupted_experiment(self) -> None:
         done = self.compare(FAKE_INTERRUPT="1")
         self.assertNotEqual(done.returncode, 0)
+        # With no report, the other process's spend on the checkout's ledger
+        # counts too, as it does for an interrupted record.
         self.assertEqual(
             [(e["provider"], e["usd"]) for e in self.logged()],
-            [("openai", 0.001), ("anthropic", 0.001)],
+            [("openai", 0.5), ("openai", 0.001), ("anthropic", 0.001)],
         )
 
 
