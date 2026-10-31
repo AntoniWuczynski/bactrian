@@ -1,0 +1,25 @@
+# gpt-6-luna against claude-haiku-5-5 on one weather question, both through the
+# TypeScript example agent. Run by `dev/live-smoke.py --compare`, which spends
+# real money: the caps below are cumulative per experiment, and the script
+# refuses to start when one call could reserve more than its cap. The agent
+# sends AGENT_MAX_TOKENS as the output limit, so the worst case of a call is
+# bounded. dev/live-smoke.py checks the models, the limit and the caps against
+# the constants it holds.
+version: 1
+name: luna-vs-haiku
+agent:
+  protocol: command
+  command: ["node", "../../examples/agents/typescript/dist/agent.js"]
+scenarios: ["scenarios/*.yaml"]
+variants:
+  luna:
+    env: { AGENT_PROVIDER: openai, AGENT_MODEL: gpt-6-luna, AGENT_MAX_TOKENS: "256" }
+  haiku:
+    env: { AGENT_PROVIDER: anthropic, AGENT_MODEL: claude-haiku-5-5, AGENT_MAX_TOKENS: "256" }
+repeats: 3
+concurrency: 1
+seed: 1
+caps_usd: { openai: 0.05, anthropic: 0.05, gemini: 0, openrouter: 0 }
+compare:
+  baseline: luna
+  thresholds: { pass_rate: 0.1 }

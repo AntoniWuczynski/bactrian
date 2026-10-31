@@ -1,0 +1,8 @@
+{"clock":"contract_only","run_id":"golden-ok","scenario":"weather","seq":0,"sim_now":"2026-10-31T00:00:00Z","t_ms":0,"type":"run_start","v":1,"variant":"haiku"}
+{"content":"What is the weather in Paris right now? Use the get_weather tool.","seq":1,"t_ms":1,"turn":1,"type":"turn_start","v":1}
+{"duration_ms":0,"gen_ai.request.model":"claude-haiku-5-5","gen_ai.usage.cache_read.input_tokens":0,"gen_ai.usage.cache_write.input_tokens":0,"gen_ai.usage.input_tokens":395,"gen_ai.usage.output_tokens":50,"gen_ai.usage.reasoning.output_tokens":0,"protocol":"anthropic_messages","seq":2,"status":200,"t_ms":155,"turn":1,"type":"model_call","v":1}
+{"arguments":{"city":"Paris"},"index":0,"mcp":"unjoined","name":"get_weather","seq":3,"t_ms":155,"turn":1,"type":"tool_call","v":1}
+{"content":"18 degrees Celsius, cloudy","index":0,"is_error":false,"seq":4,"t_ms":161,"turn":1,"type":"tool_result","v":1}
+{"duration_ms":0,"gen_ai.request.model":"claude-haiku-5-5","gen_ai.usage.cache_read.input_tokens":0,"gen_ai.usage.cache_write.input_tokens":0,"gen_ai.usage.input_tokens":464,"gen_ai.usage.output_tokens":22,"gen_ai.usage.reasoning.output_tokens":0,"protocol":"anthropic_messages","seq":5,"status":200,"t_ms":161,"turn":1,"type":"model_call","v":1}
+{"content":"The weather in Paris right now is 18\u00b0C and cloudy.","seq":6,"t_ms":163,"turn":1,"type":"reply","v":1}
+{"seq":7,"t_ms":163,"type":"done","v":1}

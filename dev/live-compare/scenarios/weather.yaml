@@ -1,0 +1,11 @@
+version: 1
+id: weather
+turns:
+  - user: "What is the weather in Paris right now? Use the get_weather tool."
+assertions:
+  - tool_sequence: { mode: exact, tools: [get_weather] }
+  - output: { turn: last, regex: "18" }
+checkers: []
+golden:
+  pass: [../golden/ok.trace.jsonl]
+  fail: [../golden/wrong-answer.trace.jsonl]
